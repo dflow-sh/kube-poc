@@ -1,0 +1,73 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.0"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install Helm
+        run: |
+          curl -fsSL https://get.helm.sh/helm-v3.17.3-linux-amd64.tar.gz -o /tmp/helm.tgz
+          tar -C /tmp -xzf /tmp/helm.tgz
+          sudo install -m 0755 /tmp/linux-amd64/helm /usr/local/bin/helm
+      - name: Package Helm chart
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          python3 - "$version" "$GITHUB_REF_NAME" <<'PY'
+          import pathlib, sys
+          version, tag = sys.argv[1], sys.argv[2]
+          chart = pathlib.Path("packages/helm-chart/Chart.yaml")
+          text = chart.read_text()
+          text2 = []
+          for line in text.splitlines(keepends=True):
+              if line.startswith("version: "):
+                  text2.append(f"version: {version}\n")
+              elif line.startswith("appVersion: "):
+                  text2.append(f"appVersion: {tag}\n")
+              else:
+                  text2.append(line)
+          chart.write_text("".join(text2))
+          values = pathlib.Path("packages/helm-chart/values.yaml")
+          raw = values.read_text()
+          needle = (
+              "  dflow:\n"
+              "    registry: ghcr.io/\n"
+              "    repository: dflow-sh/dflow-server\n"
+              "    tag: v1.14.3\n"
+          )
+          replacement = needle.replace("tag: v1.14.3", f"tag: {tag}")
+          if needle not in raw:
+              raise SystemExit("server image tag block was not found in values.yaml")
+          values.write_text(raw.replace(needle, replacement, 1))
+          PY
+          mkdir -p chart-package
+          helm package packages/helm-chart --destination chart-package
+          ls -l chart-package
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -22,3 +22,60 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec turbo build
       - run: pnpm exec turbo test
+
+  cli-artifacts:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.0"
+      - name: Build dflow
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p dist
+          go build -o "dist/dflow-${GOOS}-${GOARCH}" ./apps/cli
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dflow-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/dflow-${{ matrix.goos }}-${{ matrix.goarch }}
+
+  goreleaser-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: check
+
+  server-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.0"
+      - name: Build server image archive
+        run: |
+          mkdir -p apps/cli/dist
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o apps/cli/dist/dflow ./apps/cli
+          docker build -f images/Dockerfile -t ghcr.io/dflow-sh/dflow-server:v1.14.3 .
+          docker save ghcr.io/dflow-sh/dflow-server:v1.14.3 | gzip > dflow-server-linux-amd64.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dflow-server-linux-amd64
+          path: dflow-server-linux-amd64.tar.gz

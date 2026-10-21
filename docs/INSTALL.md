@@ -1,8 +1,226 @@
 # Install dFlow
 
-dFlow runs on Kubernetes. This page is what you provide, then the commands that install k3s, the chart dependencies, `dflow-server`, and the `dflow` CLI, and push a sample app.
+dFlow runs on Kubernetes. The chart does not install a UI. `dflowUI.enabled` is false.
 
-The chart does not install a UI. `dflowUI.enabled` is false.
+The repository is private. Clone it with a GitHub token or a deploy key, then run the installer from that checkout. Do not use a public raw URL; that URL returns 404 while the repository is private.
+
+## One-shot install on Ubuntu
+
+The server is Ubuntu 22.04 or 24.04, with at least 8 GB RAM, a public IPv4 address, and root SSH.
+
+HTTPS with a personal access token that can read this repository:
+
+```bash
+git clone --branch cursor/m1-image-deploy-ccca \
+  "https://x-access-token:${GITHUB_TOKEN}@github.com/dflow-sh/kube-poc.git"
+cd kube-poc
+sudo --preserve-env=GITHUB_TOKEN ./scripts/install.sh --domain auto
+```
+
+`GITHUB_TOKEN` needs permission to read this private repository (`repo` on a classic token, or contents read on a fine-grained token). `sudo` drops the variable unless `--preserve-env=GITHUB_TOKEN` is set. `GH_TOKEN` is accepted as well. If neither is set, a `gh auth login` session for the user who invoked sudo is used. With no token and no `gh` login, the script builds the CLI and server image from the checkout.
+
+To pull `ghcr.io/dflow-sh/dflow-server` from a release, the same token also needs `read:packages`. Set `GHCR_USER` to the GitHub login that owns the token. The script uses `GHCR_USER`, then `GITHUB_ACTOR`, then the login from `gh api user`.
+
+Deploy key (read access is enough):
+
+```bash
+GIT_SSH_COMMAND='ssh -i ~/.ssh/dflow_deploy_key -o IdentitiesOnly=yes' \
+  git clone --branch cursor/m1-image-deploy-ccca git@github.com:dflow-sh/kube-poc.git
+cd kube-poc
+sudo --preserve-env=GITHUB_TOKEN ./scripts/install.sh --domain auto
+```
+
+A deploy key can clone. It cannot download GitHub Release assets. Export `GITHUB_TOKEN` as well when a release should be used.
+
+`--domain auto` uses `<public-ipv4>.sslip.io`. To use DNS you control:
+
+```bash
+sudo ./scripts/install.sh --domain apps.example.com
+```
+
+`apps.example.com` and `*.apps.example.com` must point at the server. The API is `https://dflow.<domain>`. An app named `hello` is `https://hello.<domain>`.
+
+The script is safe to run again. It installs k3s when k3s is missing, turns off ServiceLB, puts Traefik on the host network so it binds the host address on ports 80 and 443, checks that Traefik's host IP is a node address, installs cert-manager, installs the dFlow chart, and installs the `dflow` CLI.
+
+When a GitHub Release exists, the script downloads the `dflow` CLI, the Helm chart package (`dflow-*.tgz`), and the server image `ghcr.io/dflow-sh/dflow-server:<tag>` from that release. The CLI download is checked against `checksums.txt` when that file is in the release. No release has been published yet, so today the script builds those from the checkout and tags the server image `dev-<git sha>`. If the release download fails and the checkout build also fails, the script exits non-zero and names both failures. CI on this branch also uploads CLI binaries and a server image archive as workflow artifacts. That is not a production deploy.
+
+When the script finishes it prints the API URL, the `admin` password, and the login command. It has already logged in, pushed `traefik/whoami`, required HTTP 200 from the app URL, deleted the app, and deleted the `sample` namespace. If any of those steps fail, the script exits non-zero and prints the step that failed.
+
+Manual checks and uninstall: [docs/TESTING.md](TESTING.md).
+
+The script also prints the k3s join URL and token. The URL is `https://<first-server-public-ipv4>:6443`.
+
+## Add a worker
+
+The first server stays the only control plane. Another Ubuntu 22.04 or 24.04 machine joins as a worker. Clone this private repository on that machine the same way as the first server (`GITHUB_TOKEN` for HTTPS, or a deploy key). The join command itself does not need a token beyond the k3s node token.
+
+On the first server, after install, the URL and token are in the installer output. Print them again any time:
+
+```bash
+sudo dflow join-info
+```
+
+That reads `/var/lib/rancher/k3s/server/node-token` and `node-external-ip` from `/etc/rancher/k3s/config.yaml`. The same token file is:
+
+```bash
+sudo cat /var/lib/rancher/k3s/server/node-token
+```
+
+The server URL is `https://<first-server-public-ipv4>:6443`.
+
+On the worker, from the checkout:
+
+```bash
+sudo ./scripts/join-node.sh \
+  --server https://203.0.113.10:6443 \
+  --token '<token from dflow join-info>'
+```
+
+Replace the IP and the token. The script installs the k3s agent and joins this host as a worker. Run it again with the same server and token and it leaves a healthy agent in place. A bad token, a server that does not answer `https://<ip>:6443/ping`, or a k3s agent that does not stay active exits non-zero and prints the reason. Do not run it on the first server.
+
+On the first server, confirm the worker:
+
+```bash
+sudo kubectl get nodes
+```
+
+`kubectl` as root uses `/etc/rancher/k3s/k3s.yaml`. The new node is listed `Ready`. That can take a minute after the agent starts. The worker's `ROLES` column is empty. The first server is `control-plane`.
+
+### Firewall
+
+Allow these between the first server and every worker:
+
+| Port | Protocol | Where |
+| --- | --- | --- |
+| 6443 | TCP | workers to the first server (Kubernetes API) |
+| 8472 | UDP | all nodes, both directions (flannel VXLAN) |
+| 10250 | TCP | all nodes, both directions (kubelet) |
+
+If `scripts/install.sh` logged that this kernel is using flannel host-gw, UDP 8472 is unused. Nodes still need a route to each other.
+
+The scripts do not change host firewall rules. When `ufw` is enabled, on each node:
+
+```bash
+sudo ufw allow 6443/tcp
+sudo ufw allow 8472/udp
+sudo ufw allow 10250/tcp
+```
+
+### High availability
+
+This install is one k3s server plus workers. Later high availability is three server nodes with k3s embedded etcd. These scripts do not set that up.
+
+## macOS CLI
+
+Go 1.26 is required. From a checkout on the Mac:
+
+```bash
+make dflow
+sudo install -m 0755 dist/dflow /usr/local/bin/dflow
+dflow version
+dflow login -u admin -p 'password' --trust-ca "https://dflow.<domain>"
+```
+
+`<domain>` and the password are what `scripts/install.sh` printed. `password` is the default.
+
+The same push as the server self-test:
+
+```bash
+dflow namespace create sample
+dflow target sample
+dflow push -n hello --container-image-url traefik/whoami
+curl -k -sS -D - "https://hello.<domain>/" -o /tmp/whoami-body | head -n 1
+dflow app delete hello
+dflow namespace delete sample -f
+```
+
+Expected: login prints `Login successful`, push prints `App is online.` and `https://hello.<domain>`, curl prints `HTTP/2 200` or `HTTP/1.1 200 OK`, delete prints `Applications Removed.`
+
+`make dflow-darwin` writes both `dist/dflow-darwin-arm64` and `dist/dflow-darwin-amd64`. Use the one that matches the Mac:
+
+```bash
+sudo install -m 0755 dist/dflow-darwin-arm64 /usr/local/bin/dflow
+```
+
+Without Make:
+
+```bash
+CGO_ENABLED=0 go build -o dist/dflow ./apps/cli
+sudo install -m 0755 dist/dflow /usr/local/bin/dflow
+```
+
+CI on this branch uploads `dflow-darwin-arm64` and `dflow-darwin-amd64` as workflow artifacts. With access to the private repository:
+
+```bash
+gh run list --repo dflow-sh/kube-poc --branch cursor/m1-image-deploy-ccca --workflow ci --limit 1
+gh run download --repo dflow-sh/kube-poc <run-id> -n dflow-darwin-arm64
+sudo install -m 0755 dflow-darwin-arm64 /usr/local/bin/dflow
+```
+
+Building locally does not wait on that artifact.
+
+### scripts/install-cli.sh
+
+From a Mac checkout, this installs the matching `darwin-arm64` or `darwin-amd64` binary to `/usr/local/bin/dflow`, then logs in and runs the sample push when `--api` is set.
+
+```bash
+export GITHUB_TOKEN=...   # or: gh auth login
+./scripts/install-cli.sh \
+  --api "https://dflow.<domain>" \
+  --user admin \
+  --password 'password'
+```
+
+`<domain>` and the password are what `scripts/install.sh` printed on the server. The script downloads `dflow-darwin-arm64` or `dflow-darwin-amd64` from the latest GitHub Release and checks `checksums.txt` when that file is in the release. With no release asset, it runs `go build` from the checkout (Go 1.26). If both fail, it exits non-zero.
+
+Without `--api` the binary is still installed and the script prints the login and push commands instead of running them.
+
+## Upgrade
+
+On the server, after the one-shot install:
+
+```bash
+sudo --preserve-env=GITHUB_TOKEN ./scripts/update.sh
+```
+
+That selects the latest GitHub Release, runs `helm upgrade`, waits until `dflow-server` is ready, then repeats the API health check and the CLI self-test (login, push `traefik/whoami`, curl expecting HTTP 200, delete, confirm the sample namespace is gone).
+
+A specific release:
+
+```bash
+sudo --preserve-env=GITHUB_TOKEN ./scripts/update.sh v1.0.0
+```
+
+If that tag does not exist, the script stops. It does not build a different commit and label it with the missing tag. If no latest release exists, it builds from the checkout, tags the image `dev-<git sha>`, upgrades with that image, and still runs the self-test. `GITHUB_TOKEN` (or `GH_TOKEN`) needs repository read for the release, and `read:packages` plus `GHCR_USER` when the server image is pulled from ghcr.io.
+
+CLI only, on the server or on a Mac:
+
+```bash
+export GITHUB_TOKEN=...   # or: gh auth login
+./scripts/update.sh --cli
+./scripts/update.sh --cli v1.0.0
+```
+
+`--cli` replaces `/usr/local/bin/dflow` with the release binary for this OS and CPU, or builds it from the checkout when the release asset is missing.
+
+## Release workflow
+
+`.github/workflows/release.yml` runs only when a tag matching `v*` is pushed. For example `v1.0.0`. It uses GoReleaser. The tag must point at a commit that already contains that workflow file. Pushing the tag is the only trigger. Do not run it by hand from a pull request.
+
+```bash
+git checkout main
+git pull
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+The workflow then:
+
+- publishes `dflow-linux-amd64`, `dflow-linux-arm64`, `dflow-darwin-amd64`, and `dflow-darwin-arm64`, plus `checksums.txt`, as GitHub Release assets
+- pushes `ghcr.io/dflow-sh/dflow-server:<tag>` and `ghcr.io/dflow-sh/dflow-server:latest`
+- packages the Helm chart, sets its version and the server image tag to the git tag, and uploads `dflow-<version>.tgz` on the same release
+
+Actions uses the workflow `GITHUB_TOKEN` (`contents: write` and `packages: write`). No extra secret is required for this repository. This is not a production deploy of a cluster.
 
 ## What you provide
 
@@ -20,13 +238,13 @@ Wildcard example, public IP `203.0.113.10`, domain `apps.example.com`:
 
 - `apps.example.com` and `*.apps.example.com` both point at `203.0.113.10`
 - the API is `https://dflow.apps.example.com`
-- an app in the `sample` namespace is `https://hello.sample.apps.example.com`
+- an app named `hello` is `https://hello.apps.example.com` (`dflow target` selects the namespace; the hostname does not include it)
 
 sslip.io needs no DNS account. With the same IP:
 
 - domain `203.0.113.10.sslip.io`
 - API `https://dflow.203.0.113.10.sslip.io`
-- apps `https://<app>.<namespace>.203.0.113.10.sslip.io`
+- apps `https://<app>.203.0.113.10.sslip.io`
 
 `sslip.io` answers for that name and for `*.203.0.113.10.sslip.io`.
 
@@ -53,6 +271,8 @@ sudo kubectl get nodes
 ```
 
 Wait until the node is `Ready` and the `traefik` pod in `kube-system` is `Running`.
+
+k3s ServiceLB (`svclb-traefik`) can fail to claim ports 80 and 443, so the Traefik service never receives the host IP. `scripts/install.sh` avoids that by disabling ServiceLB and running Traefik on the host network, listening on 80 and 443. Use the script on a fresh server. The manual steps below assume Traefik is already reachable on those ports.
 
 ## 2. Build and load dflow-server
 
