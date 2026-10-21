@@ -75,7 +75,9 @@ sudo ./scripts/install.sh \
 
 ### What the script changes
 
-The script is safe to run again. It installs k3s when k3s is missing, turns off ServiceLB, and puts Traefik on the host network so it binds ports 80 and 443. The Traefik deployment uses a Recreate strategy, because a rolling update starts the new pod before the old one releases those host ports and the rollout never finishes. HTTP is not redirected to HTTPS, so cert-manager HTTP-01 can use port 80. The manifest is applied with server-side apply. When the file is unchanged and Traefik is already on the host network with Recreate, the script does not restart Traefik. It checks that Traefik's host IP is a node address, installs cert-manager, installs the dFlow chart, and installs the `dflow` CLI. A later run skips the server image build when k3s already has `dev-<git sha>`, and skips the CLI rebuild when that same checkout is already installed.
+The script is safe to run again after the first run on this checkout. It installs k3s when k3s is missing, turns off ServiceLB, and puts Traefik on the host network so it binds ports 80 and 443 on every node (a DaemonSet). The DaemonSet rolls one node at a time with `maxUnavailable: 1`, so the old pod releases host ports 80 and 443 before the new one binds them. HTTP is not redirected to HTTPS, so cert-manager HTTP-01 can use port 80. The manifest is applied with server-side apply. When the file is unchanged and Traefik is already that DaemonSet, the script does not restart Traefik. It checks that Traefik's host IP is a node address, installs cert-manager, installs the dFlow chart, and installs the `dflow` CLI. A later run skips the server image build when k3s already has `dev-<git sha>`, and skips the CLI rebuild when that same checkout is already installed.
+
+k3s is started with `cluster-init: true` (embedded etcd). A server that was installed earlier with SQLite restarts k3s once on the next run so the datastore can migrate. After that config is in place, a re-run does not restart k3s. See [Grow from one server to three](#grow-from-one-server-to-three).
 
 When a GitHub Release exists, the script downloads the `dflow` CLI, the Helm chart package (`dflow-*.tgz`), and the server image `ghcr.io/dflow-sh/dflow-server:<tag>` from that release. The CLI download is checked against `checksums.txt` when that file is in the release. A checksum match and a binary that does not run are reported as separate lines. No release has been published yet, so today the script builds those from the checkout and tags the server image `dev-<git sha>`. If the release download fails and the checkout build also fails, the script exits non-zero and names both failures. CI on this branch also uploads CLI binaries and a server image archive as workflow artifacts. That is not a production deploy.
 
@@ -85,11 +87,11 @@ When the script finishes it prints the API URL, the `admin` password, and the lo
 
 Manual checks and uninstall: [docs/TESTING.md](TESTING.md).
 
-The script also prints the k3s join URL and token. The URL is `https://<first-server-public-ipv4>:6443`.
+The script also prints the k3s join URL and token, a worker command, and a `--control-plane` command for two more servers. The URL is `https://<first-server-public-ipv4>:6443`.
 
 ## Add a worker
 
-The first server stays the only control plane. Another Ubuntu 22.04 or 24.04 machine joins as a worker. Clone this private repository on that machine the same way as the first server (`GITHUB_TOKEN` for HTTPS, or a deploy key). The join command itself does not need a token beyond the k3s node token.
+Another Ubuntu 22.04 or 24.04 machine joins as a worker. Clone this private repository on that machine the same way as the first server (`GITHUB_TOKEN` for HTTPS, or a deploy key). The join command itself does not need a token beyond the k3s node token. Extra control-plane servers are a different command, described in [Grow from one server to three](#grow-from-one-server-to-three).
 
 On the first server, `scripts/install.sh` prints the URL and token when it finishes. The URL is `https://<first-server-public-ipv4>:6443`. Read the token again from the k3s node-token file:
 
@@ -107,27 +109,27 @@ sudo ./scripts/join-node.sh \
   --token '<token printed by scripts/install.sh>'
 ```
 
-Replace the IP and the token. The script installs the k3s agent and joins this host as a worker. Run it again with the same server and token and it leaves a healthy agent in place. A bad token, a server that does not answer `https://<ip>:6443/ping`, or a k3s agent that does not stay active exits non-zero and prints the reason. Do not run it on the first server.
+Replace the IP and the token. The script installs the k3s agent and joins this host as a worker. Run it again with the same server and token and it leaves a healthy agent in place. A bad token, a server that does not answer `https://<ip>:6443/ping`, or a k3s agent that does not stay active exits non-zero and prints the reason. Do not run the worker command on a machine that already runs a k3s server.
 
-On the first server, confirm the worker:
+On an existing server, confirm the worker:
 
 ```bash
 sudo kubectl get nodes
 ```
 
-`kubectl` as root uses `/etc/rancher/k3s/k3s.yaml`. The new node is listed `Ready`. That can take a minute after the agent starts. The worker's `ROLES` column is empty. The first server is `control-plane`.
+`kubectl` as root uses `/etc/rancher/k3s/k3s.yaml`. The new node is listed `Ready`. That can take a minute after the agent starts. The worker's `ROLES` column is empty. A server started by `scripts/install.sh` is `control-plane,etcd`.
 
 ### Firewall
 
-Allow these between the first server and every worker:
+Allow these between every server and every worker:
 
 | Port | Protocol | Where |
 | --- | --- | --- |
-| 6443 | TCP | workers to the first server (Kubernetes API) |
+| 6443 | TCP | nodes to any server (Kubernetes API) |
 | 8472 | UDP | all nodes, both directions (flannel VXLAN) |
 | 10250 | TCP | all nodes, both directions (kubelet) |
 
-If `scripts/install.sh` logged that this kernel is using flannel host-gw, UDP 8472 is unused. Nodes still need a route to each other.
+If `scripts/install.sh` logged that this kernel is using flannel host-gw, UDP 8472 is unused. Nodes still need a route to each other. Control-plane servers also need TCP 2379 and TCP 2380; that table is in the next section.
 
 The scripts do not change host firewall rules. When `ufw` is enabled, on each node:
 
@@ -137,9 +139,87 @@ sudo ufw allow 8472/udp
 sudo ufw allow 10250/tcp
 ```
 
-### High availability
+## Grow from one server to three
 
-This install is one k3s server plus workers. Later high availability is three server nodes with k3s embedded etcd. These scripts do not set that up.
+`scripts/install.sh` writes `cluster-init: true` into `/etc/rancher/k3s/config.yaml` before k3s starts. That flag selects embedded etcd. A server installed from an older checkout that is still on SQLite picks the flag up the next time `scripts/install.sh` runs: k3s restarts once and migrates the datastore to etcd. One etcd member is a normal cluster. It is not highly available.
+
+Etcd quorum is a majority. Three servers tolerate one failure. Two servers tolerate zero: if either stops, the cluster cannot elect a leader. Add the second and third servers together. Do not leave the cluster at two servers.
+
+On each of two more Ubuntu 22.04 or 24.04 machines, from a checkout of this repository:
+
+```bash
+sudo ./scripts/join-node.sh \
+  --server https://203.0.113.10:6443 \
+  --token '<token printed by scripts/install.sh>' \
+  --control-plane \
+  --flannel-backend vxlan \
+  --tls-san dflow.example.com \
+  --tls-san apps.example.com
+```
+
+`--server` is the same API URL workers use. `--control-plane` installs a k3s server that joins the existing etcd. It does not pass `--cluster-init`. `--flannel-backend` must match `flannel-backend` in the first server's `/etc/rancher/k3s/config.yaml` (`vxlan` or `host-gw`). Repeat `--tls-san` for every name clients use to reach the Kubernetes API, including a load-balancer address if you add one. The script also adds this machine's default-route IPv4. `--node-external-ip` defaults to that same address. Set it only when the address is configured on a local interface. An egress NAT address in that field makes the in-cluster API service unroutable.
+
+Run the command again with the same arguments and it leaves a healthy server in place. Do not run `--control-plane` on the machine that already has `cluster-init: true`.
+
+Open these ports between the three servers, in addition to the worker ports above:
+
+| Port | Protocol | Where |
+| --- | --- | --- |
+| 2379 | TCP | etcd client, every server to every other server |
+| 2380 | TCP | etcd peer, every server to every other server |
+
+```bash
+sudo ufw allow 2379/tcp
+sudo ufw allow 2380/tcp
+```
+
+Confirm on any server:
+
+```bash
+sudo kubectl get nodes
+```
+
+Three nodes should show `control-plane,etcd` and `Ready`. Workers, if any, have an empty `ROLES` column.
+
+### API and app DNS
+
+Traefik runs as a DaemonSet on the host network and listens on 80 and 443 on every node. Publish the API hostname and the apps wildcard with an A record (or AAAA) for each node that should receive traffic, or point both names at a TCP load balancer that forwards 80 and 443 to those nodes. A single address, including `<ip>.sslip.io`, reaches one host. If that host is down, the API and every app route are down even when etcd still has quorum.
+
+Clients that talk to the Kubernetes API on port 6443 should use a name or load balancer that can reach any server, and that name must be a `--tls-san` on every server. Workers and extra servers can join through any server URL that answers `/ping`.
+
+A Cloudflare Tunnel started by `scripts/install.sh` terminates on the first server only. It is not a multi-node ingress.
+
+### dflow-server stays one replica
+
+The chart sets `server.replicaCount` to 1 and rejects a higher count or `server.autoscaling.enabled`. The process is not stateless:
+
+- Websocket tokens (staging logs, app shell) are signed with an RSA key generated in process memory at startup (`packages/dflow/helpers/authtoken/token.go`). A token created by one pod does not validate on another.
+- Every API pod mounts `image-export-pvc`, which is `ReadWriteOnce`. A second pod stays Pending, and export jobs share that same claim with the API process that wrote the files. Required anti-affinity across nodes cannot be combined with that volume.
+- Helm installs are serialized with an in-process mutex (`packages/dflow/helm/client.go`). Two pods can upgrade the same release at the same time.
+
+User records and application objects already live in Kubernetes. That does not make a second API pod safe. There is no PodDisruptionBudget and no anti-affinity on `dflow-server`, because those objects only help when more than one pod can run. The image-export volume is local to one node, so that single pod does not move to another node while the volume is there.
+
+### Registry and SeaweedFS
+
+The in-cluster registry is one pod (`packages/helm-chart/templates/container-registry/container-registry.yaml`). By default its storage is an `emptyDir`, which is deleted when the pod is rescheduled. Two registry pods would not replicate blobs. To keep images across a node loss, set `containerregistry.enabled` to false and set `global.registryURL`, `global.registryUsername`, `global.registryPassword`, and `global.registryNamespace` to an external registry.
+
+SeaweedFS is the S3 store for source uploads. The chart leaves master, volume, and filer at one replica. The upstream master pods already request hostname anti-affinity, and the masters need a majority to elect a leader, so raising `seaweedfs.master.replicas` on a one-node cluster leaves S3 down. After three servers are `Ready`, a Helm upgrade can set:
+
+```yaml
+seaweedfs:
+  global:
+    enableReplication: true
+    replicationPlacement: "001"
+  master:
+    replicas: 3
+  volume:
+    replicas: 3
+  filer:
+    replicas: 2
+    defaultReplicaPlacement: "001"
+```
+
+`001` keeps one extra copy on another server. Master data in the upstream chart defaults to a hostPath. Give each master its own disk before raising the replica count. Do this only when three nodes can schedule the anti-affinity rule.
 
 ## macOS CLI
 

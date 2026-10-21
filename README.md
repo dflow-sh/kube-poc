@@ -38,6 +38,6 @@ Binaries:
 
 Install on a server: [docs/INSTALL.md](docs/INSTALL.md). Check it with [docs/TESTING.md](docs/TESTING.md).
 
-On a Mac, `./scripts/install-cli.sh` installs `dflow` to `/usr/local/bin`. `make dflow` writes `dist/dflow`. `scripts/update.sh` upgrades a server that was installed with `scripts/install.sh`. That installer prints the worker join URL and token. `scripts/join-node.sh` joins another Ubuntu machine as a worker.
+On a Mac, `./scripts/install-cli.sh` installs `dflow` to `/usr/local/bin`. `make dflow` writes `dist/dflow`. `scripts/update.sh` upgrades a server that was installed with `scripts/install.sh`. That installer starts embedded etcd and prints the worker join command and the `--control-plane` command for a second and third server. `scripts/join-node.sh` joins another Ubuntu machine as a worker, or as a server when `--control-plane` is set.
 
 A local cluster smoke test is `scripts/e2e-smoke.sh`.

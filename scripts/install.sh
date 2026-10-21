@@ -501,9 +501,7 @@ choose_flannel() {
   fi
 }
 
-write_k3s_config() {
-  choose_flannel
-  mkdir -p /etc/rancher/k3s
+k3s_server_config_body() {
   # kube-proxy sends the kubernetes API service to node-external-ip. An
   # egress address that is not configured on this host (NAT) is not answered
   # here, so in-cluster clients time out. Use the public IP only when it is
@@ -512,8 +510,10 @@ write_k3s_config() {
   if ip_is_local "${PUBLIC_IP:-}"; then
     external_ip="${PUBLIC_IP}"
   fi
-  local rendered
-  rendered="$(cat <<EOF
+  # cluster-init starts embedded etcd. On a server that was already running
+  # SQLite, the next k3s restart migrates the datastore. Additional servers
+  # must not set this; they join with scripts/join-node.sh --control-plane.
+  cat <<EOF
 write-kubeconfig-mode: "644"
 disable:
   - servicelb
@@ -523,27 +523,33 @@ tls-san:
   - ${API_HOST}
   - ${APPS_BASE}
 node-external-ip: ${external_ip}
+cluster-init: true
 EOF
-)"
+}
+
+write_k3s_config() {
+  choose_flannel
+  mkdir -p /etc/rancher/k3s
+  local rendered
+  rendered="$(k3s_server_config_body)"
   if [[ ! -f /etc/rancher/k3s/config.yaml ]] || ! cmp -s - /etc/rancher/k3s/config.yaml <<<"${rendered}"; then
     printf '%s\n' "$rendered" > /etc/rancher/k3s/config.yaml
     CONFIG_CHANGED=1
   fi
 }
 
-write_traefik_config() {
+traefik_helmchartconfig_body() {
   # ServiceLB (svclb-traefik) binds host ports through the CNI portmap plugin
   # and can stay stuck when that plugin cannot program the host. Traefik
   # itself joins the host network and listens on 80 and 443, so the service
   # stays ClusterIP and ServiceLB is not used.
-  # Recreate is required: a rolling update starts the new pod before the old
-  # one releases host ports 80 and 443, and the rollout never finishes.
-  # HTTP is not redirected to HTTPS so cert-manager HTTP-01 can use port 80.
-  mkdir -p /var/lib/rancher/k3s/server/manifests
-  local dest="/var/lib/rancher/k3s/server/manifests/dflow-traefik-config.yaml"
-  local tmp
-  tmp="$(mktemp)"
-  cat > "$tmp" <<'EOF'
+  # A DaemonSet puts one pod on every node, which is what multiple A records
+  # or a load balancer need. Chart 40 reads deployment.kind and the top-level
+  # updateStrategy. RollingUpdate with maxUnavailable 1 drops the old pod on
+  # a node before the new one binds host ports 80 and 443. Recreate is not a
+  # DaemonSet strategy. HTTP is not redirected to HTTPS so cert-manager
+  # HTTP-01 can use port 80.
+  cat <<'EOF'
 apiVersion: helm.cattle.io/v1
 kind: HelmChartConfig
 metadata:
@@ -553,11 +559,13 @@ spec:
   valuesContent: |-
     hostNetwork: true
     deployment:
+      kind: DaemonSet
       dnsPolicy: ClusterFirstWithHostNet
-    # Traefik chart 40 (k3s 1.36) reads updateStrategy, not deployment.strategy.
-    # Recreate releases host ports 80 and 443 before the new pod starts.
     updateStrategy:
-      type: Recreate
+      type: RollingUpdate
+      rollingUpdate:
+        maxUnavailable: 1
+        maxSurge: 0
     service:
       spec:
         type: ClusterIP
@@ -582,6 +590,15 @@ spec:
       runAsUser: 0
       runAsGroup: 0
 EOF
+}
+
+write_traefik_config() {
+  mkdir -p /var/lib/rancher/k3s/server/manifests
+  local dest="/var/lib/rancher/k3s/server/manifests/dflow-traefik-config.yaml"
+  local tmp rendered
+  rendered="$(traefik_helmchartconfig_body)"
+  tmp="$(mktemp)"
+  printf '%s\n' "$rendered" > "$tmp"
   if [[ -f "$dest" ]] && cmp -s "$tmp" "$dest"; then
     rm -f "$tmp"
     TRAEFIK_CONFIG_CHANGED=0
@@ -627,6 +644,13 @@ kubectl() {
   command kubectl --kubeconfig "$KUBECONFIG_PATH" "$@"
 }
 
+traefik_host_daemonset() {
+  local kind host_net
+  kind="$(kubectl -n kube-system get ds traefik -o jsonpath='{.kind}' 2>/dev/null || true)"
+  host_net="$(kubectl -n kube-system get pod -l app.kubernetes.io/name=traefik -o jsonpath='{.items[0].spec.hostNetwork}' 2>/dev/null || true)"
+  [[ "$kind" == "DaemonSet" && "$host_net" == "true" ]]
+}
+
 apply_traefik() {
   log "Traefik host network"
   local manifest="/var/lib/rancher/k3s/server/manifests/dflow-traefik-config.yaml"
@@ -642,37 +666,43 @@ apply_traefik() {
       die "could not apply ${manifest}"
     fi
   fi
-  local attempt strategy host_net
-  for attempt in $(seq 1 60); do
-    if kubectl -n kube-system get deploy traefik >/dev/null 2>&1; then
-      break
-    fi
-    if [[ "$attempt" -eq 60 ]]; then
-      die "the traefik deployment did not appear in kube-system"
-    fi
-    sleep 5
-  done
-  strategy="$(kubectl -n kube-system get deploy traefik -o jsonpath='{.spec.strategy.type}' 2>/dev/null || true)"
-  host_net="$(kubectl -n kube-system get pod -l app.kubernetes.io/name=traefik -o jsonpath='{.items[0].spec.hostNetwork}' 2>/dev/null || true)"
-  if [[ "$TRAEFIK_CONFIG_CHANGED" -eq 0 && "$strategy" == "Recreate" && "$host_net" == "true" ]]; then
-    log "Traefik is already on the host network with Recreate; not restarting it"
+  local attempt
+  if [[ "$TRAEFIK_CONFIG_CHANGED" -eq 0 ]] && traefik_host_daemonset; then
+    log "Traefik is already a host-network DaemonSet; not restarting it"
   else
-    log "waiting for Traefik to adopt hostNetwork and Recreate"
+    log "waiting for Traefik DaemonSet on the host network"
+    for attempt in $(seq 1 60); do
+      if kubectl -n kube-system get ds traefik >/dev/null 2>&1; then
+        break
+      fi
+      if [[ "$attempt" -eq 60 ]]; then
+        kubectl -n kube-system get deploy,ds,pods >&2 || true
+        die "the traefik DaemonSet did not appear in kube-system"
+      fi
+      sleep 5
+    done
+    # The previous chart rendered a Deployment. It holds host ports 80 and
+    # 443, so the DaemonSet pod cannot bind them until that Deployment is gone.
+    # Helm deletes it once the chart no longer renders a Deployment; delete
+    # here as well so a slow upgrade does not leave both objects running.
+    if kubectl -n kube-system get deploy traefik >/dev/null 2>&1; then
+      log "removing the Traefik Deployment so the DaemonSet can bind host ports"
+      kubectl -n kube-system delete deploy traefik --wait=true --timeout=180s \
+        || die "could not delete the Traefik Deployment"
+    fi
   fi
   for attempt in $(seq 1 60); do
-    strategy="$(kubectl -n kube-system get deploy traefik -o jsonpath='{.spec.strategy.type}' 2>/dev/null || true)"
-    host_net="$(kubectl -n kube-system get pod -l app.kubernetes.io/name=traefik -o jsonpath='{.items[0].spec.hostNetwork}' 2>/dev/null || true)"
-    if [[ "$strategy" == "Recreate" && "$host_net" == "true" ]]; then
+    if traefik_host_daemonset; then
       break
     fi
     if [[ "$attempt" -eq 60 ]]; then
-      kubectl -n kube-system get deploy traefik -o yaml >&2 || true
-      die "traefik did not switch to hostNetwork and a Recreate strategy (strategy=${strategy:-empty}, hostNetwork=${host_net:-empty})"
+      kubectl -n kube-system get ds,deploy,pods -l app.kubernetes.io/name=traefik >&2 || true
+      die "traefik did not become a host-network DaemonSet"
     fi
     sleep 5
   done
-  kubectl -n kube-system rollout status deploy/traefik --timeout=10m \
-    || die "traefik did not become ready after switching to the host network"
+  kubectl -n kube-system rollout status ds/traefik --timeout=10m \
+    || die "traefik DaemonSet did not become ready"
   # Drop any ServiceLB DaemonSet left from an earlier LoadBalancer service.
   local ds
   while read -r ds; do
@@ -1543,22 +1573,36 @@ print_join_info() {
   if [[ -z "${PUBLIC_IP:-}" ]]; then
     cat <<EOF
 
-No public IPv4 was detected, so a worker join URL is not printed.
-Workers can join only if they can reach this node's Kubernetes API.
+No public IPv4 was detected, so a join URL is not printed.
+Workers and extra control-plane servers can join only if they can reach this node's Kubernetes API.
+Use scripts/join-node.sh --control-plane for a second and third server once that address is known. docs/INSTALL.md describes the three-server layout.
 EOF
     return 0
   fi
   server="https://${PUBLIC_IP}:6443"
+  local flannel="${FLANNEL_BACKEND:-vxlan}"
+  local tls_args=""
+  if [[ -n "${API_HOST:-}" ]]; then
+    tls_args="--tls-san ${API_HOST}"
+  fi
+  if [[ -n "${APPS_BASE:-}" && "${APPS_BASE}" != "${API_HOST:-}" ]]; then
+    tls_args="${tls_args} --tls-san ${APPS_BASE}"
+  fi
   cat <<EOF
 
-Join a worker from another Ubuntu 22.04 or 24.04 machine. docs/INSTALL.md has the firewall ports.
+This server starts embedded etcd (cluster-init). One server is not highly available.
+Add two more servers before relying on failover. Do not stop at two: etcd then loses quorum when either server stops.
 
-  server: ${server}
-  token:  ${token}
+Join a worker from another Ubuntu 22.04 or 24.04 machine:
 
   sudo ./scripts/join-node.sh --server ${server} --token '${token}'
 
+Join a second and a third control-plane server with the same token. docs/INSTALL.md has the firewall ports, including TCP 2379 and TCP 2380.
+
+  sudo ./scripts/join-node.sh --server ${server} --token '${token}' --control-plane --flannel-backend ${flannel} ${tls_args}
+
 The token is also in ${token_file}. The server URL uses this machine's public IPv4.
+Point API and app DNS at every node that runs Traefik, or at a load balancer. A single sslip.io address reaches only one host.
 EOF
 }
 

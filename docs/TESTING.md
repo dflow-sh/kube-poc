@@ -179,13 +179,38 @@ That app's `buildmode` is `buildpack`. An existing app keeps the build mode stor
 
 ## Worker node
 
-On the first server, after `scripts/join-node.sh` on another Ubuntu machine:
+On an existing server, after `scripts/join-node.sh` on another Ubuntu machine:
 
 ```bash
 sudo kubectl get nodes
 ```
 
-The new node is `Ready`. The first server is `control-plane`. The join URL and token are what `scripts/install.sh` printed (`https://<first-server-public-ipv4>:6443` and the k3s node token). Firewall ports are TCP 6443, UDP 8472, and TCP 10250. Later high availability is three server nodes with embedded etcd. That is not part of this check. Details are in [docs/INSTALL.md](INSTALL.md).
+The new node is `Ready`. Its `ROLES` column is empty. A server started with `scripts/install.sh` is `control-plane,etcd`. The join URL and token are what `scripts/install.sh` printed (`https://<first-server-public-ipv4>:6443` and the k3s node token). Firewall ports are TCP 6443, UDP 8472, and TCP 10250. Details are in [docs/INSTALL.md](INSTALL.md).
+
+## Three control-plane servers
+
+This needs two more Ubuntu machines. It is not a check you can finish on the first server alone.
+
+On each new machine:
+
+```bash
+sudo ./scripts/join-node.sh \
+  --server https://<first-server-public-ipv4>:6443 \
+  --token '<token>' \
+  --control-plane \
+  --flannel-backend <vxlan-or-host-gw> \
+  --tls-san <api-host>
+```
+
+Then, on any server:
+
+```bash
+sudo kubectl get nodes
+sudo kubectl -n kube-system get ds traefik
+sudo kubectl -n dflow get deploy dflow-server
+```
+
+Expected: three nodes with `control-plane,etcd` and `Ready`. Traefik is a DaemonSet with a host-network pod on each node. `dflow-server` still has `1` available replica. The chart rejects `server.replicaCount` greater than 1. Registry and SeaweedFS stay one replica until you follow the external-registry and SeaweedFS steps in [docs/INSTALL.md](INSTALL.md). API and app DNS should list every Traefik node, or a load balancer in front of them.
 
 ## Uninstall and reset
 
