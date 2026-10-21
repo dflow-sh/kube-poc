@@ -34,10 +34,14 @@ jobs:
       - name: Package Helm chart
         run: |
           version="${GITHUB_REF_NAME#v}"
-          python3 - "$version" "$GITHUB_REF_NAME" <<'PY'
+          # Stamp a temporary copy. Editing packages/helm-chart in place leaves
+          # git dirty, and goreleaser release --clean aborts before publish.
+          work="$(mktemp -d)"
+          cp -a packages/helm-chart "$work/helm-chart"
+          python3 - "$version" "$GITHUB_REF_NAME" "$work/helm-chart" <<'PY'
           import pathlib, sys
-          version, tag = sys.argv[1], sys.argv[2]
-          chart = pathlib.Path("packages/helm-chart/Chart.yaml")
+          version, tag, root = sys.argv[1], sys.argv[2], pathlib.Path(sys.argv[3])
+          chart = root / "Chart.yaml"
           text = chart.read_text()
           text2 = []
           for line in text.splitlines(keepends=True):
@@ -48,7 +52,7 @@ jobs:
               else:
                   text2.append(line)
           chart.write_text("".join(text2))
-          values = pathlib.Path("packages/helm-chart/values.yaml")
+          values = root / "values.yaml"
           raw = values.read_text()
           needle = (
               "  dflow:\n"
@@ -62,7 +66,13 @@ jobs:
           values.write_text(raw.replace(needle, replacement, 1))
           PY
           mkdir -p chart-package
-          helm package packages/helm-chart --destination chart-package
+          helm package "$work/helm-chart" --destination chart-package
+          rm -rf "$work"
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "Helm packaging left the git tree dirty:"
+            git status --porcelain
+            exit 1
+          fi
           ls -l chart-package
       - uses: goreleaser/goreleaser-action@v6
         with:
