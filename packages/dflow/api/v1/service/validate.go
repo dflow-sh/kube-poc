@@ -1,0 +1,108 @@
+// Copyright © 2021 - 2023 SUSE LLC
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//     http://www.apache.org/licenses/LICENSE-2.0
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package service
+
+import (
+	"context"
+
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
+	"github.com/dflow-sh/kube-poc/packages/dflow/cli/server/requestctx"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helm"
+	"github.com/dflow-sh/kube-poc/packages/dflow/names"
+	"github.com/dflow-sh/kube-poc/packages/dflow/services"
+	"github.com/pkg/errors"
+
+	apierror "github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/errors"
+	"github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/models"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+
+	helmrelease "helm.sh/helm/v3/pkg/release"
+	helmdriver "helm.sh/helm/v3/pkg/storage/driver"
+)
+
+// GetService will find the service with the provided namespace and name
+func GetService(
+	ctx context.Context, cluster *kubernetes.Cluster,
+	namespace, serviceName string,
+) (*models.Service, apierror.APIErrors) {
+	logger := requestctx.Logger(ctx).With("component", "serviceLookup")
+
+	logger.Infow("get service client")
+
+	kubeServiceClient, err := services.NewKubernetesServiceClient(cluster)
+	if err != nil {
+		return nil, apierror.InternalError(err)
+	}
+
+	logger.Infow("get service")
+
+	theService, err := kubeServiceClient.Get(ctx, namespace, serviceName)
+	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			return nil, apierror.NewNotFoundError("service", serviceName).WithDetails(err.Error())
+		}
+
+		return nil, apierror.InternalError(err)
+	}
+	// See internal/services/instances.go - not found => no error, nil structure
+	if theService == nil {
+		return nil, apierror.NewNotFoundError("service", serviceName)
+	}
+
+	logger.Infow("service found", "service", serviceName)
+	return theService, nil
+}
+
+// ValidateService is used by various service endpoints to verify that the service exists,
+// as well as its helm release, before action is taken.
+func ValidateService(
+	ctx context.Context, cluster *kubernetes.Cluster,
+	service *models.Service,
+) apierror.APIErrors {
+	logger := requestctx.Logger(ctx).With("component", "serviceValidate")
+
+	logger.Infow("getting helm client")
+
+	client, err := helm.GetHelmClient(cluster.RestConfig, service.Namespace())
+	if err != nil {
+		return apierror.InternalError(err)
+	}
+
+	logger.Infow("looking for service release")
+
+	releaseName := names.ServiceReleaseName(service.Meta.Name)
+	srv, err := client.GetRelease(releaseName)
+	if err != nil {
+		if !errors.Is(err, helmdriver.ErrReleaseNotFound) {
+			return apierror.InternalError(err)
+		}
+
+		// COMPATIBILITY SUPPORT for services from before https://github.com/dflow-sh/kube-poc/packages/dflow/issues/1704 fix
+		releaseNameHC := names.ServiceHelmChartName(service.Meta.Name, service.Namespace())
+		srv, err = client.GetRelease(releaseNameHC)
+		if err != nil {
+			if errors.Is(err, helmdriver.ErrReleaseNotFound) {
+				return apierror.NewNotFoundError(
+					"release",
+					releaseName,
+				).WithDetailsf("Not found error: %s", err.Error())
+			}
+			return apierror.InternalError(err)
+		}
+	}
+
+	if srv.Info.Status != helmrelease.StatusDeployed {
+		return apierror.InternalError(err)
+	}
+
+	return nil
+}

@@ -1,0 +1,60 @@
+{{- range .Values.api.users }}
+---
+apiVersion: v1
+kind: Secret
+type: BasicAuth
+metadata:
+  labels:
+    dflow.sh/api-user-credentials: "true"
+  annotations:
+    dflow.sh/roles: {{ join "," .roles }}
+  name: {{ include "dflow-truncate" (print "user-" .username) }}
+  namespace: {{ $.Release.Namespace }}
+stringData:
+  username: {{ .username | quote }}
+  {{- if (and $.Values.api.adminPassword (eq .username "admin" )) }}
+  password: {{ bcrypt $.Values.api.adminPassword | quote }}
+  {{- else if (and $.Values.api.dflowPassword (eq .username "dflow" )) }}
+  password: {{ bcrypt $.Values.api.dflowPassword | quote }}
+  {{- else if .passwordBcrypt }}
+  password: {{ .passwordBcrypt | quote }}
+  {{- else if .password }}
+  password: {{ bcrypt .password | quote }}
+  {{- end }}
+  namespaces: |
+    {{ join "\n" .workspaces -}}
+{{- end }}
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  labels:
+    dflow.sh/role: "true"
+  name: "dflow-user-role"
+  namespace: {{ $.Release.Namespace }}
+data:
+  id: user
+  name: "dFlow User Role"
+  default: "true"
+  actions: |
+    namespace_write
+    app_read
+    configuration_read
+    service_read
+    gitconfig_read
+    export_registries_read
+    builderimage_read
+    builderimage_write
+    
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  labels:
+    dflow.sh/role: "true"
+  name: "dflow-blank-role"
+  namespace: {{ $.Release.Namespace }}
+data:
+  id: blank
+  name: "dFlow Blank Role (no permissions)"

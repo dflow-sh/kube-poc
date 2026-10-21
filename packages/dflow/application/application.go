@@ -1,0 +1,2144 @@
+// Copyright © 2021 - 2023 SUSE LLC
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//     http://www.apache.org/licenses/LICENSE-2.0
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Package application collects the structures and functions that deal with application
+// workloads on k8s
+package application
+
+import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"fmt"
+	"os"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes/tailer"
+	"github.com/dflow-sh/kube-poc/packages/dflow/cli/server/requestctx"
+	"github.com/dflow-sh/kube-poc/packages/dflow/duration"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helm"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helmchart"
+	"github.com/dflow-sh/kube-poc/packages/dflow/namespaces"
+	"github.com/dflow-sh/kube-poc/packages/dflow/registry"
+	"github.com/dflow-sh/kube-poc/packages/dflow/s3manager"
+	"github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/models"
+	"github.com/go-logr/logr"
+	"github.com/pkg/errors"
+
+	dflowappv1 "github.com/dflow-sh/kube-poc/packages/application/api/v1"
+	apierror "github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/errors"
+	apibatchv1 "k8s.io/api/batch/v1"
+	v1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/selection"
+	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
+)
+
+const DFlowApplicationAreaLabel = "dflow.sh/area"
+
+// appNamesInSelector appends an "in" label requirement for app names to a base selector string.
+// Returns base unchanged when names is empty.
+func appNamesInSelector(base string, names []string) string {
+	if len(names) == 0 {
+		return base
+	}
+	in := "app.kubernetes.io/name in (" + strings.Join(names, ",") + ")"
+	if base == "" {
+		return in
+	}
+	return base + "," + in
+}
+
+type JobLister interface {
+	ListJobs(
+		ctx context.Context,
+		namespace, selector string,
+	) (*apibatchv1.JobList, error)
+}
+
+// ValidateCV checks the custom values against the declarations.
+// It reports as many issues as it can find.
+func ValidateCV(
+	cv models.ChartValueSettings,
+	decl map[string]models.ChartSetting,
+) []error {
+	// See also internal/helm Deploy(). A last-minute check to catch any changes
+	// possibly landing in the time window between the check here and the actual
+	// deployment.
+
+	var issues []error
+
+	/* Pattern to strip array index syntax from the actual key to determine the
+		 underlying base setting to check against. Note that this handles inner
+		 array syntax too.
+
+	Examples:                                   KEY                           KEYBASE
+	  --set 'keycloak.ingress.hosts[0]=auth1' ~ 'keycloak.ingress.hosts[0]' ~ 'keycloak.ingress.hosts'
+		--set 'servers[0].port=80'              ~ 'servers[0].port'           ~ 'servers.port'
+	*/
+
+	rex := regexp.MustCompile(`\[[^]]\]`)
+
+	for key, value := range cv {
+		keybase := rex.ReplaceAllString(key, "")
+
+		spec, found := decl[keybase]
+		if !found {
+			// Shorten the key incrementally to see if a prefix exists and is a map.
+
+			nestedmap := false
+			pieces := strings.Split(keybase, ".")
+			pieces = pieces[0 : len(pieces)-1]
+
+			for len(pieces) > 0 {
+				prefix := strings.Join(pieces, ".")
+
+				spec, found := decl[prefix]
+				if found && spec.Type == "map" {
+					nestedmap = true
+					break
+				}
+
+				pieces = pieces[0 : len(pieces)-1]
+			}
+
+			if !nestedmap {
+				issues = append(issues, fmt.Errorf(`setting "%s": not known`, keybase))
+			}
+			continue
+		}
+
+		// Maps are not checked deeper.
+		if spec.Type == "map" {
+			continue
+		}
+
+		// Note: The interface{} result for the properly typed value is ignored here.
+		// We do not care about the value, just that it is ok.
+
+		_, err := helm.ValidateField(keybase, value, spec)
+		if err != nil {
+			issues = append(issues, err)
+		}
+	}
+	return issues
+}
+
+// Create generates a new kube app resource in the namespace of the namespace.
+// Note that this is the passive resource holding the app's configuration.
+// It is not the active workload.
+func Create(
+	ctx context.Context,
+	cluster *kubernetes.Cluster,
+	app models.AppRef,
+	username string,
+	routes []string,
+	chart string,
+	settings models.ChartValueSettings,
+) error {
+	client, err := cluster.ClientApp()
+	if err != nil {
+		return err
+	}
+
+	// we create the appCRD in the namespace
+	obj := &dflowappv1.App{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{
+				models.DFlowCreatedByAnnotation: username,
+			},
+		},
+		Spec: dflowappv1.AppSpec{
+			Routes:    routes,
+			Origin:    dflowappv1.AppOrigin{},
+			ChartName: chart,
+			Settings:  settings,
+		},
+	}
+
+	u, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
+	if err != nil {
+		return err
+	}
+	us := &unstructured.Unstructured{Object: u}
+	us.SetAPIVersion("application.dflow.sh/v1")
+	us.SetKind("App")
+	us.SetName(app.Name)
+
+	// [NO-ROUTES] Note: An empty routes slice is not stored in the app kube resource.
+	// (`omitempty`!) See `DesiredRoutes` for the converse. Treat missing field as empty
+	// slice. Same marker as here.
+
+	_, err = client.Namespace(app.Namespace).Create(ctx, us, metav1.CreateOptions{})
+	return err
+}
+
+// Get returns the application resource from the cluster.  This should be
+// changed to return a typed application struct, like dflowappv1.App if needed
+// in the future.
+func Get(
+	ctx context.Context,
+	cluster *kubernetes.Cluster,
+	app models.AppRef,
+) (*unstructured.Unstructured, error) {
+	client, err := cluster.ClientApp()
+	if err != nil {
+		return nil, err
+	}
+
+	return client.Namespace(app.Namespace).Get(ctx, app.Name, metav1.GetOptions{})
+}
+
+// Exists checks if the named application exists or not, and returns an
+// appropriate boolean flag
+func Exists(
+	ctx context.Context,
+	cluster *kubernetes.Cluster,
+	app models.AppRef,
+) (bool, error) {
+	_, err := Get(ctx, cluster, app)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// IsCurrentlyStaging returns true if the named application is staging
+// (there is an active Job for this application). If this information is needed
+// for more than one application use stagingStatus instead.
+func IsCurrentlyStaging(
+	ctx context.Context,
+	cluster JobLister,
+	namespace,
+	appName string,
+) (bool, error) {
+	staging, err := stagingStatus(ctx, cluster, namespace, []string{appName})
+	if err != nil {
+		return false, err
+	}
+	status := staging[EncodeConfigurationKey(appName, namespace)]
+	return status.status == models.ApplicationStagingActive, nil
+}
+
+/*
+stagingStatus is a utility function loading a map of the status of the
+application's staging jobs (active, done, error). If appNames is empty it loads
+a complete map for the namespace; otherwise it scopes the query to the named apps.
+*/
+func stagingStatus(
+	ctx context.Context,
+	cluster JobLister,
+	namespace string,
+	appNames []string,
+) (map[ConfigurationKey]stagingJobInfo, error) {
+	stagingJobsMap := make(map[ConfigurationKey]stagingJobInfo)
+
+	labelsMap := make(map[string]string)
+	if namespace != "" {
+		labelsMap["app.kubernetes.io/part-of"] = namespace
+	}
+
+	base := labels.Set(labelsMap).AsSelector().String()
+	var selector string
+	switch len(appNames) {
+	case 0:
+		selector = base
+	case 1:
+		labelsMap["app.kubernetes.io/name"] = appNames[0]
+		selector = labels.Set(labelsMap).AsSelector().String()
+	default:
+		selector = appNamesInSelector(base, appNames)
+	}
+	jobList, err := cluster.ListJobs(ctx, helmchart.Namespace(), selector)
+	if err != nil {
+		return nil, err
+	}
+
+	completed := func(condition apibatchv1.JobCondition) bool {
+		return condition.Status == v1.ConditionTrue && condition.Type == apibatchv1.JobComplete
+	}
+
+	failed := func(condition apibatchv1.JobCondition) bool {
+		return condition.Status == v1.ConditionTrue && condition.Type == apibatchv1.JobFailed
+	}
+
+	jobStaging := func(job apibatchv1.Job) stagingJobInfo {
+		for _, condition := range job.Status.Conditions {
+			if failed(condition) {
+				completedAt := condition.LastTransitionTime.Time
+				return stagingJobInfo{
+					status:      models.ApplicationStagingFailed,
+					completedAt: &completedAt,
+				}
+			}
+			if completed(condition) {
+				completedAt := condition.LastTransitionTime.Time
+				return stagingJobInfo{
+					status:      models.ApplicationStagingDone,
+					completedAt: &completedAt,
+				}
+			}
+		}
+		// No terminal condition found on the job, it is actively staging
+		return stagingJobInfo{status: models.ApplicationStagingActive}
+	}
+
+	for _, job := range jobList.Items {
+		appName := job.GetLabels()["app.kubernetes.io/name"]
+		namespace := job.GetLabels()["app.kubernetes.io/part-of"]
+		stagingJobsMap[EncodeConfigurationKey(appName, namespace)] = jobStaging(job)
+	}
+
+	return stagingJobsMap, nil
+}
+
+func updateAppDataMapWithStagingJobStatus(
+	appDataMap map[ConfigurationKey]AppData,
+	stagingJobsMap map[ConfigurationKey]stagingJobInfo,
+) map[ConfigurationKey]AppData {
+	for appName, stagingJob := range stagingJobsMap {
+		appData := appDataMap[appName]
+		appData.staging = stagingJob.status
+		appData.stagingCompletedAt = stagingJob.completedAt
+		appDataMap[appName] = appData
+	}
+	return appDataMap
+}
+
+// Lookup locates the named application (and namespace).
+func Lookup(
+	ctx context.Context,
+	cluster *kubernetes.Cluster,
+	namespace,
+	appName string,
+) (*models.App, error) {
+	meta := models.NewAppRef(appName, namespace)
+
+	ok, err := Exists(ctx, cluster, meta)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+
+	app := meta.App()
+
+	err = fetch(ctx, cluster, app)
+	return app, err
+}
+
+/*
+ListAppRefs returns an app reference for every application resource in the
+specified namespace. If no namespace is specified (empty string) then apps
+across all namespaces are returned.
+*/
+func ListAppRefs(
+	ctx context.Context,
+	cluster *kubernetes.Cluster,
+	namespace string,
+) ([]models.AppRef, error) {
+	client, err := cluster.ClientApp()
+	if err != nil {
+		return nil, err
+	}
+
+	list, err := client.Namespace(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	apps := make([]models.AppRef, 0, len(list.Items))
+	for _, app := range list.Items {
+		// XXX created-at!
+		apps = append(apps, models.NewAppRef(app.GetName(), app.GetNamespace()))
+	}
+
+	return apps, nil
+}
+
+type stagingJobInfo struct {
+	status      models.ApplicationStagingStatus
+	completedAt *time.Time
+}
+
+// deployGracePeriod is how long to keep reporting "deploying" after staging
+// completes when no workload is visible yet. Beyond this, with a built image
+// and no pods, the deploy is treated as failed rather than still in progress.
+const deployGracePeriod = 180 * time.Second
+
+type AppData struct {
+	scaling            *v1.Secret
+	bound              *v1.Secret
+	env                *v1.Secret
+	services           *v1.Secret
+	routes             []string
+	pods               []v1.Pod
+	staging            models.ApplicationStagingStatus
+	stagingCompletedAt *time.Time
+}
+
+// loadEnrichmentData fetches the auxiliary data needed to build full App structs.
+// Pass namespace="" and appNames=nil to load across all namespaces without filtering.
+func loadEnrichmentData(
+	ctx context.Context,
+	cluster *kubernetes.Cluster,
+	namespace string,
+	appNames []string,
+) (map[ConfigurationKey]AppData, map[string]metricsv1beta1.PodMetrics, map[ConfigurationKey]string, error) {
+	secrets, secretsError := cluster.Kubectl.CoreV1().Secrets(namespace).List(
+		ctx,
+		metav1.ListOptions{LabelSelector: "app.kubernetes.io/managed-by=dflow"},
+	)
+	if secretsError != nil {
+		return nil, nil, nil, secretsError
+	}
+
+	// Configuration secrets are not managed-by=dflow, so they need their own call.
+	configurationTypes, typesError := ConfigurationTypes(ctx, cluster, namespace)
+	if typesError != nil {
+		return nil, nil, nil, typesError
+	}
+
+	appAuxiliary := makeAuxiliaryMap(secrets.Items)
+
+	appAuxiliary, podsError := AddApplicationPods(
+		appAuxiliary,
+		ctx,
+		cluster,
+		namespace,
+		appNames,
+	)
+	if podsError != nil {
+		return nil, nil, nil, podsError
+	}
+
+	appAuxiliary, routesError := AddActualApplicationRoutes(
+		appAuxiliary,
+		ctx,
+		cluster,
+		namespace,
+		appNames,
+	)
+	if routesError != nil {
+		return nil, nil, nil, routesError
+	}
+
+	pageMetrics, metricsError := GetPodMetrics(ctx, cluster, namespace, appNames)
+	if metricsError != nil {
+		helpers.Logger.Errorw("metrics not available", "error", metricsError)
+	}
+
+	stagingJobs, stagingError := stagingStatus(
+		ctx,
+		cluster,
+		namespace,
+		appNames,
+	)
+	if stagingError != nil {
+		return nil, nil, nil, stagingError
+	}
+	appAuxiliary = updateAppDataMapWithStagingJobStatus(
+		appAuxiliary,
+		stagingJobs,
+	)
+
+	return appAuxiliary, pageMetrics, configurationTypes, nil
+}
+
+/*
+List returns a list of all available apps in the specified namespace.
+If no namespace	is specified (empty string) then apps across all namespaces
+are returned.
+*/
+func List(
+	ctx context.Context,
+	cluster *kubernetes.Cluster,
+	namespace string,
+) (models.AppList, error) {
+	appClient, clientError := cluster.ClientApp()
+	if clientError != nil {
+		return nil, clientError
+	}
+	appCRList, listError := appClient.Namespace(namespace).List(
+		ctx,
+		metav1.ListOptions{},
+	)
+	if listError != nil {
+		return nil, listError
+	}
+
+	appAuxiliary, appMetrics, configurationTypes, enrichError := loadEnrichmentData(
+		ctx,
+		cluster,
+		namespace,
+		nil,
+	)
+	if enrichError != nil {
+		return nil, enrichError
+	}
+
+	result := models.AppList{}
+	for _, appCR := range appCRList.Items {
+		app, aggregateError := aggregate(
+			ctx,
+			cluster,
+			appCR,
+			appAuxiliary,
+			appMetrics,
+			configurationTypes,
+		)
+		if aggregateError != nil {
+			return result, aggregateError
+		}
+		if app != nil {
+			result = append(result, *app)
+		}
+	}
+
+	return result, nil
+}
+
+// ListPaginated fetches only the apps for the requested page, scoping the expensive
+// Kubernetes queries (pods, ingresses, metrics, staging jobs) to just those app names.
+// Returns the paged app list and the total app count (for building pagination metadata).
+func ListPaginated(
+	ctx context.Context,
+	cluster *kubernetes.Cluster,
+	namespace string,
+	page, pageSize int,
+	search string,
+) (models.AppList, int, error) {
+	appClient, clientError := cluster.ClientApp()
+	if clientError != nil {
+		return nil, 0, clientError
+	}
+
+	appCRList, listError := appClient.Namespace(namespace).List(
+		ctx,
+		metav1.ListOptions{},
+	)
+	if listError != nil {
+		return nil, 0, listError
+	}
+
+	allCRs := appCRList.Items
+	if search != "" {
+		lower := strings.ToLower(search)
+		var matched []unstructured.Unstructured
+		for _, cr := range allCRs {
+			if strings.Contains(strings.ToLower(cr.GetName()), lower) {
+				matched = append(matched, cr)
+			}
+		}
+		allCRs = matched
+	}
+
+	totalCount := len(allCRs)
+
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 25
+	}
+	start := (page - 1) * pageSize
+	if start >= totalCount {
+		return models.AppList{}, totalCount, nil
+	}
+	end := start + pageSize
+	if end > totalCount {
+		end = totalCount
+	}
+	pageCRs := allCRs[start:end]
+
+	pageAppNames := make([]string, 0, len(pageCRs))
+	for _, cr := range pageCRs {
+		pageAppNames = append(pageAppNames, cr.GetName())
+	}
+
+	appAuxiliary, pageMetrics, configurationTypes, enrichError := loadEnrichmentData(
+		ctx,
+		cluster,
+		namespace,
+		pageAppNames,
+	)
+	if enrichError != nil {
+		return nil, 0, enrichError
+	}
+
+	result := models.AppList{}
+	for _, appCR := range pageCRs {
+		app, aggregateError := aggregate(
+			ctx,
+			cluster,
+			appCR,
+			appAuxiliary,
+			pageMetrics,
+			configurationTypes,
+		)
+		if aggregateError != nil {
+			return result, totalCount, aggregateError
+		}
+		if app != nil {
+			result = append(result, *app)
+		}
+	}
+
+	return result, totalCount, nil
+}
+
+// NamespaceAppsResult holds a paginated app list for a single namespace.
+type NamespaceAppsResult struct {
+	Items      models.AppList
+	TotalItems int
+}
+
+// ListPaginatedByNamespace fetches the requested page of apps for every dFlow namespace.
+// All enrichment data is loaded in bulk cross-namespace calls (same as the original List),
+// then grouped and paginated in memory -- keeping total k8s API calls constant regardless
+// of namespace count.
+func ListPaginatedByNamespace(
+	ctx context.Context,
+	cluster *kubernetes.Cluster,
+	page, pageSize int,
+	search string,
+) (map[string]NamespaceAppsResult, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 25
+	}
+
+	// Short-circuit: no dflow namespaces means no apps — avoid the ClientApp call entirely.
+	dflowNsList, nsErr := namespaces.List(ctx, cluster)
+	if nsErr != nil {
+		return nil, nsErr
+	}
+	if len(dflowNsList) == 0 {
+		return map[string]NamespaceAppsResult{}, nil
+	}
+
+	// I. List all app CRs across every namespace in one k8s call.
+	appClient, clientError := cluster.ClientApp()
+	if clientError != nil {
+		return nil, clientError
+	}
+	allCRList, listError := appClient.Namespace("").List(ctx, metav1.ListOptions{})
+	if listError != nil {
+		return nil, listError
+	}
+
+	// II. Group by namespace and apply optional search filter in memory.
+	nsCRs := make(map[string][]unstructured.Unstructured)
+	for _, cr := range allCRList.Items {
+		namespaceName := cr.GetNamespace()
+		if search != "" && !strings.Contains(strings.ToLower(cr.GetName()), strings.ToLower(search)) {
+			continue
+		}
+		nsCRs[namespaceName] = append(nsCRs[namespaceName], cr)
+	}
+
+	// III. Determine page slice per namespace in memory.
+	type nsSlice struct {
+		pageCRs    []unstructured.Unstructured
+		totalCount int
+	}
+	nsSlices := make(map[string]nsSlice, len(nsCRs))
+	for namespaceName, crs := range nsCRs {
+		totalCount := len(crs)
+		start := (page - 1) * pageSize
+		if start >= totalCount {
+			nsSlices[namespaceName] = nsSlice{pageCRs: nil, totalCount: totalCount}
+			continue
+		}
+		end := start + pageSize
+		if end > totalCount {
+			end = totalCount
+		}
+		nsSlices[namespaceName] = nsSlice{
+			pageCRs:    crs[start:end],
+			totalCount: totalCount,
+		}
+	}
+
+	// IV. Bulk-load all enrichment data cross-namespace, one k8s call per
+	// resource type.
+	appAuxiliary, pageMetrics, configurationTypes, enrichError := loadEnrichmentData(
+		ctx,
+		cluster,
+		"",
+		nil,
+	)
+	if enrichError != nil {
+		return nil, enrichError
+	}
+
+	// V. Assemble final result per namespace.
+	result := make(map[string]NamespaceAppsResult, len(nsSlices))
+	for namespaceName, slice := range nsSlices {
+		appList := models.AppList{}
+		for _, appCR := range slice.pageCRs {
+			app, aggregateError := aggregate(
+				ctx,
+				cluster,
+				appCR,
+				appAuxiliary,
+				pageMetrics,
+				configurationTypes,
+			)
+			if aggregateError != nil {
+				return nil, aggregateError
+			}
+			if app != nil {
+				appList = append(appList, *app)
+			}
+		}
+		result[namespaceName] = NamespaceAppsResult{
+			Items:      appList,
+			TotalItems: slice.totalCount,
+		}
+	}
+
+	return result, nil
+}
+
+// DeleteResult contains the result of a delete operation, including
+// any warnings about incomplete cleanup.
+type DeleteResult struct {
+	// Warnings contains non-fatal warning messages about the delete operation.
+	// For example, if blob cleanup failed due to storage quota issues.
+	Warnings []string
+}
+
+/*
+Delete removes the named application, its workload (if active), bindings
+(if any), the stored application sources, and any staging jobs from when the
+application was staged (if active). Waits for the application's deployment's
+pods to disappear (if active).
+
+Staging PVCs (build cache and source blobs) are always removed; they hold only
+data rebuilt from S3 on the next stage, and nothing else ever reaps them.
+
+When deletePVC is true, application data PVCs (e.g. from StatefulSet
+volumeClaimTemplates) are removed as well. When it is false (the default) that
+data is preserved.
+
+Returns a DeleteResult containing any warnings (e.g., incomplete blob cleanup).
+*/
+func Delete(
+	ctx context.Context,
+	cluster *kubernetes.Cluster,
+	appRef models.AppRef,
+	deleteImage bool,
+	deletePVC bool,
+) (*DeleteResult, error) {
+	result := &DeleteResult{}
+
+	client, err := cluster.ClientApp()
+	if err != nil {
+		return nil, err
+	}
+
+	log := helpers.Logger.With("component", "ApplicationDelete")
+
+	// Get image URL before deleting the app resource (needed for image deletion)
+	var imageURL string
+	if deleteImage {
+		appCR, err := Get(ctx, cluster, appRef)
+		if err != nil {
+			log.Errorw("Failed to get application to retrieve image URL, skipping image deletion", "error", err, "app", appRef.Name)
+		} else {
+			imageURL, err = ImageURL(appCR)
+			if err != nil {
+				log.Errorw("Failed to get image URL from application, skipping image deletion", "error", err, "app", appRef.Name)
+			} else if imageURL == "" {
+				log.Infow("No image URL found in application, skipping image deletion", "app", appRef.Name)
+			}
+		}
+	}
+
+	// Collect app data PVC names up front, while the StatefulSet still exists.
+	var appDataPVCs []string
+	if deletePVC {
+		appDataPVCs, err = listAppDataPVCNames(ctx, cluster, appRef)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Ignore `not found` errors - App exists, without workload.
+	err = helm.Remove(cluster, appRef)
+	if err != nil && !strings.Contains(err.Error(), "release: not found") {
+		return nil, err
+	}
+
+	// Keep existing code to remove the CRD and everything it owns. Only the
+	// workload resources needed their own removal to ensure that helm information
+	// stays consistent.
+
+	// delete application resource, will cascade and delete dependents like
+	// environment variables, bindings, etc.
+	err = client.Namespace(appRef.Namespace).Delete(
+		ctx,
+		appRef.Name,
+		metav1.DeleteOptions{},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// Delete container image from registry if requested
+	if deleteImage && imageURL != "" {
+		err = deleteContainerImage(ctx, cluster, imageURL)
+		// A registry with deletes disabled keeps the image, as before.
+		if err != nil && !errors.Is(err, registry.ErrDeletionDisabled) {
+			// Log the error but don't fail the deletion - the app is already deleted
+			log.Errorw("Failed to delete container image from registry", "error", err, "image", imageURL)
+		}
+	}
+
+	// delete old staging resources in namespace (helmchart.Namespace())
+	unstageResult, err := Unstage(ctx, cluster, appRef, "")
+	if err != nil && !apierrors.IsNotFound(err) {
+		return nil, err
+	}
+	if unstageResult != nil && unstageResult.HasIncompleteCleanup() {
+		warning := fmt.Sprintf("blob cleanup incomplete for app %s/%s: %d blob(s) could not be deleted due to storage quota issues, storage pressure may persist",
+			appRef.Namespace, appRef.Name, len(unstageResult.FailedBlobCleanups))
+		result.Warnings = append(result.Warnings, warning)
+		log.Info("warning: "+warning, "failedBlobs", unstageResult.FailedBlobCleanups)
+	}
+
+	// delete staging PVC (the one that holds the "source" and "cache" workspaces)
+	err = deleteCacheStagePVC(ctx, cluster, appRef)
+	if err != nil && !apierrors.IsNotFound(err) {
+		return nil, err
+	}
+
+	err = deleteSourceBlobsStagePVC(ctx, cluster, appRef)
+	if err != nil && !apierrors.IsNotFound(err) {
+		return nil, err
+	}
+
+	if deletePVC {
+		err = deleteAppDataPVCs(ctx, cluster, appRef.Namespace, appDataPVCs)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	err = cluster.WaitForPodBySelectorMissing(ctx,
+		appRef.Namespace,
+		fmt.Sprintf("app.kubernetes.io/name=%s", appRef.Name),
+		duration.ToDeployment())
+	if err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+// deleteContainerImage deletes the container image from the registry
+func deleteContainerImage(
+	ctx context.Context,
+	cluster *kubernetes.Cluster,
+	imageURL string,
+) error {
+	// Get registry connection details
+	connectionDetails, err := registry.GetConnectionDetails(
+		ctx,
+		cluster,
+		helmchart.Namespace(),
+		registry.CredentialsSecretName,
+	)
+	if err != nil {
+		return errors.Wrap(err, "getting registry connection details")
+	}
+
+	if len(connectionDetails.RegistryCredentials) == 0 {
+		return errors.New("no registry credentials found")
+	}
+
+	// Use the first set of credentials (typically there's only one)
+	credentials := connectionDetails.RegistryCredentials[0]
+
+	// Extract registry URL from image URL to match credentials
+	imageRegistryURL, _, err := registry.ExtractImageParts(imageURL)
+	if err != nil {
+		return errors.Wrap(err, "extracting registry URL from image")
+	}
+
+	// Find matching credentials for the image's registry
+	var matchingCreds registry.RegistryCredentials
+	found := false
+	for _, cred := range connectionDetails.RegistryCredentials {
+		// Check if the registry URL matches (with or without namespace suffix)
+		if cred.URL == imageRegistryURL || strings.HasPrefix(imageRegistryURL, cred.URL) {
+			matchingCreds = cred
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		// If no exact match, use the first credentials (might work for some registries)
+		matchingCreds = credentials
+		helpers.Logger.Infow(
+			"No exact registry match found, using first available credentials",
+			"imageRegistry",
+			imageRegistryURL,
+		)
+	}
+
+	// Get TLS config to handle self-signed certificates
+	var tlsConfig *tls.Config
+	rootCAs, err := x509.SystemCertPool()
+	if err != nil {
+		rootCAs = x509.NewCertPool()
+	}
+	certsAdded := false
+
+	// Check for registry certificate secret (for self-signed registry certificates)
+	// This is the primary way to trust self-signed registry certificates
+	registryCertSecret := os.Getenv("REGISTRY_CERTIFICATE_SECRET")
+	if registryCertSecret != "" {
+		secret, err := cluster.GetSecret(ctx, helmchart.Namespace(), registryCertSecret)
+		if err == nil {
+			if certData, found := secret.Data["tls.crt"]; found {
+				if rootCAs.AppendCertsFromPEM(certData) {
+					certsAdded = true
+					helpers.Logger.Infow(
+						"Added registry certificate from secret to TLS config",
+						"secret",
+						registryCertSecret,
+					)
+				}
+			}
+		} else {
+			helpers.Logger.Infow(
+				"Registry certificate secret not found, continuing without it",
+				"secret",
+				registryCertSecret,
+				"error",
+				err,
+			)
+		}
+	}
+
+	// Also add cluster's CA data if available (for cluster-internal registries)
+	if cluster.RestConfig != nil {
+		tlsClientConfig := cluster.RestConfig.TLSClientConfig
+		if tlsClientConfig.Insecure {
+			// If cluster config says insecure, skip verification
+			tlsConfig = &tls.Config{
+				InsecureSkipVerify: true, // nolint:gosec // Controlled by cluster config
+				MinVersion:         tls.VersionTLS12,
+			}
+		} else if tlsClientConfig.CAData != nil {
+			// Add cluster CA to the cert pool
+			if rootCAs.AppendCertsFromPEM(tlsClientConfig.CAData) {
+				certsAdded = true
+			}
+		}
+	}
+
+	// Build TLS config based on what we have
+	if tlsConfig == nil {
+		// Check if this is an internal registry. The host has to match
+		// exactly, a substring would let `localhost.example.com` in.
+		isInternalRegistry := registry.IsInClusterHost(imageRegistryURL)
+
+		if certsAdded {
+			// We have certificates in the pool, use them
+			tlsConfig = &tls.Config{
+				RootCAs:    rootCAs,
+				MinVersion: tls.VersionTLS12,
+			}
+		} else if isInternalRegistry {
+			// Internal registry with no certificate found - skip verification
+			// This is common for internal registries with self-signed certs
+			tlsConfig = &tls.Config{
+				InsecureSkipVerify: true, // nolint:gosec // Internal registry with self-signed cert
+				MinVersion:         tls.VersionTLS12,
+			}
+			helpers.Logger.Infow(
+				"No registry certificate found, skipping TLS verification for internal registry",
+				"registry",
+				imageRegistryURL,
+			)
+		} else {
+			// External registry - use system cert pool (may fail if cert is not trusted)
+			tlsConfig = &tls.Config{
+				RootCAs:    rootCAs,
+				MinVersion: tls.VersionTLS12,
+			}
+		}
+	}
+
+	// Delete the image
+	return registry.DeleteImage(ctx, imageURL, matchingCreds, tlsConfig)
+}
+
+// deleteCacheStagePVC removes the kube PVC resource which was used to hold the application
+// sources for staging.
+func deleteCacheStagePVC(
+	ctx context.Context,
+	cluster *kubernetes.Cluster,
+	appRef models.AppRef,
+) error {
+	return cluster.Kubectl.CoreV1().PersistentVolumeClaims(
+		helmchart.Namespace(),
+	).Delete(ctx, appRef.MakeCachePVCName(), metav1.DeleteOptions{})
+}
+
+func deleteSourceBlobsStagePVC(
+	ctx context.Context,
+	cluster *kubernetes.Cluster,
+	appRef models.AppRef,
+) error {
+	return cluster.Kubectl.CoreV1().
+		PersistentVolumeClaims(
+			helmchart.Namespace(),
+		).Delete(ctx, appRef.MakeSourceBlobsPVCName(), metav1.DeleteOptions{})
+}
+
+// listAppDataPVCNames finds application data PersistentVolumeClaims by label
+// selector. Listing by label (instead of reconstructing names from the current
+// replica count) also finds PVCs left behind after scale-down.
+//
+// Only app.kubernetes.io/name is matched. A claim built from a StatefulSet
+// volumeClaimTemplate inherits spec.selector.matchLabels, which the app charts
+// set to that one label; app.kubernetes.io/component lives on the StatefulSet
+// and its pod template, neither of which reaches the claim. Matching on a
+// subset also keeps working if a chart later adds labels of its own.
+func listAppDataPVCNames(
+	ctx context.Context,
+	cluster *kubernetes.Cluster,
+	appRef models.AppRef,
+) ([]string, error) {
+	selector := labels.Set{
+		"app.kubernetes.io/name": appRef.Name,
+	}.AsSelector().String()
+
+	pvcList, err := cluster.Kubectl.CoreV1().PersistentVolumeClaims(appRef.Namespace).List(
+		ctx,
+		metav1.ListOptions{LabelSelector: selector},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	pvcNames := make([]string, 0, len(pvcList.Items))
+	for _, pvc := range pvcList.Items {
+		pvcNames = append(pvcNames, pvc.Name)
+	}
+	return pvcNames, nil
+}
+
+func deleteAppDataPVCs(
+	ctx context.Context,
+	cluster *kubernetes.Cluster,
+	namespace string,
+	pvcNames []string,
+) error {
+	for _, pvcName := range pvcNames {
+		err := cluster.Kubectl.CoreV1().PersistentVolumeClaims(namespace).Delete(
+			ctx,
+			pvcName,
+			metav1.DeleteOptions{},
+		)
+		if err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+/*
+AppChart returns the app chart (to be) used for application deployment, if
+one exists. It returns an empty string otherwise. The information is pulled
+out of the app resource itself, saved there by the deploy endpoint.
+*/
+func AppChart(app *unstructured.Unstructured) (string, error) {
+	chartName, _, err := unstructured.NestedString(
+		app.UnstructuredContent(),
+		"spec",
+		"chartname",
+	)
+	if err != nil {
+		return "", errors.New("chartname should be string")
+	}
+
+	return chartName, nil
+}
+
+/*
+Settings returns the app chart customization settings used for application
+deployment. It returns an empty slice otherwise. The information is pulled
+out of the app resource itself, saved there by the deploy endpoint.
+*/
+func Settings(app *unstructured.Unstructured) (models.ChartValueSettings, error) {
+	settings, _, err := unstructured.NestedStringMap(
+		app.UnstructuredContent(),
+		"spec",
+		"settings",
+	)
+	if err != nil {
+		return models.ChartValueSettings{}, errors.New("chartname should be string")
+	}
+
+	return settings, nil
+}
+
+/*
+StageID returns the stage ID of the last attempt at staging, if one exists.
+It returns an empty string otherwise. The information is pulled out of the
+app resource itself, saved there by the staging endpoint. Note that
+success/failure of staging is immaterial to this.
+*/
+func StageID(app *unstructured.Unstructured) (string, error) {
+	stageID, _, err := unstructured.NestedString(
+		app.UnstructuredContent(),
+		"spec",
+		"stageid",
+	)
+	if err != nil {
+		return "", errors.New("stageid should be string")
+	}
+
+	return stageID, nil
+}
+
+/*
+BlobUID returns the S3/seaweedfs blob UID of the last staged application
+sources, if one exists. It returns an empty string otherwise. The information
+is pulled out of the app resource itself, saved there by the staging endpoint.
+
+This is the canonical helper for reading spec.blobuid from an app CR; staging,
+source export, and async retry paths should all use it instead of duplicating
+the unstructured lookup.
+*/
+func BlobUID(app *unstructured.Unstructured) (string, error) {
+	blobUID, _, err := unstructured.NestedString(
+		app.UnstructuredContent(),
+		"spec",
+		"blobuid",
+	)
+	if err != nil {
+		return "", errors.New("blobuid should be string")
+	}
+
+	return blobUID, nil
+}
+
+// assignApplicationStatus sets Status (and StatusMessage when useful) from
+// StagingStatus and Workload. Staging/deploy failures without a running
+// workload must not look like a freshly "created" app.
+//
+// StagingStatus comes from live Jobs. Failed/completed Jobs are often removed
+// by TTL, so StageID on the app is used as a sticky signal that staging was
+// attempted and did not leave a running workload.
+//
+// StagingDone with no workload is transitional (Helm/pods still spinning up),
+// not a failure — report deploying until a workload appears. Once the staging
+// Job is gone, use StageID and ImageURL to distinguish staging vs deploy failure.
+func assignApplicationStatus(app *models.App, stagingCompletedAt *time.Time) {
+	if app.StagingStatus == models.ApplicationStagingActive {
+		app.Status = models.ApplicationStaging
+		return
+	}
+
+	if app.Workload == nil {
+		switch app.StagingStatus {
+		case models.ApplicationStagingFailed:
+			app.Status = models.ApplicationError
+			if app.StatusMessage == "" {
+				app.StatusMessage = "staging failed"
+			}
+			return
+		case models.ApplicationStagingDone:
+			// Staging succeeded; workload not visible yet while instances are
+			// desired (deploy in progress / waiting on k8s). Keep a non-error
+			// transitional status so the UI does not flash "deployment failed".
+			if wantsInstances(app) {
+				if stagingDeployTimedOut(app, stagingCompletedAt) {
+					app.Status = models.ApplicationError
+					if app.StatusMessage == "" {
+						app.StatusMessage = "deployment failed"
+					}
+					return
+				}
+				app.Status = models.ApplicationDeploying
+				if app.StatusMessage == "" {
+					app.StatusMessage = "deploying"
+				}
+				return
+			}
+		default:
+			// Job gone (TTL/cleanup) but a stage was recorded → keep Error, not Created.
+			if app.StageID != "" && wantsInstances(app) {
+				app.Status = models.ApplicationError
+				if app.StatusMessage == "" {
+					if app.ImageURL != "" {
+						app.StatusMessage = "deployment failed"
+					} else {
+						app.StatusMessage = "staging failed"
+					}
+				}
+				return
+			}
+		}
+		app.Status = models.ApplicationCreated
+		return
+	}
+
+	notReady := wantsInstances(app) &&
+		app.Workload.ReadyReplicas == 0 &&
+		app.Workload.DesiredReplicas > 0
+
+	if notReady {
+		failureReason := workloadFailureReason(app.Workload)
+		if failureReason != "" {
+			app.Status = models.ApplicationError
+			app.FailureReason = failureReason
+			if app.StatusMessage == "" {
+				app.StatusMessage = "deployment failed: " + failureReason
+			}
+			return
+		}
+	}
+
+	app.Status = models.ApplicationRunning
+}
+
+// stagingDeployTimedOut is true when staging finished long ago, a built image
+// exists, but no workload ever became visible — the deploy likely failed and
+// was rolled back (e.g. helm atomic uninstall) while the staging job still
+// exists.
+func stagingDeployTimedOut(app *models.App, stagingCompletedAt *time.Time) bool {
+	if app.ImageURL == "" || stagingCompletedAt == nil {
+		return false
+	}
+	return time.Since(*stagingCompletedAt) > deployGracePeriod
+}
+
+// workloadFailureReason returns why the workload's pods cannot become ready, or
+// "" when they are healthy or still inside a normal startup window.
+//
+// A reason reported by kubernetes wins over the restart count, which is only an
+// inference. Two loops keep that precedence deterministic, since map iteration
+// order is not.
+func workloadFailureReason(workload *models.AppDeployment) string {
+	for _, replica := range workload.Replicas {
+		if replica.FailureReason != "" {
+			return replica.FailureReason
+		}
+	}
+
+	// A container that died and restarted has not been given a CrashLoopBackOff
+	// waiting reason yet, so the count is the only evidence.
+	for _, replica := range workload.Replicas {
+		if replica.Restarts > 0 {
+			return "Restarting"
+		}
+	}
+
+	return ""
+}
+
+// wantsInstances is true when the app is expected to run at least one instance.
+// Nil Instances is treated as desired (default deploy), so a missing Job after
+// a failed stage does not flip the app back to "created".
+func wantsInstances(app *models.App) bool {
+	return app.Configuration.Instances == nil || *app.Configuration.Instances > 0
+}
+
+/*
+ImageURL returns the image url of the currently running build, if one exists.
+It returns an empty string otherwise. The information is pulled out of the
+app resource itself, saved there by the deploy endpoint.
+*/
+func ImageURL(app *unstructured.Unstructured) (string, error) {
+	imageURL, _, err := unstructured.NestedString(
+		app.UnstructuredContent(),
+		"spec",
+		"imageurl",
+	)
+	if err != nil {
+		return "", errors.New("imageurl should be string")
+	}
+
+	return imageURL, nil
+}
+
+/*
+BuilderURL returns the builder url of the currently running build, if one
+exists. It returns an empty string otherwise. The information is pulled out
+of the app resource	itself, saved there by the deploy endpoint.
+*/
+func BuilderURL(app *unstructured.Unstructured) (string, error) {
+	builderURL, _, err := unstructured.NestedString(
+		app.UnstructuredContent(),
+		"spec",
+		"builderimage",
+	)
+	if err != nil {
+		return "", errors.New("builderimage should be string")
+	}
+
+	return builderURL, nil
+}
+
+// BuildMode returns the staging build mode stored on the app resource.
+func BuildMode(app *unstructured.Unstructured) (string, error) {
+	mode, _, err := unstructured.NestedString(
+		app.UnstructuredContent(),
+		"spec",
+		"buildmode",
+	)
+	if err != nil {
+		return "", errors.New("buildmode should be string")
+	}
+
+	return mode, nil
+}
+
+// DockerfilePath returns the Dockerfile path stored on the app resource.
+func DockerfilePath(app *unstructured.Unstructured) (string, error) {
+	path, _, err := unstructured.NestedString(
+		app.UnstructuredContent(),
+		"spec",
+		"dockerfilepath",
+	)
+	if err != nil {
+		return "", errors.New("dockerfilepath should be string")
+	}
+
+	return path, nil
+}
+
+// ErrBlobCleanupIncomplete is returned when blob cleanup could not complete
+// due to storage quota issues. The unstaging operation succeeded for jobs and
+// secrets, but some blobs remain in S3 storage. This is a non-fatal warning
+// that indicates storage pressure may persist.
+var ErrBlobCleanupIncomplete = errors.New("blob cleanup incomplete due to storage quota errors")
+
+// UnstageResult contains the result of an unstage operation, including
+// any warnings about incomplete cleanup.
+type UnstageResult struct {
+	// FailedBlobCleanups contains the blob UIDs that could not be deleted
+	// due to storage quota errors. Empty if all cleanups succeeded.
+	FailedBlobCleanups []string
+}
+
+// HasIncompleteCleanup returns true if some blobs could not be deleted
+// due to storage quota errors.
+func (r *UnstageResult) HasIncompleteCleanup() bool {
+	return len(r.FailedBlobCleanups) > 0
+}
+
+// CleanupWarning returns a descriptive error if cleanup was incomplete,
+// or nil if all blobs were successfully deleted.
+func (r *UnstageResult) CleanupWarning() error {
+	if !r.HasIncompleteCleanup() {
+		return nil
+	}
+	return fmt.Errorf("%w: %d blob(s) could not be deleted: %v",
+		ErrBlobCleanupIncomplete, len(r.FailedBlobCleanups), r.FailedBlobCleanups)
+}
+
+/*
+Unstage removes staging resources. It deletes either all Jobs of the named
+application, or all but stageIDCurrent. It also deletes the staged objects
+from the S3 storage except for the current one.
+
+Returns an UnstageResult that may contain warnings about incomplete blob cleanup
+due to storage quota errors. Callers should check result.HasIncompleteCleanup()
+and handle accordingly (e.g., log a warning to operators).
+*/
+func Unstage(
+	ctx context.Context,
+	cluster *kubernetes.Cluster,
+	appRef models.AppRef,
+	stageIDCurrent string,
+) (*UnstageResult, error) {
+	log := helpers.SugaredLoggerToLogr(requestctx.Logger(ctx))
+	result := &UnstageResult{}
+
+	s3ConnectionDetails, err := s3manager.GetConnectionDetails(ctx, cluster,
+		helmchart.Namespace(), helmchart.S3ConnectionDetailsSecretName)
+	if err != nil {
+		return nil, errors.Wrap(
+			err,
+			"fetching the S3 connection details from the Kubernetes secret",
+		)
+	}
+	s3m, err := s3manager.New(s3ConnectionDetails)
+	if err != nil {
+		return nil, errors.Wrap(err, "creating an S3 manager")
+	}
+
+	jobs, err := cluster.ListJobs(ctx, helmchart.Namespace(),
+		fmt.Sprintf("app.kubernetes.io/name=%s,app.kubernetes.io/part-of=%s",
+			appRef.Name, appRef.Namespace))
+
+	if err != nil {
+		return nil, err
+	}
+
+	var currentJob *apibatchv1.Job
+	for i, job := range jobs.Items {
+		id := job.Labels[models.DFlowStageIDLabel]
+		// stageIDCurrent is either empty or the id to keep
+		if stageIDCurrent != "" && stageIDCurrent == id {
+			currentJob = &jobs.Items[i]
+			continue
+		}
+
+		err := cluster.DeleteJob(ctx, job.Namespace, job.Name)
+		if err != nil {
+			return nil, err
+		}
+
+		// And the associated secret holding the job environment
+		err = cluster.DeleteSecret(ctx, job.Namespace, job.Name)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Cleanup s3 objects
+	result.FailedBlobCleanups, err = CleanupS3Blobs(ctx, log, s3m, jobs.Items, currentJob, appRef)
+	if err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+// CleanupS3Blobs deletes blobs from S3 storage for the given jobs, skipping the current job's blob.
+// Returns a list of blob UIDs that failed to delete due to quota errors (non-fatal).
+// Returns an error for other types of failures (fatal).
+// This function is exported to allow testing with mocked S3 clients.
+func CleanupS3Blobs(
+	ctx context.Context,
+	log logr.Logger,
+	s3m s3manager.S3Manager,
+	jobs []apibatchv1.Job,
+	currentJob *apibatchv1.Job,
+	appRef models.AppRef,
+) ([]string, error) {
+	var failedBlobCleanups []string
+
+	for _, job := range jobs {
+		// skip blobs with the same UID as the current one (including the current one)
+		if currentJob != nil && job.Labels[models.DFlowStageBlobUIDLabel] == currentJob.Labels[models.DFlowStageBlobUIDLabel] {
+			continue
+		}
+
+		blobUID := job.Labels[models.DFlowStageBlobUIDLabel]
+		if err := s3m.DeleteObject(ctx, blobUID); err != nil {
+			// If deletion fails due to quota errors, log a warning but continue
+			// with other deletions to allow partial cleanup. This prevents the
+			// entire unstaging operation from failing when quota is exhausted.
+			if s3manager.IsQuotaExceededError(err) {
+				log.Info("warning: failed to delete blob due to storage quota error, continuing cleanup",
+					"blobUID", blobUID,
+					"app", appRef.Name,
+					"namespace", appRef.Namespace,
+					"error", err.Error())
+				failedBlobCleanups = append(failedBlobCleanups, blobUID)
+				continue
+			}
+			// For non-quota errors, fail the operation
+			return nil, errors.Wrapf(err, "deleting blob %s", blobUID)
+		}
+	}
+
+	return failedBlobCleanups, nil
+}
+
+/*
+Logs method writes log lines to the specified logChan. The caller can stop
+the logging with the ctx cancelFunc. It's also the callers responsibility to
+close the logChan when done. When stageID is an empty string, no staging logs
+are returned. If it is set, LogParameters represents the log filtering
+parameters.
+*/
+type LogParameters struct {
+	Tail              *int64
+	Since             *time.Duration
+	SinceTime         *time.Time
+	Follow            bool
+	IncludeContainers []string // List of container names/patterns to include (regex patterns)
+	ExcludeContainers []string // List of container names/patterns to exclude (regex patterns)
+}
+
+// buildContainerIncludePattern builds the regex pattern for including containers.
+// Returns the pattern and whether the user specified an include filter.
+func buildContainerIncludePattern(logParams *LogParameters) (string, bool, error) {
+	containerQueryPattern := ".*"
+	hasUserIncludeFilter := false
+
+	if logParams == nil || len(logParams.IncludeContainers) == 0 {
+		return containerQueryPattern, hasUserIncludeFilter, nil
+	}
+
+	// Filter out any empty strings that might have slipped through
+	validIncludes := make([]string, 0, len(logParams.IncludeContainers))
+	for _, container := range logParams.IncludeContainers {
+		if trimmed := strings.TrimSpace(container); trimmed != "" {
+			validIncludes = append(validIncludes, trimmed)
+		}
+	}
+
+	if len(validIncludes) == 0 {
+		return "", false, fmt.Errorf("include_containers parameter contains no valid container names")
+	}
+
+	hasUserIncludeFilter = true
+
+	// Escape special regex characters and join with |
+	escapedIncludes := make([]string, len(validIncludes))
+	for i, container := range validIncludes {
+		// If the pattern already looks like a regex (contains special chars), use as-is
+		// Otherwise, treat as literal container name
+		if strings.ContainsAny(container, ".*+?^$|[]{}()\\") {
+			escapedIncludes[i] = container
+		} else {
+			// Escape as literal container name
+			escapedIncludes[i] = regexp.QuoteMeta(container)
+		}
+	}
+	containerQueryPattern = strings.Join(escapedIncludes, "|")
+
+	return containerQueryPattern, hasUserIncludeFilter, nil
+}
+
+// buildContainerExcludePattern builds the regex pattern for excluding containers.
+func buildContainerExcludePattern(logParams *LogParameters, hasUserIncludeFilter bool) (*regexp.Regexp, error) {
+	var excludeContainerPatterns []string
+
+	// Only apply default linkerd exclusion if user hasn't specified include_containers
+	// This allows users to explicitly include linkerd containers when needed
+	if !hasUserIncludeFilter {
+		excludeContainerPatterns = []string{"linkerd-(proxy|init)"}
+	}
+
+	// Add user-specified exclusions
+	if logParams != nil && len(logParams.ExcludeContainers) > 0 {
+		// Initialize if not already set (shouldn't happen, but be safe)
+		if excludeContainerPatterns == nil {
+			excludeContainerPatterns = []string{}
+		}
+		for _, container := range logParams.ExcludeContainers {
+			// Filter out empty strings
+			trimmed := strings.TrimSpace(container)
+			if trimmed == "" {
+				continue
+			}
+			// If the pattern already looks like a regex, use as-is
+			// Otherwise, treat as literal container name
+			if strings.ContainsAny(trimmed, ".*+?^$|[]{}()\\") {
+				excludeContainerPatterns = append(excludeContainerPatterns, trimmed)
+			} else {
+				// Escape as literal container name
+				excludeContainerPatterns = append(excludeContainerPatterns, regexp.QuoteMeta(trimmed))
+			}
+		}
+	}
+
+	// Build the final exclude pattern by combining all exclusions
+	if len(excludeContainerPatterns) > 0 {
+		// Combine all exclusion patterns with |
+		combinedExcludePattern := strings.Join(excludeContainerPatterns, "|")
+		excludeContainerQuery, err := regexp.Compile(combinedExcludePattern)
+		if err != nil {
+			return nil, fmt.Errorf("invalid exclude_containers pattern: %w", err)
+		}
+		return excludeContainerQuery, nil
+	}
+
+	// No exclusions (shouldn't happen with default, but handle gracefully)
+	return nil, nil
+}
+
+// applyLogParameters applies log filtering parameters to the tailer config.
+func applyLogParameters(config *tailer.Config, logParams *LogParameters) {
+	if logParams == nil {
+		return
+	}
+
+	helpers.Logger.Info("applying log parameters", "params", logParams)
+
+	// Handle line limiting
+	if logParams.Tail != nil {
+		config.TailLines = logParams.Tail
+		helpers.Logger.Info("applied tail parameter", "tail", *logParams.Tail)
+	}
+
+	// Handle time-based filtering
+	if logParams.SinceTime != nil {
+		config.SinceTime = logParams.SinceTime
+		helpers.Logger.Info(
+			"applying since time parameter | ",
+			"since_time: ",
+			*logParams.SinceTime,
+		)
+	} else if logParams.Since != nil {
+		config.Since = *logParams.Since
+		helpers.Logger.Info(
+			"applied since parameter | ",
+			"since: ",
+			*logParams.Since,
+		)
+	}
+}
+
+// then only logs from that staging process are returned.
+func Logs(
+	ctx context.Context,
+	logChan chan tailer.ContainerLogLine,
+	wg *sync.WaitGroup,
+	cluster *kubernetes.Cluster,
+	app,
+	stageID,
+	namespace string,
+	logParams *LogParameters,
+) error {
+	selector := labels.NewSelector()
+
+	var selectors [][]string
+	if stageID == "" {
+		selectors = [][]string{
+			{"app.kubernetes.io/component", "application"},
+			{"app.kubernetes.io/part-of", namespace},
+			{"app.kubernetes.io/name", app},
+		}
+	} else {
+		selectors = [][]string{
+			{"app.kubernetes.io/component", "staging"},
+			{models.DFlowStageIDLabel, stageID},
+			{"app.kubernetes.io/part-of", namespace},
+		}
+	}
+
+	for _, selectorPair := range selectors {
+		req, err := labels.NewRequirement(
+			selectorPair[0],
+			selection.Equals,
+			[]string{selectorPair[1]},
+		)
+		if err != nil {
+			return err
+		}
+		selector = selector.Add(*req)
+	}
+
+	// Build container filtering regex patterns
+	containerQueryPattern, hasUserIncludeFilter, err := buildContainerIncludePattern(logParams)
+	if err != nil {
+		return err
+	}
+
+	excludeContainerQuery, err := buildContainerExcludePattern(logParams, hasUserIncludeFilter)
+	if err != nil {
+		return err
+	}
+
+	// Compile the include pattern with error handling
+	containerQueryRegex, err := regexp.Compile(containerQueryPattern)
+	if err != nil {
+		return fmt.Errorf("invalid include_containers pattern: %w", err)
+	}
+
+	config := &tailer.Config{
+		ContainerQuery:        containerQueryRegex,
+		ExcludeContainerQuery: excludeContainerQuery,
+		Exclude:               nil,
+		Include:               nil,
+		Timestamps:            true,
+		SinceTime:             nil,
+		Since:                 0,
+		AllNamespaces:         true,
+		LabelSelector:         selector,
+		TailLines:             getTailLines(),
+		Namespace:             "",
+		PodQuery:              regexp.MustCompile(".*"),
+	}
+
+	if stageID != "" {
+		config.Ordered = true
+	}
+
+	// Apply log parameters if provided
+	applyLogParameters(config, logParams)
+	if logParams != nil {
+		helpers.Logger.Infow("applying log parameters", "params", logParams)
+
+		// Handle line limiting
+		if logParams.Tail != nil {
+			config.TailLines = logParams.Tail
+			helpers.Logger.Infow("applied tail parameter", "tail", *logParams.Tail)
+		}
+
+		// Handle time-based filtering
+		if logParams.SinceTime != nil {
+			config.SinceTime = logParams.SinceTime
+			helpers.Logger.Infow("applying since time parameter",
+				"since_time", *logParams.SinceTime,
+			)
+		} else if logParams.Since != nil {
+			config.Since = *logParams.Since
+			helpers.Logger.Infow("applied since parameter",
+				"since", *logParams.Since,
+			)
+		}
+	}
+
+	// Use follow from logParams if provided, otherwise default to false
+	follow := false
+	if logParams != nil {
+		follow = logParams.Follow
+	}
+
+	if follow {
+		helpers.Logger.Infow("stream")
+		return tailer.StreamLogs(ctx, logChan, wg, config, cluster)
+	}
+
+	helpers.Logger.Infow("fetch")
+	return tailer.FetchLogs(ctx, logChan, wg, config, cluster)
+}
+
+// makeAuxiliaryMap restructures the data from the auxiliary secrets into a map
+// for quick access during the following data fusion
+func makeAuxiliaryMap(secrets []v1.Secret) map[ConfigurationKey]AppData {
+	/*
+		Note: The returned secrets are a mix of scaling instructions, bound
+		configurations, and environment assignments. Split them into separate maps
+		as per their area (*). Key the maps by namespace and name of their
+		controlling application for quick access in the	aggregation step.
+
+		(*) Label "dflow.sh/area": "environment"|"scaling"|"configuration"
+	*/
+
+	result := map[ConfigurationKey]AppData{}
+
+	for _, s := range secrets {
+		area, found := s.Labels["dflow.sh/area"]
+		if !found {
+			continue
+		}
+		app, found := s.Labels["app.kubernetes.io/name"]
+		if !found {
+			continue
+		}
+
+		key := EncodeConfigurationKey(app, s.Namespace)
+
+		if _, found := result[key]; !found {
+			result[key] = AppData{}
+		}
+
+		data := result[key]
+		secretToAssign := s // avoid loop alias warning
+
+		switch area {
+		case "scaling":
+			data.scaling = &secretToAssign
+		case "configuration":
+			data.bound = &secretToAssign
+		case "environment":
+			data.env = &secretToAssign
+		case "service":
+			data.services = &secretToAssign
+		default:
+			// ignore secret
+		}
+
+		result[key] = data
+	}
+
+	return result
+}
+
+// Aggregate is an internal helper for List. It merges the information from an
+// application resource and adjacent secrets, pods, metrics, etc. into a proper
+// application structure.
+func aggregate(ctx context.Context,
+	cluster *kubernetes.Cluster,
+	appCR unstructured.Unstructured,
+	auxiliary map[ConfigurationKey]AppData,
+	metrics map[string]metricsv1beta1.PodMetrics,
+	configurationTypes map[ConfigurationKey]string,
+) (*models.App, error) {
+	appName := appCR.GetName()
+	namespace := appCR.GetNamespace()
+
+	key := EncodeConfigurationKey(appName, namespace)
+
+	// I. Unpack the auxiliary data in the various secrets
+	//    Note: missing aux data, all or parts indicates an app in deletion and
+	//		not fully gone.
+	//    We signal them as not existing, instead of erroring out
+
+	aux, found := auxiliary[key]
+	if !found {
+		return nil, nil
+	}
+	if aux.env == nil {
+		return nil, nil
+	}
+	if aux.bound == nil {
+		return nil, nil
+	}
+	if aux.scaling == nil {
+		return nil, nil
+	}
+
+	instances, err := ScalingFromSecret(aux.scaling)
+	if err != nil {
+		// parse errors only, i.e. bad data.
+		return nil, errors.Wrap(err, "finding scaling")
+	}
+
+	configurations := BoundConfigurationNamesFromSecret(aux.bound)
+	environment := EnvironmentFromSecret(aux.env)
+	appPods := aux.pods
+	appRoutes := aux.routes
+	var services []string
+	if aux.services != nil {
+		services = BoundServiceNamesFromSecret(aux.services)
+	}
+
+	// II. Unpack the core application resource
+
+	origin, err := Origin(&appCR)
+	if err != nil {
+		return nil, errors.Wrap(err, "finding origin")
+	}
+
+	chartName, err := AppChart(&appCR)
+	if err != nil {
+		return nil, errors.Wrap(err, "finding app chart")
+	}
+
+	stageID, err := StageID(&appCR)
+	if err != nil {
+		return nil, errors.Wrap(err, "finding the stage id")
+	}
+
+	blobUID, err := BlobUID(&appCR)
+	if err != nil {
+		return nil, errors.Wrap(err, "finding the blob uid")
+	}
+
+	imageURL, err := ImageURL(&appCR)
+	if err != nil {
+		return nil, errors.Wrap(err, "finding the image url")
+	}
+
+	builderURL, err := BuilderURL(&appCR)
+	if err != nil {
+		return nil, errors.Wrap(err, "finding the builder url")
+	}
+
+	buildMode, err := BuildMode(&appCR)
+	if err != nil {
+		return nil, errors.Wrap(err, "finding the build mode")
+	}
+
+	dockerfilePath, err := DockerfilePath(&appCR)
+	if err != nil {
+		return nil, errors.Wrap(err, "finding the dockerfile path")
+	}
+
+	settings, err := Settings(&appCR)
+	if err != nil {
+		return nil, errors.Wrap(err, "finding settings")
+	}
+
+	desiredRoutes, err := DesiredRoutes(&appCR)
+	if err != nil {
+		return nil, errors.Wrap(err, "finding desired routes")
+	}
+
+	// III. Assemble the main structure
+
+	meta := models.NewAppRef(appName, namespace)
+	app := meta.App()
+
+	app.Meta.CreatedAt = appCR.GetCreationTimestamp()
+
+	app.Configuration.Instances = &instances
+	app.Configuration.Configurations = configurations
+	app.Configuration.BoundConfigurations = BoundConfigurationsWithType(
+		configurations, namespace, configurationTypes)
+	app.Configuration.Environment = environment
+	app.Configuration.Services = services
+	app.Configuration.Routes = desiredRoutes
+	app.Configuration.AppChart = chartName
+	app.Configuration.Settings = settings
+	app.Origin = origin
+	app.StageID = stageID
+	app.BlobUID = blobUID
+	app.ImageURL = imageURL
+	app.Staging.Builder = builderURL
+	app.Staging.BuildMode = buildMode
+	app.Staging.DockerfilePath = dockerfilePath
+
+	// IV. Assemble the deployment structure for active applications.
+
+	podMetrics := []metricsv1beta1.PodMetrics{}
+
+	if metrics != nil {
+		// extract the metrics for the app, based on the app pods
+		for _, pod := range appPods {
+			m, found := metrics[pod.Name]
+			if found {
+				podMetrics = append(podMetrics, m)
+			}
+		}
+	}
+
+	app.Workload, err = NewWorkload(cluster, app.Meta, instances).
+		AssembleFromParts(ctx, appPods, podMetrics, appRoutes)
+	if err != nil {
+		return nil, err
+	}
+
+	app.StagingStatus = aux.staging
+	assignApplicationStatus(app, aux.stagingCompletedAt)
+	return app, nil
+}
+
+// fetch is a helper for Lookup. It fetches all information about an application from the cluster.
+func loadEnvironmentData(
+	ctx context.Context,
+	cluster *kubernetes.Cluster,
+	app *models.App,
+) (models.EnvVariableMap, models.EnvVariableGroupedResponse, error) {
+	environment, err := Environment(ctx, cluster, app.Meta)
+	if err != nil {
+		return nil, models.EnvVariableGroupedResponse{}, errors.Wrap(err, "finding env")
+	}
+
+	groupedEnv, err := GroupedEnvironment(ctx, cluster, app.Meta)
+	if err != nil {
+		return nil, models.EnvVariableGroupedResponse{}, errors.Wrap(err, "finding grouped env")
+	}
+
+	return environment, groupedEnv, nil
+}
+
+func loadStagingFields(applicationCR *unstructured.Unstructured) (string, string, string, error) {
+	builderURL, err := BuilderURL(applicationCR)
+	if err != nil {
+		return "", "", "", errors.Wrap(err, "finding the builder url")
+	}
+
+	buildMode, err := BuildMode(applicationCR)
+	if err != nil {
+		return "", "", "", errors.Wrap(err, "finding the build mode")
+	}
+
+	dockerfilePath, err := DockerfilePath(applicationCR)
+	if err != nil {
+		return "", "", "", errors.Wrap(err, "finding the dockerfile path")
+	}
+
+	return builderURL, buildMode, dockerfilePath, nil
+}
+
+// fetch is a helper for Lookup. It fetches all information about an application from the cluster.
+func fetch(ctx context.Context, cluster *kubernetes.Cluster, app *models.App) error {
+	// Consider delayed loading, i.e. on first access, or for transfer (API response).
+	// Consider objects for the information which hide the defered loading.  These
+	// could also have the necessary modifier methods.  See sibling files scale.go,
+	// env.go, configurations.go, ingresses.go.  Defered at the moment, the PR is big
+	// enough already.
+
+	// TODO: Check which of the called functions retrieve the CR also. Pass them the
+	// CR loaded here to avoid superfluous kube api calls.
+	applicationCR, err := Get(ctx, cluster, app.Meta)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return apierror.AppIsNotKnown("application resource is missing")
+		}
+
+		err = apierror.InternalError(err, "failed to get the application resource")
+		app.StatusMessage = err.Error()
+		app.Status = models.ApplicationError
+		return err
+	}
+
+	desiredRoutes, err := DesiredRoutes(applicationCR)
+	if err != nil {
+		err = errors.Wrap(err, "finding desired routes")
+		app.StatusMessage = err.Error()
+		app.Status = models.ApplicationError
+		return err
+	}
+
+	origin, err := Origin(applicationCR)
+	if err != nil {
+		err = errors.Wrap(err, "finding origin")
+		app.StatusMessage = err.Error()
+		app.Status = models.ApplicationError
+		return err
+	}
+
+	environment, groupedEnv, err := loadEnvironmentData(ctx, cluster, app)
+	if err != nil {
+		app.StatusMessage = err.Error()
+		app.Status = models.ApplicationError
+		return err
+	}
+
+	instances, err := Scaling(ctx, cluster, app.Meta)
+	if err != nil {
+		err = errors.Wrap(err, "finding scaling")
+		app.StatusMessage = err.Error()
+		app.Status = models.ApplicationError
+		return err
+	}
+
+	configurations, boundConfigurations, err := BoundConfigurationsFor(ctx, cluster, app.Meta)
+	if err != nil {
+		app.StatusMessage = err.Error()
+		app.Status = models.ApplicationError
+		return err
+	}
+
+	services, err := BoundServiceNames(ctx, cluster, app.Meta)
+	if err != nil {
+		err = errors.Wrap(err, "finding services")
+		app.StatusMessage = err.Error()
+		app.Status = models.ApplicationError
+		return err
+	}
+
+	chartName, err := AppChart(applicationCR)
+	if err != nil {
+		err = errors.Wrap(err, "finding app chart")
+		app.StatusMessage = err.Error()
+		app.Status = models.ApplicationError
+		return err
+	}
+
+	stageID, err := StageID(applicationCR)
+	if err != nil {
+		err = errors.Wrap(err, "finding the stage id")
+		app.StatusMessage = err.Error()
+		app.Status = models.ApplicationError
+		return err
+	}
+
+	blobUID, err := BlobUID(applicationCR)
+	if err != nil {
+		err = errors.Wrap(err, "finding the blob uid")
+		app.StatusMessage = err.Error()
+		app.Status = models.ApplicationError
+		return err
+	}
+
+	imageURL, err := ImageURL(applicationCR)
+	if err != nil {
+		err = errors.Wrap(err, "finding the image url")
+		app.StatusMessage = err.Error()
+		app.Status = models.ApplicationError
+		return err
+	}
+
+	builderURL, buildMode, dockerfilePath, err := loadStagingFields(applicationCR)
+	if err != nil {
+		app.StatusMessage = err.Error()
+		app.Status = models.ApplicationError
+		return err
+	}
+
+	settings, err := Settings(applicationCR)
+	if err != nil {
+		err = errors.Wrap(err, "finding settings")
+		app.StatusMessage = err.Error()
+		app.Status = models.ApplicationError
+		return err
+	}
+
+	app.Meta.CreatedAt = applicationCR.GetCreationTimestamp()
+
+	app.Configuration.Instances = &instances
+	app.Configuration.Configurations = configurations
+	app.Configuration.BoundConfigurations = boundConfigurations
+	app.Configuration.Environment = environment
+	app.Configuration.EnvironmentGrouped = &groupedEnv
+	app.Configuration.Services = services
+	app.Configuration.Routes = desiredRoutes
+	app.Configuration.AppChart = chartName
+	app.Configuration.Settings = settings
+	app.Origin = origin
+	app.StageID = stageID
+	app.BlobUID = blobUID
+	app.ImageURL = imageURL
+	app.Staging.Builder = builderURL
+	app.Staging.BuildMode = buildMode
+	app.Staging.DockerfilePath = dockerfilePath
+
+	// Check if app is active, and if yes, fill the associated parts.  May have to
+	// straighten the workload structure a bit further.
+
+	app.Workload, err = NewWorkload(cluster, app.Meta, instances).Get(ctx)
+	if err != nil {
+		err = errors.Wrap(err, "workload loading")
+		app.StatusMessage = err.Error()
+		app.Status = models.ApplicationError
+		return err
+	}
+
+	staging, err := stagingStatus(ctx, cluster, app.Meta.Namespace, []string{app.Meta.Name})
+	if err != nil {
+		err = errors.Wrap(err, "staging app")
+		app.StatusMessage = err.Error()
+		app.Status = models.ApplicationError
+		return err
+	}
+
+	stagingJob := staging[EncodeConfigurationKey(app.Meta.Name, app.Meta.Namespace)]
+	app.StagingStatus = stagingJob.status
+	assignApplicationStatus(app, stagingJob.completedAt)
+	return nil
+}
+
+// getTailLines returns the number of log lines to tail based on LOG_TAIL_LINES env var
+func getTailLines() *int64 {
+	if val := os.Getenv("LOG_TAIL_LINES"); val != "" {
+		if lines, err := strconv.ParseInt(val, 10, 64); err == nil {
+			return &lines
+		}
+	}
+	return nil
+}

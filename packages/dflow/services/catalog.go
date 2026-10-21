@@ -1,0 +1,237 @@
+// Copyright © 2021 - 2023 SUSE LLC
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//     http://www.apache.org/licenses/LICENSE-2.0
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package services
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	apiv1 "github.com/dflow-sh/kube-poc/packages/application/api/v1"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helmchart"
+	"github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/models"
+	"github.com/pkg/errors"
+	k8sapierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+)
+
+const (
+	// Only Helmcharts with this label are considered dFlow "Services".
+	// Used to filter out Helmcharts created by other means (manually, k3s etc).
+	CatalogServiceLabelKey              = "application.dflow.sh/catalog-service-name"
+	CatalogServiceSecretTypesAnnotation = "application.dflow.sh/catalog-service-secret-types"
+	CatalogServiceVersionLabelKey       = "application.dflow.sh/catalog-service-version"
+	// COMPATIBILITY SUPPORT for services from before
+	// https://github.com/dflow-sh/kube-poc/packages/dflow/issues/1704 fix
+	TargetNamespaceLabelKey = "application.dflow.sh/target-namespace"
+	// ServiceNameLabelKey is used to keep the original name
+	// since the name in the metadata is combined with the namespace
+	ServiceNameLabelKey = "application.dflow.sh/service-name"
+)
+
+// CatalogServiceExists tests if the named catalog service exists, or not.
+func (s *ServiceClient) CatalogServiceExists(
+	ctx context.Context,
+	name string,
+) (bool, error) {
+	_, getError := s.serviceKubeClient.
+		Namespace(helmchart.Namespace()).
+		Get(ctx, name, metav1.GetOptions{})
+	if getError != nil {
+		if k8sapierrors.IsNotFound(getError) {
+			return false, nil
+		}
+		return false, getError
+	}
+	return true, nil
+}
+
+// convertChartSettingsToCRD lifts the public ChartSetting map into the
+// apiv1.ServiceSetting map shape expected by the CR.
+func convertChartSettingsToCRD(
+	settings map[string]models.ChartSetting,
+) map[string]apiv1.ServiceSetting {
+	if len(settings) == 0 {
+		return nil
+	}
+	result := map[string]apiv1.ServiceSetting{}
+	for key, value := range settings {
+		result[key] = apiv1.ServiceSetting{
+			Type:    value.Type,
+			Minimum: value.Minimum,
+			Maximum: value.Maximum,
+			Enum:    value.Enum,
+		}
+	}
+	return result
+}
+
+func (s *ServiceClient) convertUnstructuredListIntoCatalogService(
+	unstructuredList *unstructured.UnstructuredList,
+) ([]*models.CatalogService, error) {
+	catalogServices := []*models.CatalogService{}
+
+	for _, item := range unstructuredList.Items {
+		catalogService, err := s.convertUnstructuredIntoCatalogService(item)
+		if err != nil {
+			return nil, errors.Wrap(err, "error converting catalog service list")
+		}
+		catalogServices = append(catalogServices, catalogService)
+	}
+
+	return catalogServices, nil
+}
+
+func (s *ServiceClient) convertUnstructuredIntoCatalogService(
+	unstructured unstructured.Unstructured,
+) (*models.CatalogService, error) {
+	catalogService := apiv1.Service{}
+	err := runtime.DefaultUnstructuredConverter.FromUnstructured(
+		unstructured.Object,
+		&catalogService,
+	)
+
+	if err != nil {
+		return nil, errors.Wrap(err, "error converting catalog service")
+	}
+
+	// Convert from CRD structure to internal model
+	settings := make(map[string]models.ChartSetting)
+	for key, value := range catalogService.Spec.Settings {
+		settings[key] = models.ChartSetting{
+			Type:    value.Type,
+			Minimum: value.Minimum,
+			Maximum: value.Maximum,
+			Enum:    value.Enum,
+		}
+	}
+
+	// if a secret was specified try to load the credentials from it
+	var repoUsername, repoPassword string
+	secretName := catalogService.Spec.HelmRepo.Secret
+
+	if secretName != "" {
+		authSecret, secretError := s.kubeClient.GetSecret(
+			context.Background(),
+			helmchart.Namespace(),
+			secretName,
+		)
+
+		switch {
+		case secretError == nil:
+			repoUsername = string(authSecret.Data["username"])
+			repoPassword = string(authSecret.Data["password"])
+
+		case k8sapierrors.IsNotFound(secretError):
+			// The referenced secret is gone, or was never created. Reading
+			// the catalog must not fail for that: a single broken entry
+			// would otherwise take the whole listing down with it. Report
+			// the entry without credentials instead. Deploying from the
+			// repository then fails on its own, with an auth error naming
+			// the actual problem.
+			logger := helpers.Logger.With("component", "catalog-service")
+			logger.Warnw(
+				"helm repo auth secret not found, "+
+					"continuing without credentials",
+				"catalogService", unstructured.GetName(),
+				"secret", secretName,
+			)
+
+		default:
+			return nil, errors.Wrap(
+				secretError,
+				"finding helm repo auth secret: "+secretName,
+			)
+		}
+	}
+
+	secretTypes := []string{}
+	secretTypesAnnotationValue := catalogService.GetAnnotations()[CatalogServiceSecretTypesAnnotation]
+	if len(secretTypesAnnotationValue) > 0 {
+		secretTypes = strings.Split(secretTypesAnnotationValue, ",")
+	}
+
+	return &models.CatalogService{
+		Meta: models.MetaLite{
+			Name:      unstructured.GetName(),
+			CreatedAt: unstructured.GetCreationTimestamp(),
+		},
+		SecretTypes:      secretTypes,
+		Description:      catalogService.Spec.Description,
+		ShortDescription: catalogService.Spec.ShortDescription,
+		HelmChart:        catalogService.Spec.HelmChart,
+		ChartVersion:     catalogService.Spec.ChartVersion,
+		ServiceIcon:      catalogService.Spec.ServiceIcon,
+		AppVersion:       catalogService.Spec.AppVersion,
+		HelmRepo: models.HelmRepo{
+			Name: catalogService.Spec.HelmRepo.Name,
+			URL:  catalogService.Spec.HelmRepo.URL,
+			Auth: models.HelmAuth{
+				Username: repoUsername,
+				Password: repoPassword,
+			},
+		},
+		Values:   catalogService.Spec.Values,
+		Settings: settings,
+	}, nil
+}
+
+func (s *ServiceClient) GetCatalogService(
+	ctx context.Context,
+	serviceName string,
+) (*models.CatalogService, error) {
+	result, err := s.serviceKubeClient.Namespace(helmchart.Namespace()).
+		Get(ctx, serviceName, metav1.GetOptions{})
+
+	if err != nil {
+		return nil, errors.Wrap(
+			err,
+			fmt.Sprintf(
+				"error getting service %s from namespace dflow",
+				serviceName,
+			),
+		)
+	}
+
+	service, err := s.convertUnstructuredIntoCatalogService(*result)
+	if err != nil {
+		return nil, errors.Wrap(err, "error converting result into Catalog Service")
+	}
+
+	return service, nil
+}
+
+func (s *ServiceClient) ListCatalogServices(
+	ctx context.Context,
+) ([]*models.CatalogService, error) {
+	listResult, err := s.serviceKubeClient.Namespace(helmchart.Namespace()).List(
+		ctx,
+		metav1.ListOptions{},
+	)
+
+	if err != nil {
+		return nil, errors.Wrap(err, "error listing services")
+	}
+
+	services, err := s.convertUnstructuredListIntoCatalogService(listResult)
+	if err != nil {
+		return nil, errors.Wrap(
+			err,
+			"error converting listResult into Catalog Services",
+		)
+	}
+
+	return services, nil
+}

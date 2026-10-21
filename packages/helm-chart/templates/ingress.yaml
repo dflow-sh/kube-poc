@@ -1,0 +1,64 @@
+# Disable ingress if explicitly set to false
+{{- if or .Values.ingress.enabled (not (hasKey .Values.ingress "enabled")) }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    nginx.ingress.kubernetes.io/ssl-redirect: {{ .Values.ingress.nginxSSLRedirect | quote }}
+    nginx.ingress.kubernetes.io/proxy-body-size: {{ .Values.ingress.proxyBodySize | quote }}
+    nginx.ingress.kubernetes.io/proxy-read-timeout: {{ .Values.ingress.proxyReadTimeout | quote }}
+    nginx.org/websocket-services: "dflow-server"
+    {{- range $key, $value := .Values.ingress.annotations }}
+    {{ $key | quote }}: {{ $value | quote }}
+    {{- end }}
+  labels:
+    app.kubernetes.io/name: dflow
+  name: dflow
+  namespace: {{ .Release.Namespace }}
+spec:
+  {{- if .Values.ingress.ingressClassName }}
+  ingressClassName: "{{ .Values.ingress.ingressClassName }}"
+  {{- end }}
+  rules:
+  - host: {{ (include "dflow-ingress-hostname" .) | quote }}
+    http:
+      paths:
+      - backend:
+          service:
+            name: dflow-server
+            port:
+              number: {{ .Values.service.port | default 80 }}
+        path: /api
+        pathType: Prefix
+      - backend:
+          service:
+            name: dflow-server
+            port:
+              number: {{ .Values.service.port | default 80 }}
+        path: /wapi
+        pathType: Prefix
+      - backend:
+          service:
+            name: dflow-server
+            port:
+              number: {{ .Values.service.port | default 80 }}
+        path: /ready
+        pathType: Exact
+  {{- if .Values.dflowUI.enabled }}
+      - backend:
+          service:
+            name: dflow-ui
+            port:
+              number: {{ .Values.dflowUI.service.port | default 80 }}
+        path: /
+        pathType: Prefix
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+  - hosts:
+    - {{ (include "dflow-ingress-hostname" .) | quote }}
+    secretName: dflow-tls
+  {{- end }}
+{{- end }}

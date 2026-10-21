@@ -1,0 +1,45 @@
+{{- if .Values.certManager.enabled }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: dflow
+  namespace: {{ .Release.Namespace }}
+spec:
+  dnsNames:
+    {{- $rawDomains := list (include "dflow-hostname" .) (include "dflow-ingress-hostname" .) (include "dflow-gateway-hostname" .) }}
+    {{- range $rawDomains | sortAlpha | uniq | compact }}
+    - {{ . }}
+    {{- end }}
+  issuerRef:
+    kind: ClusterIssuer
+    name: {{ default .Values.global.tlsIssuer .Values.global.customTlsIssuer | quote }}
+  secretName: dflow-tls
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: dflow-ca
+  namespace: {{ .Values.certManagerNamespace | default "cert-manager" }}
+spec:
+  commonName: dflow-ca
+  isCA: true
+  issuerRef:
+    kind: ClusterIssuer
+    name: selfsigned-issuer
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  secretName: dflow-ca-root
+{{ else }}
+apiVersion: v1
+kind: Secret
+type: kubernetes.io/tls
+metadata:
+  annotations:
+  name: dflow-tls
+  namespace: {{ .Release.Namespace }}
+stringData:
+  ca.crt: {{ .Values.certManager.dflow.ca | quote }}
+  tls.key: {{ .Values.certManager.dflow.key | quote }}
+  tls.crt: {{ .Values.certManager.dflow.cert | quote }}
+{{- end }}

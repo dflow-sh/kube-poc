@@ -1,0 +1,212 @@
+// Copyright © 2021 - 2023 SUSE LLC
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//     http://www.apache.org/licenses/LICENSE-2.0
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package machine
+
+import (
+	"fmt"
+	"os"
+	"sort"
+	"strings"
+
+	"github.com/dflow-sh/kube-poc/acceptance/helpers/proc"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+)
+
+func (m *Machine) MakeAppchartStateful(chartName string) string {
+	// Create a custom chart referencing the tarball of the `standard-stateful` chart.
+	// It exists in the set of releases for helm charts.
+	// It is not distributed with dflow however.
+	// At this point in time we use it only internally, for testing.
+
+	tempFile := chartName + `.yaml`
+	err := os.WriteFile(tempFile, []byte(fmt.Sprintf(`apiVersion: application.dflow.sh/v1
+kind: AppChart
+metadata:
+  namespace: dflow
+  name: %s
+  labels:
+    app.kubernetes.io/component: dflow
+    app.kubernetes.io/instance: default
+    app.kubernetes.io/name: dflow-standard-stateful-app-chart
+    app.kubernetes.io/part-of: dflow
+spec:
+  shortDescription: dFlow standard stateful deployment
+  description: dFlow standard support chart for stateful application deployment
+  helmChart: https://github.com/dflow-sh/kube-poc/releases/download/dflow-application-stateful-0.1.21/dflow-application-stateful-0.1.21.tgz
+`, chartName)), 0600)
+	Expect(err).ToNot(HaveOccurred())
+
+	out, err := proc.Kubectl("apply", "-f", tempFile)
+	Expect(err).ToNot(HaveOccurred(), out)
+
+	return tempFile
+}
+
+func (m *Machine) MakeAppchart(chartName string) string {
+	tempFile := chartName + `.yaml`
+	err := os.WriteFile(tempFile, []byte(fmt.Sprintf(`apiVersion: application.dflow.sh/v1
+kind: AppChart
+metadata:
+  namespace: dflow
+  name: %s
+  labels:
+    app.kubernetes.io/component: dflow
+    app.kubernetes.io/instance: default
+    app.kubernetes.io/name: dflow-standard-app-chart
+    app.kubernetes.io/part-of: dflow
+spec:
+  helmChart: https://github.com/dflow-sh/kube-poc/releases/download/dflow-application-0.1.21/dflow-application-0.1.21.tgz
+  values:
+    tuning: speed
+  settings:
+    unknowntype:
+      type: foofara
+    badminton:
+      type: integer
+      minimum: hello
+    maxbad:
+      type: integer
+      maximum: world
+    fake:
+      type: bool
+      enum:
+        - "not sensible for type, ignored by validation"
+    foo:
+      type: string
+      minimum: "not sensible for type, ignored by validation"
+    bar:
+      type: string
+      enum:
+        - sna
+        - fu
+    floof:
+      type: number
+      minimum: '0'
+    fox:
+      type: integer
+      maximum: '100'
+    cat:
+      type: number
+      minimum: '0'
+      maximum: '1'
+`, chartName)), 0600)
+	Expect(err).ToNot(HaveOccurred())
+
+	out, err := proc.Kubectl("apply", "-f", tempFile)
+	Expect(err).ToNot(HaveOccurred(), out)
+
+	return tempFile
+}
+
+// MakeAppchartAlternate installs a deployable app chart that uses a different helm
+// package version than the default "standard" chart (0.1.26). It keeps the standard
+// settings schema so an already-running app can switch onto it safely in tests.
+func (m *Machine) MakeAppchartAlternate(chartName string) string {
+	tempFile := chartName + `.yaml`
+	err := os.WriteFile(tempFile, []byte(fmt.Sprintf(`apiVersion: application.dflow.sh/v1
+kind: AppChart
+metadata:
+  namespace: dflow
+  name: %s
+  labels:
+    app.kubernetes.io/component: dflow
+    app.kubernetes.io/instance: default
+    app.kubernetes.io/name: dflow-alternate-app-chart
+    app.kubernetes.io/part-of: dflow
+spec:
+  shortDescription: Alternate application chart for upgrade tests
+  description: Different dflow-application package version than standard
+  helmChart: https://github.com/dflow-sh/kube-poc/releases/download/dflow-application-0.1.21/dflow-application-0.1.21.tgz
+  settings:
+    appListeningPort:
+      type: integer
+      minimum: "0"
+`, chartName)), 0600)
+	Expect(err).ToNot(HaveOccurred())
+
+	out, err := proc.Kubectl("apply", "-f", tempFile)
+	Expect(err).ToNot(HaveOccurred(), out)
+
+	return tempFile
+}
+
+// MakeAppchartSamePackageWithValues installs an AppChart that wraps the same helm
+// package as "standard" (0.1.26) but carries the given Spec.Values. Used to cover
+// switches between two AppChart CRs that share a package while differing in
+// chartConfig.
+func (m *Machine) MakeAppchartSamePackageWithValues(
+	chartName string,
+	values map[string]string,
+) string {
+	tempFile := chartName + `.yaml`
+	err := os.WriteFile(tempFile, []byte(fmt.Sprintf(`apiVersion: application.dflow.sh/v1
+kind: AppChart
+metadata:
+  namespace: dflow
+  name: %s
+  labels:
+    app.kubernetes.io/component: dflow
+    app.kubernetes.io/instance: default
+    app.kubernetes.io/name: dflow-same-package-app-chart
+    app.kubernetes.io/part-of: dflow
+spec:
+  shortDescription: Same package as standard with Spec.Values
+  description: Same dflow-application package as standard, different Spec.Values
+  helmChart: https://github.com/dflow-sh/kube-poc/releases/download/dflow-application-0.1.26/dflow-application-0.1.26.tgz
+%s  settings:
+    appListeningPort:
+      type: integer
+      minimum: "0"
+`, chartName, chartValuesBlock(values))), 0600)
+	Expect(err).ToNot(HaveOccurred())
+
+	out, err := proc.Kubectl("apply", "-f", tempFile)
+	Expect(err).ToNot(HaveOccurred(), out)
+
+	return tempFile
+}
+
+// chartValuesBlock renders a Spec.Values map as YAML, sorted for stable output.
+func chartValuesBlock(values map[string]string) string {
+	if len(values) == 0 {
+		return ""
+	}
+
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+
+	sort.Strings(keys)
+
+	var block strings.Builder
+	block.WriteString("  values:\n")
+
+	for _, key := range keys {
+		fmt.Fprintf(&block, "    %s: %q\n", key, values[key])
+	}
+
+	return block.String()
+}
+
+func (m *Machine) DeleteAppchart(tempFile string) {
+	GinkgoHelper()
+
+	out, err := proc.Kubectl("delete", "-f", tempFile)
+	Expect(err).ToNot(HaveOccurred(), out)
+	tempFileRemoveError := os.Remove(tempFile)
+
+	if tempFileRemoveError != nil {
+		fmt.Sprintf("The App Chart file was not deleted: %s", tempFileRemoveError)
+	}
+}

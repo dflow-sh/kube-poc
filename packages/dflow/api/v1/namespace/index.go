@@ -1,0 +1,204 @@
+// Copyright © 2021 - 2023 SUSE LLC
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//     http://www.apache.org/licenses/LICENSE-2.0
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package namespace
+
+import (
+	"context"
+	"strings"
+
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
+	"github.com/dflow-sh/kube-poc/packages/dflow/api/v1/response"
+	"github.com/dflow-sh/kube-poc/packages/dflow/application"
+	"github.com/dflow-sh/kube-poc/packages/dflow/auth"
+	"github.com/dflow-sh/kube-poc/packages/dflow/cli/server/requestctx"
+	"github.com/dflow-sh/kube-poc/packages/dflow/configurations"
+	"github.com/dflow-sh/kube-poc/packages/dflow/namespaces"
+	apierror "github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/errors"
+	"github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/models"
+
+	"github.com/gin-gonic/gin"
+)
+
+// Index handles the API endpoint /namespaces (GET)
+// It returns a list of all dFlow-controlled namespaces
+// An dFlow namespace is nothing but a kubernetes namespace which has a
+// special Label (Look at the code to see which).
+func Index(c *gin.Context) apierror.APIErrors {
+	ctx := c.Request.Context()
+	user := requestctx.User(ctx)
+
+	cluster, err := kubernetes.GetCluster(ctx)
+	if err != nil {
+		return apierror.InternalError(err)
+	}
+
+	namespaceList, err := namespaces.List(ctx, cluster)
+	if err != nil {
+		return apierror.InternalError(err)
+	}
+	namespaceList = auth.FilterResources(user, namespaceList)
+
+	// Namespace() returns a namespace's own name, so this is an exact-name
+	// filter here, unlike the substring match that ?search= applies below.
+	requestedNamespaces := response.GetNamespacesParam(c)
+	namespaceList = auth.FilterByNamespaces(namespaceList, requestedNamespaces)
+
+	if search := response.GetSearchParam(c); search != "" {
+		lower := strings.ToLower(search)
+		var filtered []namespaces.Namespace
+		for _, ns := range namespaceList {
+			if strings.Contains(strings.ToLower(ns.Name), lower) {
+				filtered = append(filtered, ns)
+			}
+		}
+		namespaceList = filtered
+	}
+
+	if page, pageSize, ok := response.GetPaginationParams(c, 1, 25); ok {
+		total := len(namespaceList)
+		start := (page - 1) * pageSize
+		if start >= total {
+			start = total
+		}
+		end := start + pageSize
+		if end > total {
+			end = total
+		}
+		pageNsList := namespaceList[start:end]
+
+		// Single cross-namespace API calls; filter in-memory to page namespaces.
+		pageNsSet := make(map[string]bool, len(pageNsList))
+		for _, ns := range pageNsList {
+			pageNsSet[ns.Name] = true
+		}
+
+		allAppRefs, err := application.ListAppRefs(ctx, cluster, "")
+		if err != nil {
+			return apierror.InternalError(err)
+		}
+		appNamesMap := map[string][]string{}
+		for _, ref := range allAppRefs {
+			if pageNsSet[ref.Namespace] {
+				appNamesMap[ref.Namespace] = append(
+					appNamesMap[ref.Namespace],
+					ref.Name,
+				)
+			}
+		}
+
+		allConfigs, err := configurations.List(ctx, cluster, "")
+		if err != nil {
+			return apierror.InternalError(err)
+		}
+		configNamesMap := map[string][]string{}
+		for _, cfg := range allConfigs {
+			if pageNsSet[cfg.Namespace()] {
+				configNamesMap[cfg.Namespace()] = append(
+					configNamesMap[cfg.Namespace()],
+					cfg.Name,
+				)
+			}
+		}
+
+		nsModels := make(models.NamespaceList, 0, len(pageNsList))
+		for _, ns := range pageNsList {
+			nsModels = append(nsModels, models.Namespace{
+				Meta:           models.MetaLite{Name: ns.Name, CreatedAt: ns.CreatedAt},
+				Apps:           appNamesMap[ns.Name],
+				Configurations: configNamesMap[ns.Name],
+			})
+		}
+
+		response.OKReturn(c, response.BuildPaginatedResponse(
+			nsModels,
+			page,
+			pageSize,
+			total,
+		))
+		return nil
+	}
+
+	appNamesMap, err := getAppNamesByNamespaceMap(ctx, cluster)
+	if err != nil {
+		return apierror.InternalError(err)
+	}
+
+	configNamesMap, err := getConfigurationNamesByNamespaceMap(ctx, cluster)
+	if err != nil {
+		return apierror.InternalError(err)
+	}
+
+	nsList := make(models.NamespaceList, 0, len(namespaceList))
+	for _, namespace := range namespaceList {
+		nsList = append(nsList, models.Namespace{
+			Meta: models.MetaLite{
+				Name:      namespace.Name,
+				CreatedAt: namespace.CreatedAt,
+			},
+			Apps:           appNamesMap[namespace.Name],
+			Configurations: configNamesMap[namespace.Name],
+		})
+	}
+
+	response.OKReturn(c, nsList)
+	return nil
+}
+
+func getAppNamesByNamespaceMap(
+	ctx context.Context,
+	cluster *kubernetes.Cluster,
+) (map[string][]string, error) {
+	// Retrieve app references for all namespaces, and map their name by namespace
+	allAppNamesMap := make(map[string][]string)
+
+	allAppsRefs, err := application.ListAppRefs(ctx, cluster, "")
+	if err != nil {
+		return nil, err
+	}
+
+	for _, appRef := range allAppsRefs {
+		if _, ok := allAppNamesMap[appRef.Namespace]; !ok {
+			allAppNamesMap[appRef.Namespace] = make([]string, 0)
+		}
+		allAppNamesMap[appRef.Namespace] = append(
+			allAppNamesMap[appRef.Namespace],
+			appRef.Name,
+		)
+	}
+
+	return allAppNamesMap, nil
+}
+
+func getConfigurationNamesByNamespaceMap(
+	ctx context.Context,
+	cluster *kubernetes.Cluster,
+) (map[string][]string, error) {
+	configurationNamesMap := make(map[string][]string)
+
+	// Retrieve configurations for all namespaces, and map their name by namespace
+	allConfigs, err := configurations.List(ctx, cluster, "")
+	if err != nil {
+		return nil, err
+	}
+
+	for _, config := range allConfigs {
+		if _, ok := configurationNamesMap[config.Namespace()]; !ok {
+			configurationNamesMap[config.Namespace()] = make([]string, 0)
+		}
+		configurationNamesMap[config.Namespace()] = append(
+			configurationNamesMap[config.Namespace()],
+			config.Name,
+		)
+	}
+
+	return configurationNamesMap, nil
+}

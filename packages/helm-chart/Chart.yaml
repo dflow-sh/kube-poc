@@ -1,0 +1,52 @@
+annotations:
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/prerelease: "false"
+apiVersion: v2
+appVersion: v1.14.3
+dependencies:
+- condition: global.dex.enabled
+  name: dex
+  repository: https://charts.dexidp.io
+  tags:
+  - dex
+  version: 0.15.2
+- condition: seaweedfs.enabled, global.seaweedfs.enabled
+  name: seaweedfs
+  repository: https://seaweedfs.github.io/seaweedfs/helm
+  tags:
+  - seaweedfs
+  version: 4.0.412
+- condition: reflector.enabled, global.reflector.enabled
+  name: reflector
+  repository: https://emberstack.github.io/helm-charts
+  tags:
+  - reflector
+  version: 10.0.58
+- condition: s3gw.enabled, global.s3gw.enabled
+  name: s3gw
+  repository: https://s3gw-tech.github.io/s3gw-charts
+  tags:
+  - s3gw
+  version: 0.14.0
+- condition: certManager.install
+  name: cert-manager
+  repository: https://charts.jetstack.io
+  version: 1.19.3
+  tags:
+    - cert-manager
+description: dFlow deploys Kubernetes applications directly from source code in one step.
+home: https://github.com/dflow-sh/kube-poc/packages/dflow
+kubeVersion: '>=1.21-0'
+icon: https://raw.githubusercontent.com/dflow/helm-charts/main/assets/dflow.png
+keywords:
+- dflow
+- paas
+maintainers:
+- email: dflow@krum.io
+  name: Krumware
+- email: dflow@dflow.sh
+  name: SUSE
+name: dflow
+sources:
+- https://github.com/dflow-sh/kube-poc/packages/dflow
+version: 1.14.3

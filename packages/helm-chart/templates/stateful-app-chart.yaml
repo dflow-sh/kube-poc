@@ -1,0 +1,19 @@
+apiVersion: application.dflow.sh/v1
+kind: AppChart
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: stateful
+  labels:
+    app.kubernetes.io/component: dflow
+    app.kubernetes.io/instance: stateful
+    app.kubernetes.io/name: dflow-stateful-app-chart
+    app.kubernetes.io/part-of: dflow
+    app.kubernetes.io/version: {{ default .Chart.AppVersion .Values.image.dflow.tag }}
+spec:
+  shortDescription: dFlow stateful deployment
+  description: dFlow stateful support chart for application deployment
+  helmChart: {{ .Values.appChart.stateful | quote }}
+  settings:
+    appListeningPort:
+      type: 'integer'
+      minimum: '0'

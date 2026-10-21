@@ -1,0 +1,24 @@
+dFlow
+Copyright 2026 dFlow
+
+This product includes software developed by SUSE LLC and the Epinio contributors
+(https://github.com/epinio/epinio), licensed under the Apache License, Version 2.0.
+
+The Helm chart under packages/helm-chart is derived from
+https://github.com/epinio/helm-charts, licensed under the Apache License, Version 2.0.
+
+The custom resource types under packages/application are derived from
+https://github.com/epinio/application, licensed under the Apache License, Version 2.0.
+
+This repository builds the dflow CLI and the dflow-server API. It does not
+rebuild every image the chart can run. Until dFlow publishes replacements, the
+chart still pulls these published upstream images:
+
+- ghcr.io/epinio/dex (Dex, with PKCE)
+- ghcr.io/epinio/epinio-unpacker
+- ghcr.io/epinio/kaniko
+
+Application workloads are deployed with charts derived from the Epinio
+helm-charts releases (epinio-application 0.1.26, the Gateway API variant
+0.1.26, and the stateful variant 0.1.24). The rebranded archives are in
+packages/helm-chart/app-charts and are copied into the server image.

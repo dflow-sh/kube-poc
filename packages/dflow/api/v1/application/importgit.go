@@ -1,0 +1,531 @@
+// Copyright © 2021 - 2023 SUSE LLC
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+// http://www.apache.org/licenses/LICENSE-2.0
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package application
+
+// # Design Notes
+//
+// ## Possible inputs:
+//
+//	 - (A) repository, no revision (empty string)
+//	 - (B) repository, branch name
+//	 - (C) repository, commit id (short/long), tags or any supported ref
+//
+// ## Considerations:
+//
+//	 - Correctness
+//	 - Cloning performance
+//
+// The go-git cloning function has two attributes influencing performance
+//
+//	 - `Depth` specifies the depth towards which to clone.
+//	 - `SingleBranch` specifies the sole branch to check out.
+//
+// The second flag comes with a problem. Using it __demands__ a branch.  And whatever is
+// found in the `ReferenceName` of the CloneOptions is used.	Even if it is an empty
+// string. And leaving it completely unspecified makes the package use a hardwired default
+// (`master`).
+//
+// If we have a revision which is a branch name, then we can (try to) use `SingleBranch`.
+// Note however, that we cannot syntactically distinguish branch names from commit ids.
+//
+// ## Solutions
+//
+// The simplest code handling everything would be
+//
+// Clone (Depth=1)
+// if revision:
+// 	hash = ResolveRevision (revision)
+//	Checkout (hash)
+//
+// with no `SingleBranch` in sight, just `Depth`.
+//
+// More complex, hopefully more performant would be
+//
+//	1: if not revision:
+//	2: Clone (Depth=1)	// (A)
+//	3: else
+//	4: Clone (Depth=1,SingleBranch=revision)  // (B,C?)
+//	5: if ok: done // (B!)
+//	7: Clone () // (C)
+//	8: hash = ResolveRevision (revision)
+//	9: Checkout (hash)
+//
+// I.e. try to use a revision as branch name first, to get the `SingleBranch`
+// optimization.	When that fails fall back to regular cloning and checkout.	This fall
+// back should happen only for (C).
+//
+// Finding the matching reference for the specified revision it's a "complex" operation, and it's done only with the last option.
+// With option A and B we already know about the matching branch, and we can early return
+//
+// ## Decision
+//
+// Going with the second solution. While there is more complexity it is not that much
+// more.	Note also that using a commit id (C) is considered unusual. Using a branch (B)
+// is much more expected.
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	nethttp "net/http"
+	"net/url"
+	"os"
+	"strings"
+
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
+	"github.com/dflow-sh/kube-poc/packages/dflow/api/v1/response"
+	"github.com/dflow-sh/kube-poc/packages/dflow/auth"
+	gitbridge "github.com/dflow-sh/kube-poc/packages/dflow/bridge/git"
+	"github.com/dflow-sh/kube-poc/packages/dflow/cli/server/requestctx"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helmchart"
+	"github.com/dflow-sh/kube-poc/packages/dflow/s3manager"
+	apierror "github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/errors"
+	"github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/models"
+	"github.com/gin-gonic/gin"
+	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing/storer"
+	"github.com/go-git/go-git/v5/plumbing/transport/http"
+)
+
+// ImportGit handles the API endpoint /namespaces/:namespace/applications/:app/import-git.
+// It receives a Git repo url and revision, clones that (shallow clone), creates a tarball
+// of the repo and puts it on S3.
+func ImportGit(c *gin.Context) apierror.APIErrors {
+	ctx := c.Request.Context()
+	user := requestctx.User(ctx)
+
+	namespace := c.Param("namespace")
+	name := c.Param("app")
+	giturl := c.PostForm("giturl")
+	revision := c.PostForm("gitrev")
+	gitconfigName := c.PostForm("gitconfig")
+
+	if apiErr := validateGitURL(giturl); apiErr != nil {
+		return apiErr
+	}
+
+	cluster, clusterError := kubernetes.GetCluster(ctx)
+	if clusterError != nil {
+		return apierror.InternalError(clusterError, "failed to get access to a kube client")
+	}
+
+	gitConfig, resolveError := resolveGitconfig(cluster, user, gitconfigName)
+	if resolveError != nil {
+		return resolveError
+	}
+
+	blobUID, branch, resolvedRevision, uploadError := cloneAndUpload(
+		ctx, cluster, giturl, revision, namespace, name, user.Username, gitConfig,
+	)
+	if uploadError != nil {
+		return uploadError
+	}
+
+	response.OKReturn(c, models.ImportGitResponse{
+		BlobUID:  blobUID,
+		Branch:   branch,
+		Revision: resolvedRevision,
+	})
+	return nil
+}
+
+// resolveGitconfig returns the explicitly selected git configuration, or nil when
+// none was requested. Selection is intentional: there is no implicit URL matching.
+// An unknown name is rejected, and the user must be permitted to use the config.
+func resolveGitconfig(
+	cluster *kubernetes.Cluster,
+	user auth.User,
+	name string,
+) (*gitbridge.Configuration, apierror.APIErrors) {
+	if name == "" {
+		return nil, nil
+	}
+
+	manager, managerError := gitbridge.NewManager(
+		cluster.Kubectl.CoreV1().Secrets(helmchart.Namespace()),
+	)
+	if managerError != nil {
+		return nil, apierror.InternalError(
+			managerError,
+			"creating git configuration manager",
+		)
+	}
+
+	gitConfig, found := manager.Configuration(name)
+	if !found {
+		return nil, apierror.NewNotFoundError("gitconfig", name)
+	}
+
+	if !auth.CanUseGitconfig(user, *gitConfig) {
+		return nil, apierror.NewAPIError(
+			fmt.Sprintf("user unauthorized to use gitconfig [%s]", name),
+			nethttp.StatusForbidden,
+		)
+	}
+
+	return gitConfig, nil
+}
+
+// authorizeOrigin verifies that the git configuration referenced by an app
+// origin (if any) exists, that the user is permitted to use it, and that it is
+// bound to the origin's host, before the origin is persisted onto the App CR.
+// This stops a caller from stamping a config they may not use, or one whose
+// credentials would then be sent to an unrelated host on a later re-clone.
+func authorizeOrigin(
+	ctx context.Context,
+	cluster *kubernetes.Cluster,
+	origin models.ApplicationOrigin,
+) apierror.APIErrors {
+	if origin.Git == nil || origin.Git.Gitconfig == "" {
+		return nil
+	}
+
+	user := requestctx.User(ctx)
+
+	gitConfig, resolveError := resolveGitconfig(cluster, user, origin.Git.Gitconfig)
+	if resolveError != nil {
+		return resolveError
+	}
+
+	if !gitConfig.AllowsHost(origin.Git.URL) {
+		return apierror.NewAPIError(
+			fmt.Sprintf(
+				"gitconfig [%s] is not allowed for the host of url [%s]",
+				origin.Git.Gitconfig,
+				origin.Git.URL,
+			),
+			nethttp.StatusForbidden,
+		)
+	}
+
+	return nil
+}
+
+// cloneAndUpload clones the git repository, tarballs it, uploads to S3,
+// and returns the blobUID plus resolved branch and revision.
+func cloneAndUpload(
+	ctx context.Context,
+	cluster *kubernetes.Cluster,
+	gitURL, revision, namespace, appName, username string,
+	gitConfig *gitbridge.Configuration,
+) (string, string, string, apierror.APIErrors) {
+	log := requestctx.Logger(ctx)
+
+	gitRepo, mkdirError := os.MkdirTemp("", "dflow-app")
+	if mkdirError != nil {
+		return "", "", "", apierror.InternalError(mkdirError, "can't create temp directory")
+	}
+	defer func() {
+		removeError := os.RemoveAll(gitRepo)
+		if removeError != nil {
+			log.Errorw("failed to remove git repo", "error", removeError)
+		}
+	}()
+
+	if gitConfig != nil {
+		// Bind the credential to its own instance: never send a config's
+		// username/token/cert to a host it does not belong to.
+		if !gitConfig.AllowsHost(gitURL) {
+			return "", "", "", apierror.NewAPIError(
+				fmt.Sprintf("gitconfig [%s] is not allowed for the host of url [%s]", gitConfig.ID, gitURL),
+				nethttp.StatusForbidden,
+			)
+		}
+		log.Infow("cloning with git config", "gitConfig", gitConfig.ID)
+	} else {
+		log.Infow("cloning without a git config", "giturl", gitURL)
+	}
+
+	ref, checkoutError := checkoutRepository(ctx, gitRepo, gitURL, revision, gitConfig)
+	if checkoutError != nil {
+		return "", "", "", apierror.InternalError(
+			checkoutError,
+			fmt.Sprintf("cloning the git repository: %s @ %s", gitURL, revision),
+		)
+	}
+
+	var branch string
+	resolvedRevision := revision
+	if ref != nil {
+		branch = ref.Name().Short()
+		resolvedRevision = ref.Hash().String()
+		log.Infow(
+			"resolved branch and revision",
+			"branch", branch,
+			"revision", resolvedRevision,
+		)
+	}
+
+	tmpDir, tarball, tarError := helpers.Tar(gitRepo, nil)
+	defer func() {
+		if tmpDir != "" {
+			cleanupError := os.RemoveAll(tmpDir)
+			if cleanupError != nil {
+				log.Errorw("failed to remove tarball temp dir", "error", cleanupError)
+			}
+		}
+	}()
+	if tarError != nil {
+		return "", "", "", apierror.InternalError(
+			tarError, "create a tarball from the git repository",
+		)
+	}
+
+	connectionDetails, detailsError := s3manager.GetConnectionDetails(
+		ctx, cluster, helmchart.Namespace(), helmchart.S3ConnectionDetailsSecretName,
+	)
+	if detailsError != nil {
+		return "", "", "", apierror.InternalError(
+			detailsError, "fetching the S3 connection details",
+		)
+	}
+
+	s3Manager, s3Error := s3manager.New(connectionDetails)
+	if s3Error != nil {
+		return "", "", "", apierror.InternalError(s3Error, "creating an S3 manager")
+	}
+
+	blobUID, uploadError := s3Manager.Upload(ctx, tarball, map[string]string{
+		"app": appName, "namespace": namespace, "username": username,
+	})
+	if uploadError != nil {
+		if s3manager.IsQuotaExceededError(uploadError) {
+			return "", "", "", apierror.NewQuotaExceededError(
+				"",
+				"uploading the application sources blob: "+uploadError.Error(),
+			)
+		}
+		return "", "", "", apierror.InternalError(
+			uploadError, "uploading the application sources blob",
+		)
+	}
+
+	log.Infow("uploaded app", "namespace", namespace, "app", appName, "blobUID", blobUID)
+	return blobUID, branch, resolvedRevision, nil
+}
+
+func validateGitURL(gitURL string) apierror.APIErrors {
+	if gitURL == "" {
+		return apierror.NewBadRequestError("missing giturl")
+	}
+
+	u, err := url.Parse(gitURL)
+	if err != nil {
+		return apierror.NewBadRequestErrorf("invalid giturl %s", err.Error())
+	}
+
+	if u.Scheme == "" || u.Host == "" {
+		return apierror.NewBadRequestErrorf("missing scheme or host in giturl [%s://%s]", u.Scheme, u.Host)
+	}
+
+	return nil
+}
+
+var (
+	errReferenceNotFound = errors.New("reference not found")
+)
+
+// checkoutRepository will clone the repository and it will checkout the revision
+// It will also try to find the matching branch/reference, and if found this will be returned
+func checkoutRepository(ctx context.Context, gitRepo, url, revision string, gitconfig *gitbridge.Configuration) (*plumbing.Reference, error) {
+	log := requestctx.Logger(ctx)
+	cloneOptions := git.CloneOptions{URL: url}
+	cloneOptions = loadCloneOptions(cloneOptions, gitconfig)
+
+	if revision == "" {
+		// Input A: repository, no revision.
+		log.Infow("importgit, cloning simple", "url", url)
+		return shallowCheckout(ctx, gitRepo, cloneOptions)
+	}
+
+	ref, err := branchCheckout(ctx, gitRepo, revision, cloneOptions)
+	// it was a branch, and everything went fine
+	if err == nil {
+		return ref, nil
+	}
+	// some other error occurred
+	if !errors.Is(err, git.NoMatchingRefSpecError{}) {
+		return nil, err
+	}
+
+	// we are left we the full clone option
+	log.Infow("importgit, cloning plain", "url", url)
+	repo, err := git.PlainCloneContext(ctx, gitRepo, false, &cloneOptions)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Infow("importgit, resolve", "revision", revision)
+	hash, err := repo.ResolveRevision(plumbing.Revision(revision))
+	if err != nil {
+		return nil, err
+	}
+	log.Infow("importgit, resolved", "revision", hash)
+
+	ref, err = findReferenceForRevision(repo, *hash)
+	if err != nil && !errors.Is(err, errReferenceNotFound) {
+		return nil, err
+	}
+
+	checkout, err := repo.Worktree()
+	if err != nil {
+		return nil, err
+	}
+
+	log.Infow("importgit, checking out", "url", url, "revision", hash)
+
+	err = checkout.Checkout(&git.CheckoutOptions{
+		Hash:  *hash,
+		Force: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return ref, nil
+}
+
+func loadCloneOptions(opts git.CloneOptions, config *gitbridge.Configuration) git.CloneOptions {
+	if config == nil {
+		return opts
+	}
+
+	opts.InsecureSkipTLS = config.SkipSSL
+
+	if config.Username != "" && config.Password != "" {
+		opts.Auth = &http.BasicAuth{
+			Username: config.Username,
+			Password: config.Password,
+		}
+	}
+
+	if len(config.Certificate) > 0 {
+		opts.CABundle = config.Certificate
+	}
+
+	return opts
+}
+
+func shallowCheckout(ctx context.Context, gitRepo string, opts git.CloneOptions) (*plumbing.Reference, error) {
+	opts.Depth = 1
+
+	repo, err := git.PlainCloneContext(ctx, gitRepo, false, &opts)
+	if err != nil {
+		return nil, err
+	}
+
+	return repo.Head()
+}
+
+func branchCheckout(ctx context.Context, gitRepo, revision string, opts git.CloneOptions) (*plumbing.Reference, error) {
+	opts.Depth = 1
+	opts.SingleBranch = true
+	opts.ReferenceName = plumbing.NewBranchReferenceName(revision)
+
+	repo, err := git.PlainCloneContext(ctx, gitRepo, false, &opts)
+	if err != nil {
+		return nil, err
+	}
+
+	return repo.Head()
+}
+
+// findReferenceForRevision will loop through all the available refs (branches, tags, ...) and it will try
+// to see if any of those contains the specified revision.
+func findReferenceForRevision(repo *git.Repository, revision plumbing.Hash) (*plumbing.Reference, error) {
+	// this map will be used to stop the iteration when we have reached already seen commits
+	commitMap := map[string]struct{}{}
+
+	w, err := repo.Worktree()
+	if err != nil {
+		return nil, err
+	}
+
+	refIter, err := repo.References()
+	if err != nil {
+		return nil, err
+	}
+
+	var matchingRef *plumbing.Reference
+
+	// we are going to loop on every refs and check if one of them contain the revision
+	err = refIter.ForEach(func(r *plumbing.Reference) error {
+		err = w.Checkout(&git.CheckoutOptions{
+			Branch: r.Name(),
+			Force:  true,
+		})
+		if err != nil {
+			return err
+		}
+
+		found, err := containsRevision(repo, revision, commitMap)
+		if err != nil {
+			return err
+		}
+		if found {
+			matchingRef = r
+			return storer.ErrStop
+		}
+
+		return nil
+	})
+	// if something bad happened, return
+	if err != nil && !errors.Is(err, storer.ErrStop) {
+		return nil, err
+	}
+	// no matching reference found, return a specific error
+	if matchingRef == nil {
+		return nil, errReferenceNotFound
+	}
+
+	// we need to create a new reference from the one matching the revision,
+	// because it will not return the expected commit that we checked, but the last one.
+	// We also need to remove the 'origin/' prefix, or the UI will not work.
+	refName := strings.TrimPrefix(matchingRef.Name().Short(), "origin/")
+	matchingRef = plumbing.NewReferenceFromStrings(refName, revision.String())
+	return matchingRef, nil
+}
+
+// containsRevision will look for all the commits in the current repo to check for the revision.
+// It will look only in the current working tree, and it will return an errDone when the iteration was completed.
+// The passed commitMap is used to stop when we have reached an already checked commit, so we don't need to look back to the previous history.
+func containsRevision(repo *git.Repository, revision plumbing.Hash, commitMap map[string]struct{}) (bool, error) {
+	var found bool
+
+	commitIter, err := repo.Log(&git.LogOptions{Order: git.LogOrderCommitterTime})
+	if err != nil {
+		return found, err
+	}
+
+	err = commitIter.ForEach(func(c *object.Commit) error {
+		if c.Hash.String() == revision.String() {
+			found = true
+			return storer.ErrStop
+		}
+
+		if _, found := commitMap[c.Hash.String()]; found {
+			return storer.ErrStop
+		}
+
+		commitMap[c.Hash.String()] = struct{}{}
+		return nil
+	})
+
+	if err != nil && !errors.Is(err, storer.ErrStop) {
+		return found, err
+
+	}
+	return found, nil
+}

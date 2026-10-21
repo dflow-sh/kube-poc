@@ -1,0 +1,355 @@
+// Copyright © 2021 - 2023 SUSE LLC
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//     http://www.apache.org/licenses/LICENSE-2.0
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package acceptance_test
+
+import (
+	"fmt"
+
+	"github.com/dflow-sh/kube-poc/acceptance/helpers/catalog"
+	"github.com/dflow-sh/kube-poc/acceptance/helpers/proc"
+
+	. "github.com/dflow-sh/kube-poc/acceptance/helpers/matchers"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+)
+
+var _ = Describe("apps env", LApplication, func() {
+	var (
+		namespace string
+		appName   string
+	)
+
+	secret := func(ns, appname string) string {
+		n, err := proc.Kubectl("get", "secret",
+			"--namespace", ns,
+			"-l", fmt.Sprintf("app.kubernetes.io/name=%s,app.kubernetes.io/part-of=%s,dflow.sh/area=environment", appname, ns),
+			"-o", "jsonpath={.items[].metadata.name")
+		if err != nil {
+			return err.Error()
+		}
+		return n
+	}
+
+	deployedEnv := func(ns, app string) string {
+		out, err := proc.Kubectl("get", "deployments",
+			"-l", fmt.Sprintf("app.kubernetes.io/name=%s,app.kubernetes.io/part-of=%s", app, ns),
+			"--namespace", ns,
+			"-o", "jsonpath={.items[].spec.template.spec.containers[0].env}")
+
+		Expect(err).ToNot(HaveOccurred(), out)
+		return out
+	}
+
+	BeforeEach(func() {
+		namespace = catalog.NewNamespaceName()
+		env.SetupAndTargetNamespace(namespace)
+
+		appName = catalog.NewAppName()
+	})
+
+	AfterEach(func() {
+		env.DeleteNamespace(namespace)
+	})
+
+	Describe("app without workload", func() {
+		BeforeEach(func() {
+			out, err := env.dFlow("", "apps", "create", appName)
+			Expect(err).ToNot(HaveOccurred(), out)
+		})
+
+		AfterEach(func() {
+			env.DeleteApp(appName)
+		})
+
+		When("unsetting an environment variable", func() {
+			BeforeEach(func() {
+				out, err := env.dFlow("", "apps", "env", "set", appName, "MYVAR", "myvalue")
+				Expect(err).ToNot(HaveOccurred(), out)
+				out, err = env.dFlow("", "apps", "env", "unset", appName, "MYVAR")
+				Expect(err).ToNot(HaveOccurred(), out)
+			})
+
+			It("is not shown in the environment listing", func() {
+				out, err := env.dFlow("", "apps", "env", "list", appName)
+				Expect(err).ToNot(HaveOccurred(), out)
+
+				// CLI shows either a VARIABLE/VALUE table (when vars exist) or
+				// "No user-provided environment variables" when the list is empty.
+				Expect(out).To(SatisfyAny(
+					HaveATable(WithHeaders("VARIABLE", "VALUE")),
+					ContainSubstring("No user-provided environment variables"),
+				), "env list output:\n---\n%s\n---", out)
+				Expect(out).ToNot(ContainSubstring("myvalue"),
+					"after unset, MYVAR value should not appear. env list output:\n---\n%s\n---", out)
+			})
+
+			It("is retrieved as empty string with show", func() {
+				out, err := env.dFlow("", "apps", "env", "show", appName, "MYVAR")
+				Expect(err).ToNot(HaveOccurred(), out)
+				Expect(out).To(ContainSubstring(`Variable: MYVAR`)) // Var name is shown, value is empty
+				Expect(out).ToNot(ContainSubstring(`myvalue`))
+			})
+
+			It("is not present in the pushed workload", func() {
+				appDir := "../assets/sample-app"
+				out, err := env.DFlowPush(appDir, appName, "--name", appName)
+				Expect(err).ToNot(HaveOccurred(), out)
+
+				Expect(deployedEnv(namespace, appName)).ToNot(ContainSubstring("MYVAR"))
+			})
+
+			Context("command completion", func() {
+				// MYVAX is intentionally different from MYVAR, to avoid possible clashes
+				BeforeEach(func() {
+					out, err := env.dFlow("", "apps", "env", "set", appName, "MYVAX", "myvalue")
+					Expect(err).ToNot(HaveOccurred(), out)
+				})
+
+				AfterEach(func() {
+					out, err := env.dFlow("", "apps", "env", "unset", appName, "MYVAX")
+					Expect(err).ToNot(HaveOccurred(), out)
+				})
+
+				It("matches empty app prefix", func() {
+					out, err := env.dFlow("", "__complete", "app", "env", "unset", "")
+					Expect(err).ToNot(HaveOccurred(), out)
+					Expect(out).To(ContainSubstring(appName))
+				})
+
+				It("matches empty var prefix", func() {
+					out, err := env.dFlow("", "__complete", "app", "env", "unset", appName, "")
+					Expect(err).ToNot(HaveOccurred(), out)
+					Expect(out).To(ContainSubstring("MYVAX"))
+				})
+
+				It("does not match unknown app prefix", func() {
+					out, err := env.dFlow("", "__complete", "app", "env", "unset", "bogus")
+					Expect(err).ToNot(HaveOccurred(), out)
+					Expect(out).ToNot(ContainSubstring("bogus"))
+				})
+
+				It("does not match unknown var prefix", func() {
+					out, err := env.dFlow("", "__complete", "app", "env", "unset", appName, "bogus")
+					Expect(err).ToNot(HaveOccurred(), out)
+					Expect(out).ToNot(ContainSubstring("bogus"))
+				})
+
+				It("does not match bogus arguments", func() {
+					out, err := env.dFlow("", "__complete", "app", "env", "unset", appName, "MYVAX", "")
+					Expect(err).ToNot(HaveOccurred(), out)
+					Expect(out).ToNot(ContainSubstring(appName))
+					Expect(out).ToNot(ContainSubstring("MYVAX"))
+				})
+			})
+		})
+
+		When("setting an environment variable", func() {
+			BeforeEach(func() {
+				out, err := env.dFlow("", "apps", "env", "set", appName, "MYVAR", "myvalue")
+				Expect(err).ToNot(HaveOccurred(), out)
+			})
+
+			It("creates the relevant secret", func() {
+				secretName := secret(namespace, appName)
+				Expect(secretName).ToNot(BeEmpty())
+			})
+
+			It("is shown in the environment listing", func() {
+				out, err := env.dFlow("", "apps", "env", "list", appName)
+				Expect(err).ToNot(HaveOccurred(), out)
+
+				Expect(out).To(
+					HaveATable(
+						WithHeaders("VARIABLE", "VALUE"),
+						WithRow("MYVAR", "myvalue"),
+					),
+				)
+			})
+
+			Context("list command completion", func() {
+				It("matches empty prefix", func() {
+					out, err := env.dFlow("", "__complete", "app", "env", "list", "")
+					Expect(err).ToNot(HaveOccurred(), out)
+					Expect(out).To(ContainSubstring(appName))
+				})
+
+				It("does not match unknown prefix", func() {
+					out, err := env.dFlow("", "__complete", "app", "env", "list", "bogus")
+					Expect(err).ToNot(HaveOccurred(), out)
+					Expect(out).ToNot(ContainSubstring("bogus"))
+				})
+
+				It("does not match bogus arguments", func() {
+					out, err := env.dFlow("", "__complete", "app", "env", "list", appName, "")
+					Expect(err).ToNot(HaveOccurred(), out)
+					Expect(out).ToNot(ContainSubstring(appName))
+					Expect(out).ToNot(ContainSubstring("MYVAR"))
+				})
+			})
+
+			It("is retrieved with show", func() {
+				out, err := env.dFlow("", "apps", "env", "show", appName, "MYVAR")
+				Expect(err).ToNot(HaveOccurred(), out)
+				Expect(out).To(ContainSubstring(`Variable: MYVAR`))
+				Expect(out).To(ContainSubstring(`Value: myvalue`))
+			})
+
+			Context("show command completion", func() {
+				It("matches empty app prefix", func() {
+					out, err := env.dFlow("", "__complete", "app", "env", "show", "")
+					Expect(err).ToNot(HaveOccurred(), out)
+					Expect(out).To(ContainSubstring(appName))
+				})
+
+				It("matches empty var prefix", func() {
+					out, err := env.dFlow("", "__complete", "app", "env", "show", appName, "")
+					Expect(err).ToNot(HaveOccurred(), out)
+					Expect(out).To(ContainSubstring("MYVAR"))
+				})
+
+				It("does not match unknown app prefix", func() {
+					out, err := env.dFlow("", "__complete", "app", "env", "show", "bogus")
+					Expect(err).ToNot(HaveOccurred(), out)
+					Expect(out).ToNot(ContainSubstring("bogus"))
+				})
+
+				It("does not match unknown var prefix", func() {
+					out, err := env.dFlow("", "__complete", "app", "env", "show", appName, "bogus")
+					Expect(err).ToNot(HaveOccurred(), out)
+					Expect(out).ToNot(ContainSubstring("bogus"))
+				})
+
+				It("does not match bogus arguments", func() {
+					out, err := env.dFlow("", "__complete", "app", "env", "show", appName, "MYVAR", "")
+					Expect(err).ToNot(HaveOccurred(), out)
+					Expect(out).ToNot(ContainSubstring(appName))
+					Expect(out).ToNot(ContainSubstring("MYVAR"))
+				})
+			})
+
+			It("is injected into the pushed workload", func() {
+				appDir := "../assets/sample-app"
+				out, err := env.DFlowPush(appDir, appName, "--name", appName)
+				Expect(err).ToNot(HaveOccurred(), out)
+				Expect(deployedEnv(namespace, appName)).To(ContainSubstring("MYVAR"))
+			})
+
+			Context("command completion", func() {
+				It("matches empty prefix", func() {
+					out, err := env.dFlow("", "__complete", "app", "env", "set", "")
+					Expect(err).ToNot(HaveOccurred(), out)
+					Expect(out).To(ContainSubstring(appName))
+				})
+
+				It("does not match unknown prefix", func() {
+					out, err := env.dFlow("", "__complete", "app", "env", "set", "bogus")
+					Expect(err).ToNot(HaveOccurred(), out)
+					Expect(out).ToNot(ContainSubstring("bogus"))
+				})
+
+				It("does not match bogus arguments", func() {
+					out, err := env.dFlow("", "__complete", "app", "env", "set", appName, "")
+					Expect(err).ToNot(HaveOccurred(), out)
+					Expect(out).ToNot(ContainSubstring(appName))
+					Expect(out).ToNot(ContainSubstring("MYVAR"))
+				})
+			})
+		})
+	})
+
+	Describe("deployed app", func() {
+		BeforeEach(func() {
+			appDir := "../assets/sample-app"
+			out, err := env.DFlowPush(appDir, appName, "--name", appName)
+			Expect(err).ToNot(HaveOccurred(), out)
+		})
+
+		AfterEach(func() {
+			env.DeleteApp(appName)
+		})
+
+		When("unsetting an environment variable", func() {
+			BeforeEach(func() {
+				out, err := env.dFlow("", "apps", "env", "set", appName, "MYVAR", "myvalue")
+				Expect(err).ToNot(HaveOccurred(), out)
+
+				// Wait for variable to appear so that we can verify its proper
+				// removal
+				Eventually(func() string {
+					return deployedEnv(namespace, appName)
+				}).Should(ContainSubstring("MYVAR"))
+			})
+
+			It("modifies and restarts the app", func() {
+				out, err := env.dFlow("", "apps", "env", "unset", appName, "MYVAR")
+				Expect(err).ToNot(HaveOccurred(), out)
+
+				// The deployment is not expected to be immediately modified, and/or
+				// the modification immediately visible. Thus waiting for the system
+				// to settle here.
+
+				Eventually(func() string {
+					return deployedEnv(namespace, appName)
+				}).ShouldNot(ContainSubstring("MYVAR"))
+			})
+		})
+
+		When("setting an environment variable", func() {
+			It("modifies and restarts the app", func() {
+				out, err := env.dFlow("", "apps", "env", "set", appName, "MYVAR", "myvalue")
+				Expect(err).ToNot(HaveOccurred(), out)
+
+				// The deployment is not expected to be immediately modified, and/or
+				// the modification immediately visible. Thus waiting for the system
+				// to settle here.
+
+				Eventually(func() string {
+					return deployedEnv(namespace, appName)
+				}).Should(ContainSubstring("MYVAR"))
+			})
+		})
+	})
+
+	Describe("env merge and replace", func() {
+		BeforeEach(func() {
+			appDir := "../assets/sample-app"
+			out, err := env.DFlowPush(appDir, appName, "--name", appName, "--env", "FOO=frommanifest")
+			Expect(err).ToNot(HaveOccurred(), out)
+
+			Eventually(func() string {
+				return deployedEnv(namespace, appName)
+			}).Should(ContainSubstring("FOO"))
+		})
+
+		AfterEach(func() {
+			env.DeleteApp(appName)
+		})
+
+		It("merges envs by default when updating", func() {
+			out, err := env.dFlow("", "apps", "update", appName, "--env", "BAR=fromupdate")
+			Expect(err).ToNot(HaveOccurred(), out)
+
+			Eventually(func() string {
+				return deployedEnv(namespace, appName)
+			}).Should(And(ContainSubstring("FOO"), ContainSubstring("BAR")))
+		})
+
+		It("replaces envs when --env-replace is set", func() {
+			out, err := env.dFlow("", "apps", "update", appName, "--env-replace", "--env", "BAR=replaced")
+			Expect(err).ToNot(HaveOccurred(), out)
+
+			Eventually(func() string {
+				return deployedEnv(namespace, appName)
+			}).Should(And(Not(ContainSubstring("FOO")), ContainSubstring("BAR")))
+		})
+	})
+})

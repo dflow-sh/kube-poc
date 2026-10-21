@@ -1,0 +1,390 @@
+// Copyright © 2021 - 2023 SUSE LLC
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//     http://www.apache.org/licenses/LICENSE-2.0
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package application
+
+import (
+	"context"
+	"fmt"
+	"net/url"
+	"strings"
+
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
+	"github.com/dflow-sh/kube-poc/packages/dflow/api/v1/deploy"
+	"github.com/dflow-sh/kube-poc/packages/dflow/api/v1/response"
+	"github.com/dflow-sh/kube-poc/packages/dflow/appchart"
+	"github.com/dflow-sh/kube-poc/packages/dflow/application"
+	"github.com/dflow-sh/kube-poc/packages/dflow/cli/server/requestctx"
+	"github.com/dflow-sh/kube-poc/packages/dflow/configurations"
+	"github.com/gin-gonic/gin"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/dynamic"
+
+	apierror "github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/errors"
+	"github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/models"
+)
+
+// Update handles the API endpoint PATCH /namespaces/:namespace/applications/:app
+func Update(c *gin.Context) apierror.APIErrors { // nolint:gocyclo // simplification defered
+	ctx := c.Request.Context()
+	namespace := c.Param("namespace")
+	appName := c.Param("app")
+	username := requestctx.User(ctx).Username
+	log := requestctx.Logger(ctx)
+
+	cluster, err := kubernetes.GetCluster(ctx)
+	if err != nil {
+		return apierror.InternalError(err)
+	}
+
+	client, err := cluster.ClientApp()
+	if err != nil {
+		return apierror.InternalError(err)
+	}
+
+	appRef := models.NewAppRef(appName, namespace)
+	exists, err := application.Exists(ctx, cluster, appRef)
+	if err != nil {
+		return apierror.InternalError(err)
+	}
+
+	if !exists {
+		return apierror.AppIsNotKnown(appName)
+	}
+
+	// Retrieve and validate update request ...
+
+	var updateRequest models.ApplicationUpdateRequest
+	err = c.BindJSON(&updateRequest)
+	if err != nil {
+		return apierror.NewBadRequestError(err.Error())
+	}
+
+	log.Infow("updating app", "namespace", namespace, "app", appName, "request", updateRequest)
+
+	if updateRequest.Instances != nil && *updateRequest.Instances < 0 {
+		return apierror.NewBadRequestError("instances param should be integer equal or greater than zero")
+	}
+
+	app, err := application.Lookup(ctx, cluster, namespace, appName)
+	if err != nil {
+		return apierror.InternalError(err)
+	}
+
+	// Check if the request contains any changes. Abort early if not.
+
+	// if there is nothing to change
+	if updateRequest.Instances == nil &&
+		len(updateRequest.Environment) == 0 &&
+		len(updateRequest.Settings) == 0 &&
+		updateRequest.Configurations == nil &&
+		updateRequest.Routes == nil &&
+		updateRequest.AppChart == "" {
+
+		log.Infow("updating app -- no changes")
+		response.OK(c)
+		return nil
+	}
+
+	chartChanging := updateRequest.AppChart != "" && updateRequest.AppChart != app.Configuration.AppChart
+	previousChart := app.Configuration.AppChart
+
+	// Validate against the chart that will be in effect after this update. Do this before any
+	// mutation so a chart switch cannot leave the CRD patched while settings are incompatible.
+	targetChartName := previousChart
+	if updateRequest.AppChart != "" {
+		targetChartName = updateRequest.AppChart
+	}
+
+	settingsInRequest := len(updateRequest.Settings) > 0
+	// Chart changes always require a settings check (existing or requested). Running apps also
+	// validate when new settings are supplied.
+	if chartChanging || (app.Workload != nil && settingsInRequest) {
+		appChart, err := appchart.LookupViaCluster(ctx, cluster, targetChartName)
+		if err != nil {
+			return apierror.InternalError(err)
+		}
+		if appChart == nil {
+			return apierror.AppChartIsNotKnown(targetChartName)
+		}
+
+		settingsToValidate := updateRequest.Settings
+		if chartChanging && !settingsInRequest {
+			settingsToValidate = app.Configuration.Settings
+		}
+
+		if len(settingsToValidate) > 0 {
+			issues := application.ValidateCV(settingsToValidate, appChart.Settings)
+			if issues != nil {
+				var apiIssues []apierror.APIError
+				for _, err := range issues {
+					apiIssues = append(apiIssues, apierror.NewBadRequestError(err.Error()))
+				}
+
+				return apierror.NewMultiError(apiIssues)
+			}
+		}
+	}
+
+	// Save all changes to the relevant parts of the app resources (CRD, secrets, and the like).
+
+	// update appChart (allowed for both inactive and active/running apps)
+	if chartChanging {
+		log.Infow("updating app", "appChart", updateRequest.AppChart)
+
+		err := updateAppChart(ctx, cluster, client, app.Meta.Namespace, app.Meta.Name, updateRequest.AppChart)
+		if err != nil {
+			if apiErr, ok := err.(apierror.APIError); ok {
+				return apiErr
+			}
+			return apierror.InternalError(err)
+		}
+	}
+
+	// update instances
+	var desired int32
+	if updateRequest.Instances != nil {
+		desired = *updateRequest.Instances
+		log.Infow("updating app", "instances", desired)
+
+		err := application.ScalingSetWithEvent(ctx, cluster, appRef, desired, username)
+		if err != nil {
+			return apierror.InternalError(err)
+		}
+	}
+
+	// update envs
+	if len(updateRequest.Environment) > 0 {
+		log.Infow("updating app", "environment", updateRequest.Environment)
+
+		replaceEnv := envReplaceFlag(updateRequest.ReplaceEnv)
+		err := application.EnvironmentSet(ctx, cluster, app.Meta, updateRequest.Environment, replaceEnv)
+		if err != nil {
+			return apierror.InternalError(err)
+		}
+	}
+
+	// update configurations
+	if updateRequest.Configurations != nil {
+		log.Infow("updating app", "configurations", updateRequest.Configurations)
+
+		err := updateConfigurations(ctx, cluster, appRef, updateRequest.Configurations)
+		if err != nil {
+			if apiErr, ok := err.(apierror.APIError); ok {
+				return apiErr
+			}
+			return apierror.InternalError(err)
+		}
+	}
+
+	// update routes
+	if updateRequest.Routes != nil {
+		log.Infow("updating app", "routes", updateRequest.Routes)
+
+		err := updateRoutes(ctx, client, namespace, appName, updateRequest.Routes)
+		if err != nil {
+			return apierror.InternalError(err)
+		}
+	}
+
+	// update settings only if chart values have been set, otherwise just leave it as it is.
+	if len(updateRequest.Settings) > 0 {
+		log.Infow("updating app", "settings", updateRequest.Settings)
+
+		err := updateChartValueSettings(ctx, client, namespace, appName, updateRequest.Settings)
+		if err != nil {
+			return apierror.InternalError(err)
+		}
+	}
+
+	// Honor Restart explicitly: chart changes with --no-restart only patch the CRD.
+	// Redeploy (default when Restart is omitted or true) picks up the new helm chart.
+	// On deploy failure after a chart change, roll the CRD chart name back.
+	restart := updateRequest.Restart == nil || *updateRequest.Restart
+	if restart {
+		instancesChanged := appInstancesChanged(app, updateRequest.Instances)
+		chartRedeploy := chartChanging && app.Workload != nil
+
+		var apierr apierror.APIErrors
+		if instancesChanged || chartRedeploy {
+			log.Infow("updating app -- deploying", "chartChanging", chartChanging, "instancesChanged", instancesChanged)
+			_, apierr = deploy.DeployApp(ctx, cluster, app.Meta, username, "")
+		} else if app.Workload != nil && app.Status == models.ApplicationRunning {
+			log.Infow("updating app -- restarting")
+			apierr = deployAppIfImageReady(ctx, cluster, app, username)
+		} else if app.Workload != nil {
+			log.Infow("updating app -- restart skipped because application is not running", "status", app.Status)
+		} else if desired > 0 {
+			log.Infow("updating app -- deploying")
+			_, apierr = deploy.DeployApp(ctx, cluster, app.Meta, username, "")
+		}
+
+		if apierr != nil {
+			if chartChanging {
+				log.Errorw("deploy after app chart change failed, rolling chart back",
+					"from", updateRequest.AppChart, "to", previousChart, "error", apierr)
+				if rbErr := updateAppChart(ctx, cluster, client, app.Meta.Namespace, app.Meta.Name, previousChart); rbErr != nil {
+					log.Errorw("failed to roll back app chart after deploy error", "error", rbErr)
+				}
+			}
+			return apierr
+		}
+	}
+
+	response.OK(c)
+	return nil
+}
+
+// deployAppIfImageReady runs DeployApp only when the app already has a built image.
+// Config and scaling changes are persisted before this call; without an imageURL,
+// deployment cannot succeed and should be deferred instead of failing the save.
+func deployAppIfImageReady(ctx context.Context, cluster *kubernetes.Cluster, app *models.App, username string) apierror.APIErrors {
+	if app.ImageURL == "" {
+		requestctx.Logger(ctx).Infow("deploy skipped because application has no image yet")
+		return nil
+	}
+
+	_, apierr := deploy.DeployApp(ctx, cluster, app.Meta, username, "")
+	return apierr
+}
+
+func appInstancesChanged(app *models.App, requested *int32) bool {
+	if requested == nil {
+		return false
+	}
+	if app.Configuration.Instances == nil {
+		return true
+	}
+	return *requested != *app.Configuration.Instances
+}
+
+func envReplaceFlag(replace *bool) bool {
+	return replace != nil && *replace
+}
+
+func updateAppChart(
+	ctx context.Context,
+	cluster *kubernetes.Cluster,
+	client dynamic.NamespaceableResourceInterface,
+	namespace string,
+	appName string,
+	appChart string,
+) error {
+	found, err := appchart.ExistsViaCluster(ctx, cluster, appChart)
+	if err != nil {
+		return apierror.InternalError(err)
+	}
+	if !found {
+		return apierror.AppChartIsNotKnown(appChart)
+	}
+
+	// Patch
+	patch := fmt.Sprintf(`[{
+				"op": "replace",
+				"path": "/spec/chartname",
+				"value": "%s" }]`,
+		appChart)
+
+	_, err = client.Namespace(namespace).Patch(ctx, appName, types.JSONPatchType, []byte(patch), metav1.PatchOptions{})
+	if err != nil {
+		return apierror.InternalError(err)
+	}
+
+	return nil
+}
+
+func updateConfigurations(
+	ctx context.Context,
+	cluster *kubernetes.Cluster,
+	appRef models.AppRef,
+	updatedConfigurations []string,
+) error {
+	// if empty remove all bound configurations
+	if len(updatedConfigurations) == 0 {
+		return application.BoundConfigurationsSet(ctx, cluster, appRef, []string{}, true)
+	}
+
+	var okToBind []string
+	for _, configurationName := range updatedConfigurations {
+		_, err := configurations.Lookup(ctx, cluster, appRef.Namespace, configurationName)
+		if err != nil {
+			// do not change existing configuration bindings if there is an issue
+			if err.Error() == "configuration not found" {
+				return apierror.ConfigurationIsNotKnown(configurationName)
+			}
+
+			return apierror.InternalError(err)
+		}
+
+		okToBind = append(okToBind, configurationName)
+	}
+
+	return application.BoundConfigurationsSet(ctx, cluster, appRef, okToBind, true)
+}
+
+func updateRoutes(
+	ctx context.Context,
+	client dynamic.NamespaceableResourceInterface,
+	namespace string,
+	appName string,
+	updateRoutes []string,
+) error {
+	// Only update the app if routes have been set, otherwise just leave it as it is.
+	// Note that an empty slice is setting routes, i.e. removing all!
+	// No change is signaled by a nil slice.
+
+	routes := []string{}
+	for _, d := range updateRoutes {
+		// Strip scheme prefixes, if present
+		routeURL, err := url.Parse(d)
+		if err != nil {
+			return apierror.NewBadRequestError(err.Error()).WithDetails("failed to parse route")
+		}
+		if routeURL.Scheme != "" {
+			d = strings.TrimPrefix(d, routeURL.Scheme+"://")
+		}
+		// Note %q quotes the url as required by the json patch constructed below.
+		routes = append(routes, fmt.Sprintf("%q", d))
+	}
+
+	patch := fmt.Sprintf(`[{
+			"op": "replace",
+			"path": "/spec/routes",
+			"value": [%s] }]`,
+		strings.Join(routes, ","),
+	)
+
+	_, err := client.Namespace(namespace).Patch(ctx, appName, types.JSONPatchType, []byte(patch), metav1.PatchOptions{})
+	return err
+}
+
+func updateChartValueSettings(
+	ctx context.Context,
+	client dynamic.NamespaceableResourceInterface,
+	namespace string,
+	appName string,
+	settings models.ChartValueSettings,
+) error {
+	values := []string{}
+	for k, v := range settings {
+		values = append(values, fmt.Sprintf(`%q : %q`, k, v))
+	}
+
+	patch := fmt.Sprintf(`[{
+			"op": "replace",
+			"path": "/spec/settings",
+			"value": {%s} }]`,
+		strings.Join(values, ","))
+
+	_, err := client.Namespace(namespace).Patch(ctx, appName, types.JSONPatchType, []byte(patch), metav1.PatchOptions{})
+	return err
+}

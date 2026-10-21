@@ -1,0 +1,1163 @@
+// Copyright © 2021 - 2023 SUSE LLC
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//     http://www.apache.org/licenses/LICENSE-2.0
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Package helm contains the dflow-specific core to the helm client libraries. It exposes
+// the functionality to deploy and remove helm charts/releases.
+package helm
+
+import (
+	"context"
+	"crypto/x509"
+	"encoding/base64"
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/pkg/errors"
+
+	"github.com/dflow-sh/kube-poc/packages/dflow/appchart"
+	"github.com/dflow-sh/kube-poc/packages/dflow/domain"
+	"github.com/dflow-sh/kube-poc/packages/dflow/duration"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helmchart"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
+	"github.com/dflow-sh/kube-poc/packages/dflow/names"
+	"github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/models"
+	dflowregistry "github.com/dflow-sh/kube-poc/packages/dflow/registry"
+	"github.com/dflow-sh/kube-poc/packages/dflow/routes"
+	"github.com/dflow-sh/kube-poc/packages/dflow/urlcache"
+	hc "github.com/mittwald/go-helm-client"
+	"github.com/spf13/viper"
+	"gopkg.in/yaml.v2"
+	"helm.sh/helm/v3/pkg/action"
+	"helm.sh/helm/v3/pkg/chart/loader"
+	"helm.sh/helm/v3/pkg/registry"
+	helmrelease "helm.sh/helm/v3/pkg/release"
+	"helm.sh/helm/v3/pkg/repo"
+	helmdriver "helm.sh/helm/v3/pkg/storage/driver"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/util/retry"
+)
+
+type PostDeployFunction func(ctx context.Context) error
+
+type ServiceParameters struct {
+	models.AppRef                        // Service: name & namespace
+	Cluster        *kubernetes.Cluster   // Cluster to talk to.
+	CatalogService models.CatalogService // CatalogService to deploy
+	Values         string                // Chart customization (YAML-formatted string)
+	Wait           bool                  // Wait for service to deploy
+	PostDeployHook PostDeployFunction    // Hook to call after service deployment
+}
+
+type ConfigParameter struct {
+	Name string `yaml:"name"` // Configuration name
+	Path string `yaml:"path"` // Mounting path for configuration
+}
+
+type ChartParameters struct {
+	models.AppRef                        // Application: name & namespace
+	Context        context.Context       // Operation context
+	Cluster        *kubernetes.Cluster   // Cluster to talk to.
+	Chart          string                // Name of Chart CR to use for deployment
+	ImageURL       string                // Application Image
+	Username       string                // User causing the (re)deployment
+	Instances      int32                 // Number Of Desired Replicas
+	StageID        string                // Stage ID that produced ImageURL
+	Environment    models.EnvVariableMap // App Environment
+	Configurations []ConfigParameter     // Bound Configurations (list of names and paths)
+	Routes         []string              // Desired application routes
+	Domains        domain.DomainMap      // Map of domains with secrets covering them
+	Start          *int64                // Nano-epoch of deployment. Optional. Used to force a restart, even when nothing else has changed.
+	Settings       models.ChartValueSettings
+}
+
+func Values(
+	cluster *kubernetes.Cluster,
+	app models.AppRef,
+) ([]byte, error) {
+	none := []byte{}
+
+	client, err := GetHelmClient(cluster.RestConfig, app.Namespace)
+	if err != nil {
+		return none, err
+	}
+
+	values, err := client.GetReleaseValues(names.ReleaseName(app.Name), false)
+	if err != nil {
+		return none, err
+	}
+
+	yaml, err := yaml.Marshal(values)
+	if err != nil {
+		return none, err
+	}
+
+	return yaml, nil
+}
+
+func Remove(
+	cluster *kubernetes.Cluster,
+	app models.AppRef,
+) error {
+	client, err := GetHelmClient(cluster.RestConfig, app.Namespace)
+	if err != nil {
+		return err
+	}
+
+	return client.UninstallReleaseByName(names.ReleaseName(app.Name))
+}
+
+func RemoveService(
+	cluster *kubernetes.Cluster,
+	app models.AppRef,
+) error {
+	client, err := GetHelmClient(cluster.RestConfig, app.Namespace)
+	if err != nil {
+		return errors.Wrap(err, "create a helm client")
+	}
+
+	err = client.UninstallReleaseByName(names.ServiceReleaseName(app.Name))
+	return errors.Wrap(err, "deleting release")
+}
+
+func DeployService(ctx context.Context, parameters ServiceParameters) error {
+	logger := helpers.Logger.With("component", "helm-service")
+	logger.Infow("service helm setup", "parameters", parameters)
+
+	client, err := GetHelmClient(
+		parameters.Cluster.RestConfig,
+		parameters.Namespace,
+	)
+	if err != nil {
+		return errors.Wrap(err, "create a helm client")
+	}
+
+	// cleanup old release
+	releaseName := names.ServiceReleaseName(parameters.Name)
+	err = cleanupReleaseIfNeeded(client, releaseName)
+	if err != nil {
+		return errors.Wrap(err, "cleaning up release")
+	}
+
+	catalogService := parameters.CatalogService
+
+	// helmChart is the full helmChart name
+	// i.e.: dflow/mychart, or oci://registry/chart for OCI charts
+	// This will also login into the OCI registry or add/update the helm repository
+	helmChart, err := initHelmOCIRegistryOrRepository(client, catalogService)
+	if err != nil {
+		return errors.Wrap(err, "initializing Helm repository or OCI registry")
+	}
+
+	// No ReuseValues: the values passed in are the complete set, built from
+	// the catalog values and the settings stored in the service secret.
+	// Reusing the old release's values would bring back removed settings.
+	chartSpec := hc.ChartSpec{
+		ReleaseName: releaseName,
+		ChartName:   helmChart,
+		Version:     catalogService.ChartVersion,
+		Namespace:   parameters.Namespace,
+		Wait:        parameters.Wait,
+		ValuesYaml:  string(parameters.Values),
+		Timeout:     duration.ToDeployment(),
+	}
+
+	if !parameters.Wait {
+		// Note: We are backgrounding the action. The incoming context cannot be used, as it
+		// is linked to the request. We will get a `context canceled` error. To avoid this a
+		// background context is used instead.
+		go func() { //nolint:gosec // Intentional background context
+			err = installOrUpgradeChartWithRetry(context.Background(), client, &chartSpec)
+			if err != nil {
+				logger.Errorw("installing or upgrading service ASYNC", "error", err)
+				return
+			}
+
+			if parameters.PostDeployHook != nil {
+				// MAYBE : `wait for the release to be in a ready state` here too, see below.
+				// So far, local, things were fast enough to not need it for labeling
+				err := parameters.PostDeployHook(context.Background())
+				if err != nil {
+					logger.Errorw("service post deployment ASYNC", "error", err)
+					return
+				}
+			}
+
+			logger.Infow("completed service deployment ASYNC")
+		}()
+		return nil
+	}
+
+	// Note: Steps 1: Retry only once!
+	err = installOrUpgradeChartWithRetry(ctx, client, &chartSpec)
+	if err != nil {
+		return errors.Wrap(err, "installing or upgrading service SYNC")
+	}
+
+	// wait for the release to be in a ready state
+	timeout := duration.ToDeployment()
+	err = wait.PollUntilContextTimeout(ctx, 2*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
+		release, err := Release(ctx, parameters.Cluster, parameters.Namespace, releaseName)
+		if err != nil {
+			return false, err
+		}
+		releaseStatus, err := Status(ctx, parameters.Cluster, release)
+		if releaseStatus == StatusUnknown || err != nil {
+			return false, err
+		}
+
+		// check readiness
+		return releaseStatus == StatusReady, nil
+	})
+
+	if err != nil {
+		return errors.Wrap(err, "polling release status")
+	}
+
+	if parameters.PostDeployHook != nil {
+		err := parameters.PostDeployHook(ctx)
+		if err != nil {
+			logger.Errorw("service post deployment SYNC", "error", err)
+			return errors.Wrap(err, "post deployment action")
+		}
+	}
+
+	logger.Infow("completed service deployment SYNC")
+	return nil
+}
+
+// initHelmOCIRegistryOrRepository will perform the initial setup for the helm Client and the specified Service,
+// and return the final helm chart name. If the service is from an OCI registry it will perform a login, if needed,
+// and return a 'oci://repoURL/chart' value. Else if a standard repoURL is provided it will add the repo, caching the index,
+// and updating the repositories if the chart is not found.
+func initHelmOCIRegistryOrRepository(client *SynchronizedClient, service models.CatalogService) (string, error) {
+	// chart to install
+	chartName := service.HelmChart
+	chartVersion := service.ChartVersion
+
+	// repo settings
+	repoName := service.HelmRepo.Name
+	repoURL := service.HelmRepo.URL
+
+	// auth
+	username := service.HelmRepo.Auth.Username
+	password := service.HelmRepo.Auth.Password
+
+	// if no friendly name was given we can hash the repoURL
+	if repoName == "" {
+		repoName = base64.RawURLEncoding.EncodeToString([]byte(repoURL))
+	}
+
+	// if repoURL is not set just return the 'repoName/chart'
+	if repoURL == "" {
+		return fmt.Sprintf("%s/%s", repoName, chartName), nil
+	}
+
+	// for an OCI registry check if we need to login and return the 'oci://registry/chart' chart name
+	if registry.IsOCI(repoURL) {
+		// if auth credentials are available try to login
+		if username != "" && password != "" {
+			registryHostname := strings.TrimPrefix(repoURL, "oci://")
+			err := client.RegistryLogin(registryHostname, username, password)
+			if err != nil {
+				return "", errors.Wrap(err, "logging into the helm registry")
+			}
+		}
+
+		// with OCI install with 'helm install foo oci://registry/chart'
+		return fmt.Sprintf("%s/%s", repoURL, chartName), nil
+	}
+
+	// for all the other case we add the repo (if it doesn't exists)
+	err := client.AddOrUpdateChartRepo(repo.Entry{
+		Name: repoName,
+		URL:  repoURL,
+		// support for private repositories
+		Username: username,
+		Password: password,
+	})
+	if err != nil {
+		return "", errors.Wrap(err, "creating the chart repository")
+	}
+
+	// because of this PR (https://github.com/mittwald/go-helm-client/pull/177) the previous AddOrUpdateChartRepo
+	// method will NOT update the repository, so we need to check if the chart is available.
+	// If not we can try to update the repos and check again
+	helmChart := fmt.Sprintf("%s/%s", repoName, chartName)
+
+	chartOpts := &action.ChartPathOptions{
+		Username: username,
+		Password: password,
+		Version:  chartVersion,
+	}
+
+	_, _, err = client.GetChart(helmChart, chartOpts)
+	// probably chart not found, try to update repositories
+	if err != nil {
+		if err := client.UpdateChartRepos(); err != nil {
+			return "", errors.Wrap(err, "updating the chart repositories")
+		}
+
+		if _, _, err = client.GetChart(helmChart, chartOpts); err != nil {
+			return "", errors.Wrapf(err, "looking for the '%s' chart [version: %s] [repoURL: %s]", helmChart, chartVersion, repoURL)
+		}
+	}
+
+	return helmChart, nil
+}
+
+// Local type definitions for proper marshalling of the
+// `values.yaml` to hand to helm from the chart parameters.
+
+type RouteParam struct {
+	Id     string `yaml:"id"`
+	Domain string `yaml:"domain"`
+	Path   string `yaml:"path"`
+	Secret string `yaml:"secret,omitempty"` // nolint:gosec // route secret for ingress, not credentials
+}
+type DFlowParam struct {
+	AppName        string               `yaml:"appName"`
+	Configurations []string             `yaml:"configurations"`
+	ConfigPaths    []ConfigParameter    `yaml:"configpaths"`
+	Env            []models.EnvVariable `yaml:"env"`
+	ImageUrl       string               `yaml:"imageURL"`
+	Ingress        string               `yaml:"ingress,omitempty"`
+	Gateway        string               `yaml:"gateway,omitempty"`
+	ReplicaCount   int32                `yaml:"replicaCount"`
+	Routes         []RouteParam         `yaml:"routes"`
+	StageID        string               `yaml:"stageID"`
+	Start          string               `yaml:"start,omitempty"`
+	TlsIssuer      string               `yaml:"tlsIssuer"`
+	Username       string               `yaml:"username"`
+}
+type ChartParam struct {
+	DFlow DFlowParam             `yaml:"dflow"`
+	Chart map[string]string      `yaml:"chartConfig,omitempty"`
+	User  map[string]interface{} `yaml:"userConfig,omitempty"`
+}
+
+func Deploy(parameters ChartParameters) error {
+	logger := helpers.Logger.With("component", "helm-deploy")
+	logger.Infow("deploy app", "parameters", parameters)
+
+	// Find the app chart to use for the deployment.
+	appChartClient, clientError := parameters.Cluster.ClientAppChart()
+	if clientError != nil {
+		return errors.Wrap(clientError, "creating app chart client")
+	}
+	appChart, err := appchart.Lookup(
+		parameters.Context,
+		appChartClient,
+		parameters.Chart,
+	)
+	if err != nil {
+		return errors.Wrap(err, "looking up application chart")
+	}
+	if appChart == nil {
+		return fmt.Errorf("unable to deploy, chart %s not found", parameters.Chart)
+	}
+
+	logger.Infow("deploy app", "appchart", appChart)
+
+	// Fill values.yaml structure
+
+	params, err := getValuesYAML(appChart, parameters)
+	if err != nil {
+		return err
+	}
+
+	client, err := GetHelmClient(
+		parameters.Cluster.RestConfig,
+		parameters.Namespace,
+	)
+	if err != nil {
+		return errors.Wrap(err, "create a helm client")
+	}
+
+	helmChart, helmVersion, err := getChartReference(parameters.Context, parameters.Cluster, client, appChart)
+	if err != nil {
+		return errors.Wrap(err, "retrieving chart reference")
+	}
+
+	releaseName := names.ReleaseName(parameters.Name)
+
+	err = cleanupReleaseIfNeeded(client, releaseName)
+	if err != nil {
+		return errors.Wrap(err, "cleaning up release")
+	}
+
+	// When the helm chart package or AppChart Spec.Values change, do not reuse values
+	// from the previous release. Old chart-specific values can break the upgrade.
+	reuseValues := shouldReuseHelmValues(
+		parameters.Context, parameters.Cluster, client, releaseName, appChart, helmChart, helmVersion)
+
+	chartSpec := hc.ChartSpec{
+		ReleaseName: releaseName,
+		ChartName:   helmChart,
+		Version:     helmVersion,
+		Namespace:   parameters.Namespace,
+		Wait:        true,
+		Atomic:      true, // implies `Wait true`
+		ValuesYaml:  params,
+		Timeout:     duration.ToDeployment(),
+		ReuseValues: reuseValues,
+	}
+
+	_, err = client.InstallOrUpgradeChart(context.Background(), &chartSpec, nil)
+
+	return err
+}
+
+// shouldReuseHelmValues is false when an existing release was installed from a different
+// chart package than the one about to be deployed, or when AppChart Spec.Values differ
+// from the release's chartConfig (two AppChart CRs wrapping the same package).
+//
+// chartRef/chartVersion come from getChartReference for the next AppChart so identity is
+// taken from loaded chart metadata (exact name + version), never from URL substrings.
+func shouldReuseHelmValues(
+	ctx context.Context,
+	cluster *kubernetes.Cluster,
+	client *SynchronizedClient,
+	releaseName string,
+	appChart *models.AppChartFull,
+	chartRef string,
+	chartVersion string,
+) bool {
+	logger := helpers.Logger.With("component", "helm-deploy")
+
+	rel, err := client.GetRelease(releaseName)
+	if err != nil || rel == nil || rel.Chart == nil || rel.Chart.Metadata == nil {
+		return true
+	}
+
+	prevName := rel.Chart.Metadata.Name
+	prevVersion := rel.Chart.Metadata.Version
+	if prevName == "" || prevVersion == "" {
+		logger.Infow("release chart metadata incomplete, disabling ReuseValues",
+			"release", releaseName)
+		return false
+	}
+
+	nextName, nextVersion, err := loadChartIdentity(ctx, cluster, client, appChart, chartRef, chartVersion)
+	if err != nil || nextName == "" || nextVersion == "" {
+		logger.Infow("unable to resolve next chart identity, disabling ReuseValues",
+			"release", releaseName, "error", err, "chartRef", chartRef, "chartVersion", chartVersion)
+		return false
+	}
+
+	if nextName != prevName || nextVersion != prevVersion {
+		logger.Infow("app chart package changed, disabling ReuseValues",
+			"release", releaseName,
+			"previous", fmt.Sprintf("%s-%s", prevName, prevVersion),
+			"next", fmt.Sprintf("%s-%s", nextName, nextVersion))
+		return false
+	}
+
+	if !sameStringMap(releaseChartConfig(rel), appChart.Values) {
+		logger.Infow("app chart Spec.Values changed, disabling ReuseValues",
+			"release", releaseName, "chart", nextName, "version", nextVersion)
+		return false
+	}
+
+	return true
+}
+
+// loadChartIdentity resolves the Helm chart name and version for the next AppChart from
+// the already-resolved chart reference (local path for URL charts, repo ref otherwise).
+func loadChartIdentity(
+	ctx context.Context,
+	cluster *kubernetes.Cluster,
+	client *SynchronizedClient,
+	appChart *models.AppChartFull,
+	chartRef string,
+	chartVersion string,
+) (string, string, error) {
+	if appChart.HelmRepo == "" {
+		ch, err := loader.Load(chartRef)
+		if err != nil {
+			return "", "", err
+		}
+		if ch.Metadata == nil {
+			return "", "", fmt.Errorf("chart metadata missing for %s", chartRef)
+		}
+		return ch.Metadata.Name, ch.Metadata.Version, nil
+	}
+
+	if registry.IsOCI(appChart.HelmRepo) {
+		// GetChart cannot resolve OCI references, it lacks the registry client. Pull the
+		// chart instead.
+		archive, cleanup, err := pullOCIChart(ctx, cluster, client, appChart.HelmRepo, chartRef, chartVersion)
+		if err != nil {
+			return "", "", err
+		}
+		defer cleanup()
+
+		ch, err := loader.Load(archive)
+		if err != nil {
+			return "", "", err
+		}
+		if ch.Metadata == nil {
+			return "", "", fmt.Errorf("chart metadata missing for %s", chartRef)
+		}
+		return ch.Metadata.Name, ch.Metadata.Version, nil
+	}
+
+	ch, _, err := client.GetChart(chartRef, &action.ChartPathOptions{Version: chartVersion})
+	if err != nil {
+		return "", "", err
+	}
+	if ch == nil || ch.Metadata == nil {
+		return "", "", fmt.Errorf("chart metadata missing for %s", chartRef)
+	}
+	return ch.Metadata.Name, ch.Metadata.Version, nil
+}
+
+// releaseChartConfig extracts the chartConfig map written by getValuesYAML from a release.
+func releaseChartConfig(rel *helmrelease.Release) map[string]string {
+	out := map[string]string{}
+	if rel == nil || rel.Config == nil {
+		return out
+	}
+
+	raw, ok := rel.Config["chartConfig"]
+	if !ok || raw == nil {
+		return out
+	}
+
+	switch m := raw.(type) {
+	case map[string]string:
+		for k, v := range m {
+			out[k] = v
+		}
+	case map[string]interface{}:
+		for k, v := range m {
+			out[k] = fmt.Sprint(v)
+		}
+	}
+
+	return out
+}
+
+func sameStringMap(a, b map[string]string) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+// Status is the status of a release
+type ReleaseStatus string
+
+const (
+	// StatusUnknown indicates that a release is in an uncertain state.
+	StatusUnknown ReleaseStatus = "unknown"
+	// StatusReady indicates that all the release's resources are in a ready state.
+	StatusReady ReleaseStatus = "ready"
+	// StatusNotReady indicates that not all the release's resources are in a ready state.
+	StatusNotReady ReleaseStatus = "not-ready"
+)
+
+// Release returns the named Helm release, including the associated resources. This is the internal
+// equivalent of the `helm status` command.
+func Release(ctx context.Context, cluster *kubernetes.Cluster,
+	namespace, releaseName string) (*helmrelease.Release, error) {
+
+	helmClient, err := GetHelmClient(cluster.RestConfig, namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	release, err := helmClient.Status(releaseName)
+	if err != nil {
+		return nil, errors.Wrapf(err, "getting release status %s - %s", namespace, releaseName)
+	}
+
+	return release, err
+}
+
+// Status maps the stored Helm release status to an internal ReleaseStatus.
+// This avoids fetching live resource states from the K8s API, which requires
+// one API call per resource in the release manifest and is expensive for list views.
+// The tradeoff is that Helm may report "deployed" briefly before all pods are fully
+// ready, but this is acceptable given the latency cost of per-resource checks.
+func Status(_ context.Context, _ *kubernetes.Cluster,
+	release *helmrelease.Release) (ReleaseStatus, error) {
+	switch release.Info.Status {
+	case helmrelease.StatusDeployed:
+		return StatusReady, nil
+	case
+		helmrelease.StatusPendingInstall,
+		helmrelease.StatusPendingUpgrade,
+		helmrelease.StatusPendingRollback:
+		return StatusNotReady, nil
+	default:
+		return StatusUnknown, nil
+	}
+}
+
+// syncNamespaceClientMap is holding a SynchronizedClient for each namespace
+var syncNamespaceClientMap sync.Map
+
+type SynchronizedClient struct {
+	namespace string
+	// mutexMap is holding the mutexes for the same releases
+	mutexMap   sync.Map
+	helmClient hc.Client
+}
+
+func GetHelmClient(
+	restConfig *rest.Config,
+	namespace string,
+) (*SynchronizedClient, error) {
+	options := &hc.RestConfClientOptions{
+		RestConfig: restConfig,
+		Options: &hc.Options{
+			Namespace:        namespace,         // Match chart spec
+			RepositoryCache:  "/tmp/.helmcache", // Hopefully reduces chart downloads.
+			RepositoryConfig: "/tmp/.helmrepo",  // s.a.
+			Linting:          true,
+			Debug:            true,
+			DebugLog: func(format string, v ...interface{}) {
+				helpers.Logger.Infow("helm", "report", fmt.Sprintf(format, v...))
+			},
+		},
+	}
+	helmClient, err := hc.NewClientFromRestConf(options)
+	if err != nil {
+		return nil, err
+	}
+	if concrete, ok := helmClient.(*hc.HelmClient); ok {
+		trustRegistryCAs(context.Background(), restConfig, concrete)
+	}
+
+	return GetNamespaceSynchronizedHelmClient(namespace, helmClient)
+}
+
+func GetNamespaceSynchronizedHelmClient(namespace string, helmClient hc.Client) (*SynchronizedClient, error) {
+	synchronizedHelmClient := &SynchronizedClient{
+		namespace:  namespace,
+		helmClient: helmClient,
+	}
+
+	// we are loading the SynchronizedClient for this namespace, if any
+	loadedSynchronizedHelmClient, _ := syncNamespaceClientMap.LoadOrStore(namespace, synchronizedHelmClient)
+	synchronizedHelmClient, ok := loadedSynchronizedHelmClient.(*SynchronizedClient)
+	if !ok {
+		return nil, errors.New("error while loading SynchronizedClient from the sync.Map")
+	}
+
+	return synchronizedHelmClient, nil
+}
+
+// cleanupReleaseIfNeeded will delete the helm release if it exists and is not
+// in "deployed" state. The reason is that helm will refuse to upgrade a release
+// that is in pending-install state. This would be the case, when the app container
+// is failing for whatever reason. The user may try to fix the problem by pushing
+// the application again and we want to allow that.
+func cleanupReleaseIfNeeded(c hc.Client, name string) error {
+	logger := helpers.Logger.With("component", "helm-cleanup")
+	r, err := c.GetRelease(name)
+	if err != nil {
+		if err == helmdriver.ErrReleaseNotFound {
+			return nil
+		}
+		return errors.Wrap(err, "getting the helm release")
+	}
+
+	if r.Info.Status == helmrelease.StatusDeployed {
+		return nil
+	}
+
+	logger.Infow("Will remove existing release with status", "status", string(r.Info.Status))
+	err = c.UninstallRelease(&hc.ChartSpec{
+		ReleaseName: name,
+		Wait:        true,
+	})
+
+	if err != nil {
+		logger.Errorw("uninstalling the release", "error", err, "status", r.Info.Status)
+
+		// Sometimes we get an error but the release was uninstalled anyway.
+		// Check again if the release exists.
+		r, errGet := c.GetRelease(name)
+		if errGet != nil {
+			if errGet == helmdriver.ErrReleaseNotFound {
+				return nil
+			}
+			return errors.Wrap(errGet, "getting the helm release after uninstall")
+		}
+
+		// The release still exists, return the original error
+		return errors.Wrapf(err, "uninstalling the release with status: %s", r.Info.Status)
+	}
+	return nil
+}
+
+// validateField checks a single custom value against its declaration.
+func ValidateField(key, value string, spec models.ChartSetting) (interface{}, error) {
+	if spec.Type == "string" {
+		if len(spec.Enum) > 0 {
+			for _, allowed := range spec.Enum {
+				if value == allowed {
+					return value, nil
+				}
+			}
+			return nil, fmt.Errorf(`setting "%s": illegal string "%s"`, key, value)
+		}
+		return value, nil
+	}
+	if spec.Type == "bool" {
+		flag, err := strconv.ParseBool(value)
+		if err != nil {
+			return nil, fmt.Errorf(`setting "%s": expected boolean, got "%s"`, key, value)
+		}
+		return flag, nil
+	}
+	if spec.Type == "integer" {
+		ivalue, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf(`setting "%s": expected integer, got "%s"`, key, value)
+		}
+		return ivalue, validateRange(float64(ivalue), key, value, spec.Minimum, spec.Maximum)
+	}
+	if spec.Type == "number" {
+		fvalue, err := strconv.ParseFloat(value, 64)
+		if err != nil {
+			return nil, fmt.Errorf(`setting "%s": expected number, got "%s"`, key, value)
+		}
+		return fvalue, validateRange(fvalue, key, value, spec.Minimum, spec.Maximum)
+	}
+
+	return nil, fmt.Errorf(`setting "%s": bad spec: unknown type "%s"`, key, spec.Type)
+}
+
+func validateRange(v float64, key, value, min, max string) error {
+	if min != "" {
+		minval, err := strconv.ParseFloat(min, 64)
+		if err != nil {
+			return fmt.Errorf(`setting "%s": bad spec: bad minimum "%s"`, key, min)
+		}
+		if v < minval {
+			return fmt.Errorf(`setting "%s": out of bounds, "%s" too small`, key, value)
+		}
+	}
+	if max != "" {
+		maxval, err := strconv.ParseFloat(max, 64)
+		if err != nil {
+			return fmt.Errorf(`setting "%s": bad spec: bad maximum "%s"`, key, max)
+		}
+		if v > maxval {
+			return fmt.Errorf(`setting "%s": out of bounds, "%s" too large`, key, value)
+		}
+	}
+	return nil
+}
+
+func installOrUpgradeChartWithRetry(ctx context.Context, client hc.Client,
+	chartSpec *hc.ChartSpec) error {
+	logger := helpers.Logger.With("component", "helm-install")
+
+	// This, the retry, should fix issue https://github.com/dflow-sh/kube-poc/packages/dflow/issues/2385
+
+	backoff := wait.Backoff{
+		Steps:    2, // Retry only once (2 tries)!
+		Duration: 10 * time.Millisecond,
+		Factor:   1.0,
+		Jitter:   0.1,
+	}
+
+	alwaysRetry := func(error) bool { return true }
+
+	return retry.OnError(backoff, alwaysRetry, func() error {
+		_, err := client.InstallOrUpgradeChart(ctx, chartSpec, nil)
+		if err != nil {
+			logger.Errorw("installing or upgrading service, retry", "error", err)
+		}
+		return err
+	})
+}
+
+func getChartReference(ctx context.Context, cluster *kubernetes.Cluster, client *SynchronizedClient, appChart *models.AppChartFull) (string, string, error) {
+	logger := helpers.Logger.With("component", "helm-chart-ref")
+	// chart, version, error
+	// See also part.go, fetchAppChart
+
+	logger.Infow("deploy app", "raw-appchart", appChart.HelmChart, "helm-repo", appChart.HelmRepo)
+
+	if appChart.HelmRepo == "" {
+		// The helm chart is either a local file, or a direct url to the chart location.
+
+		logger.Infow("deploy app", "appchart-url", appChart.HelmChart)
+
+		helmChart, err := urlcache.Get(ctx, appChart.HelmChart)
+		if err != nil {
+			return "", "", err
+		}
+
+		logger.Infow("deploy app", "appchart-file", helmChart)
+		return helmChart, "", nil
+	}
+
+	// The helm chart ref is a name in a repository.
+	// This name may have a version appended to it, separated from the actual chart by `:`.
+
+	// Decode the chart ref. IOW extract the possible version tag.
+
+	helmChart, helmVersion := splitChartVersion(appChart.HelmChart)
+
+	if registry.IsOCI(appChart.HelmRepo) {
+		// OCI registries are referenced directly by URL; they don't go through Helm's
+		// repo.yaml mechanism used below for classic (index.yaml) repositories.
+
+		if err := loginToOCIRegistryIfInternal(ctx, cluster, client, appChart.HelmRepo); err != nil {
+			return "", "", errors.Wrap(err, "logging into the OCI chart registry")
+		}
+
+		helmChart = ociChartRef(appChart.HelmRepo, helmChart)
+
+		logger.Infow("deploy app", "appchart", helmChart, "version", helmVersion)
+
+		return helmChart, helmVersion, nil
+	}
+
+	// Classic (index.yaml) repository. Ensure that the repository is locally known.
+
+	repositoryName := names.GenerateResourceName("hr-" + base64.StdEncoding.EncodeToString([]byte(appChart.HelmRepo)))
+	if err := client.AddOrUpdateChartRepo(repo.Entry{
+		Name: repositoryName,
+		URL:  appChart.HelmRepo,
+	}); err != nil {
+		return "", "", errors.Wrap(err, "creating the chart repository")
+	}
+
+	// Combine chart and repository to a proper in-repo reference.
+
+	helmChart = fmt.Sprintf("%s/%s", repositoryName, helmChart)
+
+	logger.Infow("deploy app", "appchart", helmChart, "version", helmVersion)
+
+	return helmChart, helmVersion, nil
+}
+
+// splitChartVersion splits an AppChart's chart reference `<name>[:<version>]` into its parts.
+// The version is empty when the reference has none.
+func splitChartVersion(chartRef string) (string, string) {
+	pieces := strings.SplitN(chartRef, ":", 2)
+	if len(pieces) == 2 {
+		return pieces[0], pieces[1]
+	}
+	return chartRef, ""
+}
+
+// ociChartRef combines an OCI repository URL and a chart name into the chart reference
+// understood by helm, i.e. `oci://<host>/<path>/<chart>`.
+func ociChartRef(repoURL, chartName string) string {
+	return fmt.Sprintf("%s/%s", strings.TrimSuffix(repoURL, "/"), chartName)
+}
+
+// FetchOCIChartArchive pulls the chart of an AppChart hosted in an OCI registry into a fresh
+// temporary directory, and returns the path of the chart archive there. The caller has to invoke
+// the returned cleanup function when done with the file.
+//
+// This is the OCI counterpart of the url based fetch used for the other kinds of AppCharts.
+// It is used where the chart archive itself is needed, instead of just deploying it.
+func FetchOCIChartArchive(ctx context.Context, cluster *kubernetes.Cluster, appChart *models.AppChartFull) (string, func(), error) {
+	client, err := GetHelmClient(cluster.RestConfig, "")
+	if err != nil {
+		return "", func() {}, errors.Wrap(err, "create a helm client")
+	}
+
+	chartName, chartVersion := splitChartVersion(appChart.HelmChart)
+
+	return pullOCIChart(ctx, cluster, client, appChart.HelmRepo, ociChartRef(appChart.HelmRepo, chartName), chartVersion)
+}
+
+// pullOCIChart logs into the registry of the OCI repository, if that is dFlow's own, and pulls
+// the chart with the given reference and version into a fresh temporary directory. It returns the
+// path of the chart archive there, and a function removing the directory again. The function is
+// safe to call, and a no-op, when an error is returned.
+//
+// The login is done here, and not left to the caller, so that the pull does not depend on a login
+// made earlier on the same shared client.
+func pullOCIChart(
+	ctx context.Context,
+	cluster *kubernetes.Cluster,
+	client *SynchronizedClient,
+	repoURL, chartRef, version string,
+) (string, func(), error) {
+	noCleanup := func() {}
+
+	if err := loginToOCIRegistryIfInternal(ctx, cluster, client, repoURL); err != nil {
+		return "", noCleanup, errors.Wrap(err, "logging into the OCI chart registry")
+	}
+
+	dir, err := os.MkdirTemp("", "dflow-oci-chart-")
+	if err != nil {
+		return "", noCleanup, errors.Wrap(err, "creating chart download directory")
+	}
+	cleanup := func() { _ = os.RemoveAll(dir) }
+
+	archive, err := client.Pull(chartRef, version, dir)
+	if err != nil {
+		cleanup()
+		return "", noCleanup, errors.Wrap(err, "pulling the OCI chart")
+	}
+
+	return archive, cleanup, nil
+}
+
+// loginToOCIRegistryIfInternal logs the helm client into the given OCI registry host when, and
+// only when, it matches dFlow's own internal container registry. Custom AppCharts pointing at
+// dFlow's registry are pushed there by the server, never with user-supplied credentials, so
+// the same registry-creds secret already used for application images is reused here. An OCI
+// registry that isn't dFlow's own (e.g. a public registry hosting the default charts) is left
+// for anonymous pull, the same way initHelmOCIRegistryOrRepository handles it for CatalogServices.
+func loginToOCIRegistryIfInternal(ctx context.Context, cluster *kubernetes.Cluster, client *SynchronizedClient, ociRepoURL string) error {
+	creds, err := internalRegistryCredentials(ctx, cluster, ociRepoURL)
+	if err != nil {
+		return err
+	}
+	if creds == nil {
+		return nil
+	}
+
+	// Note that helm applies the insecure setting to the registry client itself, i.e. it stays in
+	// effect for all later registry operations on this (per namespace, shared) client. That is
+	// acceptable as the client is only used for dFlow's own charts and registry. Keep it so, do
+	// not route unrelated registries through the same client.
+	return client.RegistryLogin(
+		creds.Hostname,
+		creds.Username,
+		creds.Password,
+		action.WithInsecure(creds.Insecure),
+	)
+}
+
+// registryLogin holds what is needed to log into a registry.
+type registryLogin struct {
+	URL      string // As recorded in the registry credentials, possibly with scheme
+	Hostname string
+	Username string
+	Password string // nolint:gosec // intentional auth field for registry
+	// Insecure is set for registries running inside the cluster, with a self-signed certificate.
+	// Their certificate is not verified, like it is not for application images, see
+	// internal/application/application.go.
+	Insecure bool
+	// RootCAs verify an external registry with a private CA, see
+	// registryRootCAs. nil for the system CAs.
+	RootCAs *x509.CertPool
+}
+
+// registryLoginFor returns what is needed to log into the registry with the given host, from the
+// registry credentials. It returns nil if there are no credentials for the host.
+func registryLoginFor(details *dflowregistry.ConnectionDetails, hostname string) *registryLogin {
+	for _, creds := range details.RegistryCredentials {
+		if ociHostname(creds.URL) == hostname {
+			return &registryLogin{
+				URL:      creds.URL,
+				Hostname: hostname,
+				Username: creds.Username,
+				Password: creds.Password,
+				Insecure: dflowregistry.IsInClusterHost(hostname),
+			}
+		}
+	}
+
+	return nil
+}
+
+// internalRegistryCredentials returns the credentials for the given OCI registry, if it is
+// dFlow's own registry. It returns nil if not, or if there is no registry-creds secret at all
+// (e.g. a setup without an internal registry). Any other failure to read the secret is an error.
+// Silently ignoring it would only surface later as a confusing authentication failure
+// during the chart pull.
+func internalRegistryCredentials(ctx context.Context, cluster *kubernetes.Cluster, ociRepoURL string) (*registryLogin, error) {
+	hostname := ociHostname(ociRepoURL)
+
+	connectionDetails, err := dflowregistry.GetConnectionDetails(
+		ctx, cluster, helmchart.Namespace(), dflowregistry.CredentialsSecretName)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, errors.Wrap(err, "getting the registry connection details")
+	}
+
+	return registryLoginFor(connectionDetails, hostname), nil
+}
+
+// ociLocation strips the "oci://" scheme, any other URL scheme, and a trailing
+// slash from a registry reference, keeping host and path. The registry
+// credentials may hold their URLs with a scheme.
+func ociLocation(url string) string {
+	location := strings.TrimPrefix(url, "oci://")
+	location = strings.TrimPrefix(location, "https://")
+	location = strings.TrimPrefix(location, "http://")
+	return strings.TrimSuffix(location, "/")
+}
+
+// ociHostname strips the "oci://" scheme, any other URL scheme, and path/trailing slash from a
+// registry reference, leaving just the "host:port" part for comparison.
+func ociHostname(url string) string {
+	hostname := strings.TrimPrefix(url, "oci://")
+	hostname = strings.TrimPrefix(hostname, "https://")
+	hostname = strings.TrimPrefix(hostname, "http://")
+	return strings.SplitN(hostname, "/", 2)[0]
+}
+
+func getValuesYAML(appChart *models.AppChartFull, parameters ChartParameters) (string, error) {
+	logger := helpers.Logger.With("component", "helm-values")
+	logger.Infow("deploy app, get values.yaml")
+
+	// ATTENTION: The configurations slice may contain multiple mount points for the same
+	// configuration, for backward compatibility. We dedup this so that there is only one volume
+	// per configuration.
+
+	configurationNames := []string{}
+	have := map[string]bool{}
+	for _, c := range parameters.Configurations {
+		if _, found := have[c.Name]; found {
+			continue
+		}
+		configurationNames = append(configurationNames, c.Name)
+		have[c.Name] = true
+	}
+
+	params := ChartParam{
+		DFlow: DFlowParam{
+			AppName:        parameters.Name,
+			Env:            parameters.Environment.List(),
+			ImageUrl:       parameters.ImageURL,
+			ReplicaCount:   parameters.Instances,
+			Configurations: configurationNames,
+			ConfigPaths:    parameters.Configurations,
+			StageID:        parameters.StageID,
+			TlsIssuer:      viper.GetString("tls-issuer"),
+			Username:       parameters.Username,
+			// Ingress, Gateway, Start, Routes: see below
+		},
+		// Chart, User: see below
+	}
+
+	name := viper.GetString("ingress-class-name")
+	if name != "" {
+		params.DFlow.Ingress = name
+		logger.Infow("deploy app", "ingress-class", name)
+	}
+
+	// if opting into Gateway API, pass dFlow's gateway class to AppChart deployment
+	gatewayClass := viper.GetString("gateway-class-name")
+	if gatewayClass != "" {
+		params.DFlow.Gateway = gatewayClass
+		logger.Infow("deploy app", "gateway-class", gatewayClass)
+	}
+
+	if parameters.Start != nil {
+		params.DFlow.Start = fmt.Sprintf(`%d`, *parameters.Start)
+		logger.Infow("deploy app", "start", params.DFlow.Start)
+	}
+	if len(parameters.Routes) > 0 {
+		logger.Infow("deploy app, routes and domains")
+
+		for _, desired := range parameters.Routes {
+			r := routes.FromString(desired)
+			rdot := strings.ReplaceAll(r.String(), "/", ".")
+
+			rp := RouteParam{
+				Id:     rdot,
+				Domain: r.Domain,
+				Path:   r.Path,
+			}
+
+			domainSecret, err := domain.MatchDo(r.Domain, parameters.Domains)
+
+			logger.Infow("deploy app, domain match", "domain", r.Domain,
+				"secret", domainSecret, "err", err)
+
+			// Should we treat a match error as something to stop for?
+			// The error can only come from `filepath.Match()`
+			if err == nil && domainSecret != "" {
+				// Pass the found secret
+				rp.Secret = domainSecret
+			}
+			params.DFlow.Routes = append(params.DFlow.Routes, rp)
+		}
+	}
+
+	// Add the settings, if any. This also performs last-minute validation.  See also
+	// internal/application ValidateCV. Both use the core helper `ValidateField`
+	// implemented here (Avoid import cycle).
+	//
+	// While nothing should trigger here we cannot be sure. Because it is currently
+	// technically possible to change the app settings in the time window between a
+	// client triggering validation and actually deploying the app image. This window
+	// can actually be quite large, due to the time taken by staging and image
+	// download.
+	//
+	// It doesn't even have to be malicious. Just a user B doing a normal update while
+	// user A deployed, and landing in the window.
+
+	if len(parameters.Settings) > 0 {
+		logger.Infow("deploy app, settings")
+
+		params.User = make(map[string]interface{})
+
+		for field, value := range parameters.Settings {
+			spec, found := appChart.Settings[field]
+			if !found {
+				return "", fmt.Errorf("unable to deploy. Setting '%s' unknown", field)
+			}
+
+			// Note: Here the interface{} result of the properly typed value is
+			// important. It ensures that the map values are properly typed for yaml
+			// serialization.
+
+			v, err := ValidateField(field, value, spec)
+			if err != nil {
+				return "", fmt.Errorf(`unable to deploy. %s`, err.Error())
+			}
+			params.User[field] = v
+
+			logger.Infow("deploy app, settings", "field", field, "value", v)
+		}
+	}
+
+	params.Chart = appChart.Values
+
+	// At last generate the properly quoted values.yaml string
+
+	logger.Infow("deploy app", "helm values.raw", params)
+
+	yamlParameters, err := yaml.Marshal(params)
+	if err != nil {
+		return "", errors.Wrap(err, "marshalling the parameters")
+	}
+
+	yamlString := string(yamlParameters)
+
+	logger.Infow("deploy app", "helm values.yaml", yamlString)
+	logger.Infow("deploy app, return values.yaml")
+	return yamlString, nil
+}

@@ -1,0 +1,406 @@
+# Default action
+# This action will contain all the endpoints that are allowed by default
+- id: default
+  name: Default
+  routes:
+    - AuthToken
+    - GitProxy
+    # namespace read endpoints
+    - Namespaces
+    - NamespaceShow
+    # namespace autocomplete
+    - NamespacesMatch
+    - NamespacesMatch0
+
+# Namespace Write
+- id: namespace_write
+  name: Namespace Write
+  routes:
+    - NamespaceCreate
+    - NamespaceDelete
+    - NamespaceBatchDelete
+
+# Applications related actions
+- id: app
+  name: App
+  dependsOn:
+    - app_read
+    - app_create
+    - app_delete
+    - app_update
+    - app_scale
+    - app_update_env
+    - app_update_routes
+    - app_update_configs
+    - app_update_settings
+    - app_update_chart
+    - app_stage
+    - app_deploy
+    - app_export
+    - app_write
+    - app_logs
+    - app_exec
+    - app_portforward
+
+# App Read
+- id: app_read
+  name: App Read
+  dependsOn:
+    - chart_read
+  routes:
+    # app read endpoints
+    - AllApps
+    - AllAppsGrouped
+    - Apps
+    - AppShow
+    - StagingComplete
+    - AppDeployment
+    - AppRunning
+    - AppValidateCV
+    # app autocomplete
+    - AppMatch
+    - AppMatch0
+    # app env endpoints
+    - EnvList
+    - EnvShow
+    # app env autocomplete
+    - EnvMatch
+    - EnvMatch0
+
+# Allow users to restart an app without write permissions
+- id: app_restart
+  name: App Restart
+  dependsOn:
+    - app_read
+  routes:
+    - AppRestart
+
+# App Write
+- id: app_write
+  name: App Write
+  dependsOn:
+    - app_read
+    - app_logs
+    - app_create
+    - app_delete
+    - app_update
+    - app_scale
+    - app_update_env
+    - app_update_routes
+    - app_update_configs
+    - app_update_settings
+    - app_update_chart
+    - app_stage
+    - app_deploy
+    - app_export
+    - app_restart
+
+# App Create
+- id: app_create
+  name: App Create
+  dependsOn:
+    - app_read
+    - app_logs
+  routes:
+    - AppCreate
+    - AppImportGit
+    - AppUpload
+
+# App Delete
+- id: app_delete
+  name: App Delete
+  dependsOn:
+    - app_read
+  routes:
+    - AppDelete
+    - AppBatchDelete
+
+# App Update
+- id: app_update
+  name: App Update
+  dependsOn:
+    - app_read
+  routes:
+    - AppUpdate
+
+# App Scale
+- id: app_scale
+  name: App Scale
+  dependsOn:
+    - app_read
+  routes:
+    - AppUpdate
+
+# App Update Environment
+- id: app_update_env
+  name: App Update Environment
+  dependsOn:
+    - app_read
+  routes:
+    - EnvSet
+    - EnvUnset
+
+# App Update Configurations
+- id: app_update_configs
+  name: App Update Configurations
+  dependsOn:
+    - app_read
+  routes:
+    - ConfigurationBindingCreate
+    - ConfigurationBindingDelete
+
+# App Update Routes
+- id: app_update_routes
+  name: App Update Routes
+  dependsOn:
+    - app_read
+  routes:
+    - AppUpdate
+
+# App Update Settings
+- id: app_update_settings
+  name: App Update Settings
+  dependsOn:
+    - app_read
+  routes:
+    - AppUpdate
+
+# App Update Chart
+- id: app_update_chart
+  name: App Update Chart
+  dependsOn:
+    - app_read
+  routes:
+    - AppUpdate
+
+# App Stage
+- id: app_stage
+  name: App Stage
+  dependsOn:
+    - app_read
+    - app_logs
+  routes:
+    - AppStage
+    - AppSourcePatch
+    - AppSync
+
+# App Deploy
+- id: app_deploy
+  name: App Deploy
+  dependsOn:
+    - app_read
+    - app_logs
+  routes:
+    - AppDeploy
+    - AppDeployments
+
+# App Export
+- id: app_export
+  name: App Export
+  dependsOn:
+    - app_read
+  routes:
+    - AppPart # export part
+    - AppExport # export to registry
+    - AppSource # retrieve staging source
+
+# App Logs
+- id: app_logs
+  name: App Logs
+  wsRoutes:
+    - AppLogs
+    - StagingLogs
+    - StagingCompleteWs
+
+# App Exec
+- id: app_exec
+  name: App Exec
+  wsRoutes:
+    - AppExec
+
+# App PortForward
+- id: app_portforward
+  name: App PortForward
+  wsRoutes:
+    - AppPortForward
+
+# App Chart related actions
+- id: chart
+  name: Chart
+  dependsOn:
+    - chart_read
+    - chart_write
+
+# Chart Read
+- id: chart_read
+  name: Chart Read
+  routes:
+    - ChartList
+    - ChartShow
+    - ChartMatch
+    - ChartMatch0
+
+# Chart Write
+- id: chart_write
+  name: Chart Write
+  dependsOn:
+    - chart_read
+  routes:
+    - ChartCreate
+    - ChartPush
+    - ChartUpdate
+    - ChartDelete
+
+# Builder Image related actions
+- id: builderimage
+  name: Builder Image
+  dependsOn:
+    - builderimage_read
+    - builderimage_write
+
+# Builder Image Read
+- id: builderimage_read
+  name: Builder Image Read
+  routes:
+    - BuilderImageList
+    - BuilderImageShow
+    - BuilderImageMatch
+    - BuilderImageMatch0
+
+# Builder Image Write
+- id: builderimage_write
+  name: Builder Image Write
+  dependsOn:
+    - builderimage_read
+  routes:
+    - BuilderImageCreate
+    - BuilderImageUpdate
+    - BuilderImageDelete
+
+# Configuration related actions
+- id: configuration
+  name: Configuration
+  dependsOn:
+    - configuration_read
+    - configuration_write
+
+# Configuration Read
+- id: configuration_read
+  name: Configuration Read
+  routes:
+    # configuration read endpoints
+    - ConfigurationApps
+    - AllConfigurations
+    - Configurations
+    - ConfigurationShow
+    # configuration autocomplete
+    - ConfigurationMatch
+    - ConfigurationMatch0
+
+# Configuration Write
+- id: configuration_write
+  name: Configuration Write
+  dependsOn:
+    - configuration_read
+  routes:
+    - ConfigurationCreate
+    - ConfigurationBatchDelete
+    - ConfigurationDelete
+    - ConfigurationUpdate
+    - ConfigurationReplace
+
+# Service related actions
+- id: service
+  name: Service
+  dependsOn:
+    - service_read
+    - service_write
+    - service_portforward
+
+# Service Read
+- id: service_read
+  name: Service Read
+  routes:
+    # service catalog endpoints
+    - ServiceCatalog
+    - ServiceCatalogShow
+    - ServiceCatalogMatch
+    - ServiceCatalogMatch0
+    # service read endpoints
+    - ServiceApps
+    - AllServices
+    - ServiceList
+    - ServiceShow
+    # service autocomplete endpoints
+    - ServiceMatch
+    - ServiceMatch0
+
+# Service Write
+- id: service_write
+  name: Service Write
+  dependsOn:
+    - service_read
+  routes:
+    # service catalog write endpoints
+    - ServiceCatalogCreate
+    - ServiceCatalogUpdate
+    - ServiceCatalogDelete
+    # service write endpoints
+    - ServiceCreate
+    - ServiceDelete
+    - ServiceBatchDelete
+    - ServiceUpdate
+    - ServiceReplace
+    - ServiceBind
+    - ServiceUnbind
+    - ServiceBatchBind
+
+# Service Write
+- id: service_portforward
+  name: Service Port Forward
+  wsRoutes:
+    - ServicePortForward
+
+# Gitconfig related actions
+- id: gitconfig
+  name: Gitconfig
+  dependsOn:
+    - gitconfig_read
+    - gitconfig_write
+
+# Gitconfig Read
+- id: gitconfig_read
+  name: Gitconfig Read
+  routes:
+    - Gitconfigs
+    - GitconfigShow
+    - GitconfigsMatch
+    - GitconfigsMatch0
+    - GitconfigSuggest
+
+# Gitconfig Write
+- id: gitconfig_write
+  name: Gitconfig Write
+  dependsOn:
+    - gitconfig_read
+  routes:
+    - GitconfigCreate
+    - GitconfigDelete
+    - GitconfigBatchDelete
+
+# Export Registries
+- id: export_registries_read
+  name: Export Registries
+  routes:
+    - Exportregistries
+    - ExportregistriesMatch
+    - ExportregistriesMatch0
+
+# Support Bundle
+# System-wide operation that collects logs from all dFlow components
+# Should be restricted to admin users
+- id: support_bundle
+  name: Support Bundle
+  routes:
+    - SupportBundle
+    - NodeReport

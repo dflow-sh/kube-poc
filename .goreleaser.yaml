@@ -1,0 +1,55 @@
+version: 2
+
+project_name: dflow
+
+builds:
+  - id: dflow
+    main: ./apps/cli
+    binary: dflow
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+
+archives:
+  - id: dflow
+    formats: [binary]
+    name_template: "dflow-{{ .Os }}-{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+changelog:
+  disable: true
+
+release:
+  extra_files:
+    - glob: chart-package/dflow-*.tgz
+
+dockers_v2:
+  - dockerfile: images/Dockerfile.release
+    ids:
+      - dflow
+    images:
+      - ghcr.io/dflow-sh/dflow-server
+    tags:
+      - "{{ .Tag }}"
+      - latest
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    extra_files:
+      - docs/references/api/swagger.json
+      - packages/helm-chart/app-charts
+    labels:
+      org.opencontainers.image.source: https://github.com/dflow-sh/kube-poc
+      org.opencontainers.image.title: dflow-server
