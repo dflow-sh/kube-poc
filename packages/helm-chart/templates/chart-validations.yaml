@@ -13,3 +13,6 @@
 {{- if (empty .Values.global.domain) }}
 {{- fail "domain cannot be empty" }}
 {{- end }}
+{{- if or (gt (int .Values.server.replicaCount) 1) .Values.server.autoscaling.enabled }}
+{{- fail "server.replicaCount must stay 1 and server.autoscaling.enabled must stay false. dflow-server is not safe as more than one pod: websocket tokens are signed with a per-process key, every pod mounts the ReadWriteOnce image-export volume, and Helm upgrades are locked only inside one process. See docs/INSTALL.md." }}
+{{- end }}

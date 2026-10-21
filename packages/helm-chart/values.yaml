@@ -143,8 +143,13 @@ server:
   # requests:
   #   cpu: 100m
   #   memory: 128Mi
+  # Must stay 1. A second pod cannot mount image-export-pvc (ReadWriteOnce),
+  # websocket JWTs are signed with a key generated in each process, and the
+  # Helm client lock is per process. The chart rejects a higher count.
+  # See docs/INSTALL.md.
   replicaCount: 1
   # This section is for setting up autoscaling more information can be found here: https://kubernetes.io/docs/concepts/workloads/autoscaling/
+  # Leave enabled false. The chart rejects autoscaling because a second pod is unsafe.
   autoscaling:
     enabled: false
     minReplicas: 1
@@ -403,7 +408,12 @@ dex:
 # extraEnv:
 # - name: MY_ENV_VAR
 #   value: "1.0"
-# SeaweedFS subchart values (S3-compatible storage)
+# SeaweedFS subchart values (S3-compatible storage).
+# Defaults stay at one master, one volume, and one filer. The upstream chart
+# gives masters a required pod anti-affinity, and master quorum needs a
+# majority, so raising master.replicas before three nodes are Ready leaves
+# S3 unavailable. After three servers exist, docs/INSTALL.md shows the
+# replica and replicationPlacement values.
 seaweedfs:
   enabled: true
   fullnameOverride: seaweedfs
@@ -468,6 +478,11 @@ s3gw:
   storageClass:
     create: false
     name: ""
+# One registry pod. Its disk is not replicated. emptyDir (the default below)
+# is removed when the pod is rescheduled. Do not raise the Deployment replica
+# count: two registry processes would not share blobs. For a registry that
+# survives a node loss, set enabled false and point global.registryURL at an
+# external registry. See docs/INSTALL.md.
 containerregistry:
   enabled: true
   image:
