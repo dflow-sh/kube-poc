@@ -4,8 +4,12 @@ dFlow is a Kubernetes application platform. This repository is the API server,
 the `dflow` CLI, and the Helm chart. There is no UI in this tree. `apps/web`
 is reserved for a later UI.
 
-The server and CLI follow the Epinio API and command set, rebranded as dFlow.
+The server and CLI implement the dFlow API and command set.
 See `NOTICE` and `LICENSE` (Apache-2.0).
+
+Changes: user-visible naming in this file is dFlow. Upstream copyright and
+license notices are unchanged and live in `NOTICE`, `LICENSE`, and the
+copyright headers of derived source files.
 
 ## Layout
 
