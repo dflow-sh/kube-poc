@@ -1,0 +1,88 @@
+// Copyright © 2021 - 2023 SUSE LLC
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//     http://www.apache.org/licenses/LICENSE-2.0
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package middleware
+
+import (
+	"net/http"
+
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/authtoken"
+	"github.com/dflow-sh/kube-poc/packages/dflow/api/v1/response"
+	"github.com/dflow-sh/kube-poc/packages/dflow/auth"
+	"github.com/dflow-sh/kube-poc/packages/dflow/cli/server/requestctx"
+	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v4"
+
+	apierrors "github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/errors"
+)
+
+// TokenAuth middleware is used to authenticate a user from a 'authtoken'
+// It's used when trying to establish a websocket connections for authenticated users.
+func TokenAuth(ctx *gin.Context) {
+	logger := requestctx.Logger(ctx.Request.Context()).With("component", "TokenAuth")
+	logger.Debugw("Authtoken authentication")
+
+	token := ctx.Query("authtoken")
+	claims, err := authtoken.Validate(token)
+	if err != nil {
+		apiErr := apierrors.NewAPIError("unknown token validation error", http.StatusUnauthorized)
+		if ve, ok := err.(*jwt.ValidationError); ok {
+			if ve.Errors&jwt.ValidationErrorMalformed != 0 {
+				apiErr.Title = "malformed token format"
+
+			} else if ve.Errors&(jwt.ValidationErrorExpired|jwt.ValidationErrorNotValidYet) != 0 {
+				apiErr.Title = "token expired"
+
+			} else {
+				apiErr.Title = "cannot handle token"
+			}
+		}
+
+		// detailed log message
+		logger.Debugw(apiErr.Title, "error", err.Error())
+		// not too specific log message for unauthorized client
+		response.Error(ctx, apiErr)
+		ctx.Abort()
+		return
+	}
+
+	authService, err := auth.NewAuthServiceFromContext(ctx)
+	if err != nil {
+		response.Error(ctx, apierrors.InternalError(err))
+		ctx.Abort()
+		return
+	}
+
+	// find the user and add it to the context
+	user, err := authService.GetUserByUsername(ctx, claims.Username)
+	if err != nil {
+		response.Error(ctx, apierrors.InternalError(err))
+		ctx.Abort()
+		return
+	}
+
+	// Match Authentication middleware: merge namespaces from namespaced roles into the user
+	// and persist when needed. Websocket routes skip Authentication, so without this,
+	// NamespaceAuthorization can deny App Shell even when HTTP API calls work.
+	updatedUser, needsUpdate := auth.IsUpdateUserNeeded(user)
+	if needsUpdate {
+		user, err = authService.UpdateUser(ctx, updatedUser)
+		if err != nil {
+			response.Error(ctx, apierrors.InternalError(err, "updating user"))
+			ctx.Abort()
+			return
+		}
+	}
+
+	newCtx := ctx.Request.Context()
+	newCtx = requestctx.WithUser(newCtx, user)
+	ctx.Request = ctx.Request.Clone(newCtx)
+}

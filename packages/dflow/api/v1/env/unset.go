@@ -1,0 +1,69 @@
+// Copyright © 2021 - 2023 SUSE LLC
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//     http://www.apache.org/licenses/LICENSE-2.0
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package env
+
+import (
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
+	"github.com/dflow-sh/kube-poc/packages/dflow/api/v1/deploy"
+	"github.com/dflow-sh/kube-poc/packages/dflow/api/v1/response"
+	"github.com/dflow-sh/kube-poc/packages/dflow/application"
+	"github.com/dflow-sh/kube-poc/packages/dflow/cli/server/requestctx"
+	"github.com/gin-gonic/gin"
+
+	apierror "github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/errors"
+	"github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/models"
+)
+
+// Unset handles the API endpoint /namespaces/:namespace/applications/:app/environment/:env (DELETE)
+// It receives the namespace, application name, var name, and removes the
+// variable from the application's environment.
+func Unset(c *gin.Context) apierror.APIErrors {
+	ctx := c.Request.Context()
+	username := requestctx.User(ctx).Username
+
+	namespaceName := c.Param("namespace")
+	appName := c.Param("app")
+	varName := c.Param("env")
+
+	requestctx.Logger(ctx).Infow("processing environment variable removal",
+		"namespace", namespaceName, "app", appName, "var", varName)
+
+	cluster, err := kubernetes.GetCluster(ctx)
+	if err != nil {
+		return apierror.InternalError(err)
+	}
+
+	app, err := application.Lookup(ctx, cluster, namespaceName, appName)
+	if err != nil {
+		return apierror.InternalError(err)
+	}
+	if app == nil {
+		return apierror.AppIsNotKnown(appName)
+	}
+
+	err = application.EnvironmentUnset(ctx, cluster, app.Meta, varName)
+	if err != nil {
+		return apierror.InternalError(err)
+	}
+
+	if app.Workload != nil && app.Status == models.ApplicationRunning {
+		_, apierr := deploy.DeployApp(ctx, cluster, app.Meta, username, "")
+		if apierr != nil {
+			return apierr
+		}
+	} else if app.Workload != nil {
+		requestctx.Logger(ctx).Infow("environment variable was removed, but restart was skipped because application is not running", "status", app.Status)
+	}
+
+	response.OK(c)
+	return nil
+}

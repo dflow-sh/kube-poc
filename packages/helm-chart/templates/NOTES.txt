@@ -1,0 +1,12 @@
+To interact with your dFlow installation download the latest dflow binary from https://github.com/dflow-sh/kube-poc/packages/dflow/releases/latest.
+
+Login to the cluster with any of
+{{ range .Values.api.users }}
+    `dflow login -u {{ .username }} https://dflow.{{ $.Values.global.domain }}`
+{{- end }}
+
+or go to the dashboard at: https://dflow.{{ .Values.global.domain }}
+
+If you didn't specify a password the default one is `password`.
+
+For more information about dFlow, feel free to checkout https://dflow.sh/ and https://docs.dflow.sh/.

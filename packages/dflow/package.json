@@ -1,0 +1,9 @@
+{
+  "name": "@dflow/server-lib",
+  "private": true,
+  "scripts": {
+    "build": "go build ./...",
+    "test": "go test ./...",
+    "lint": "go vet ./..."
+  }
+}

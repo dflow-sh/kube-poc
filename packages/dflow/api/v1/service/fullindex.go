@@ -1,0 +1,118 @@
+// Copyright © 2021 - 2023 SUSE LLC
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//     http://www.apache.org/licenses/LICENSE-2.0
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package service
+
+import (
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
+	"github.com/dflow-sh/kube-poc/packages/dflow/api/v1/response"
+	"github.com/dflow-sh/kube-poc/packages/dflow/application"
+	"github.com/dflow-sh/kube-poc/packages/dflow/auth"
+	"github.com/dflow-sh/kube-poc/packages/dflow/cli/server/requestctx"
+	"github.com/dflow-sh/kube-poc/packages/dflow/services"
+	apierror "github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/errors"
+	"github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/models"
+
+	"github.com/gin-gonic/gin"
+)
+
+func FullIndex(c *gin.Context) apierror.APIErrors {
+	ctx := c.Request.Context()
+	user := requestctx.User(ctx)
+
+	cluster, err := kubernetes.GetCluster(ctx)
+	if err != nil {
+		return apierror.InternalError(err)
+	}
+
+	kubeServiceClient, err := services.NewKubernetesServiceClient(cluster)
+	if err != nil {
+		return apierror.InternalError(err)
+	}
+
+	serviceList, err := kubeServiceClient.ListAll(ctx)
+	if err != nil {
+		return apierror.InternalError(err)
+	}
+
+	namespaces := response.GetNamespacesParam(c)
+
+	filteredServices := auth.FilterResources(user, serviceList)
+	filteredServices = auth.FilterByNamespaces(filteredServices, namespaces)
+
+	filteredServices = filterServices(
+		filteredServices,
+		response.GetSearchParam(c),
+		getCatalogServiceParam(c),
+	)
+
+	if page, pageSize, ok := response.GetPaginationParams(c, 1, 25); ok {
+		total := len(filteredServices)
+		start := (page - 1) * pageSize
+		if start >= total {
+			start = total
+		}
+		end := start + pageSize
+		if end > total {
+			end = total
+		}
+		pageServices := filteredServices[start:end]
+
+		// Scope the binding lookup to just the namespaces on this page.
+		nsSet := map[string]struct{}{}
+		for _, svc := range pageServices {
+			nsSet[svc.Meta.Namespace] = struct{}{}
+		}
+		pageNamespaces := make([]string, 0, len(nsSet))
+		for ns := range nsSet {
+			pageNamespaces = append(pageNamespaces, ns)
+		}
+
+		appsOf, err := application.ServicesBoundAppsNamesForNamespaces(
+			ctx,
+			cluster,
+			pageNamespaces,
+		)
+		if err != nil {
+			return apierror.InternalError(err)
+		}
+
+		response.OKReturn(c, response.BuildPaginatedResponse(
+			extendWithBoundApps(pageServices, appsOf),
+			page,
+			pageSize,
+			total,
+		))
+		return nil
+	}
+
+	appsOf, err := application.ServicesBoundAppsNames(ctx, cluster, "")
+	if err != nil {
+		return apierror.InternalError(err)
+	}
+
+	response.OKReturn(c, extendWithBoundApps(filteredServices, appsOf))
+	return nil
+}
+
+func extendWithBoundApps(
+	services models.ServiceList,
+	appsOf map[string][]string,
+) models.ServiceList {
+	theServices := models.ServiceList{}
+	for _, service := range services {
+		key := application.ServiceKey(service.Meta.Name, service.Meta.Namespace)
+
+		service.BoundApps = appsOf[key]
+		theServices = append(theServices, service)
+	}
+	return theServices
+}

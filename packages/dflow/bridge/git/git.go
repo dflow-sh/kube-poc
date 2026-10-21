@@ -1,0 +1,383 @@
+// Copyright © 2021 - 2023 SUSE LLC
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//     http://www.apache.org/licenses/LICENSE-2.0
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package git
+
+import (
+	"context"
+	"fmt"
+	"net/url"
+	"sort"
+	"strconv"
+	"strings"
+
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helmchart"
+	"github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/models"
+	"github.com/pkg/errors"
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+)
+
+type SecretLister interface {
+	List(ctx context.Context, opts metav1.ListOptions) (*v1.SecretList, error)
+}
+
+type Manager struct {
+	SecretLister   SecretLister
+	Configurations []Configuration
+}
+
+// Configuration is used to customize the Git requests for a  specific git provider.
+// The only required field is the URL, needed to check the specific instance to
+// apply the configuration. If the UserOrg and/or the Repository are also
+// specified then the most specific configuration will be used.
+type Configuration struct {
+	// Used to indicate if any user in the dflow org can use config
+	Global bool
+	// ID of the configuration (it maps to the kubernetes secret)
+	ID string
+	// CreatedAt is when the gitconfig (Secret) was created (from Secret.CreationTimestamp).
+	CreatedAt metav1.Time
+	// URL is the full url (schema/host/port) used to match a particular instance
+	URL      string
+	Provider models.GitProvider
+	// Username and Password are used to perform a BasicAuth.
+	// For Github/Gitlab the username can be anything
+	// (see https://gitlab.com/gitlab-org/gitlab/-/issues/212953).
+	Username string
+	// The Personal Access Token
+	Password string // nolint:gosec // intentional auth field for git config
+	// UserOrg is used to specify the username/organization/project
+	UserOrg string
+	// Repository is used to specify the exact repository
+	Repository  string
+	SkipSSL     bool
+	Certificate []byte
+}
+
+// Gitconfig returns the id of the configuration, for filtering.
+// Satisfies the interface `GitconfigResource`, see package `internal/auth`
+func (c Configuration) Gitconfig() string {
+	return c.ID
+}
+
+// IsGlobal reports whether the configuration is shared with all users.
+// Satisfies the interface `GitconfigResource`, see package `internal/auth`
+func (c Configuration) IsGlobal() bool {
+	return c.Global
+}
+
+// hostFromURL reduces a stored instance URL to its lowercased host, with no
+// scheme or path. It tolerates the shapes older configs may hold (a bare host,
+// a full URL, or a URL that already carries an API path such as /api/v3), so
+// pre-existing enterprise configs keep working after upgrade.
+func hostFromURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "https://" + raw
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(parsed.Host)
+}
+
+// AllowedHosts returns the hosts whose requests this configuration's credentials
+// may be attached to. For the SaaS providers the host is implied; for everything
+// else (enterprise, self-hosted, generic git, and legacy configs whose provider
+// string predates the enterprise split) it is derived from the configuration URL.
+func (c Configuration) AllowedHosts() []string {
+	switch c.Provider {
+	case models.ProviderGithub:
+		return []string{"github.com", "api.github.com"}
+	case models.ProviderGitlab:
+		return []string{"gitlab.com"}
+	case models.ProviderGithubEnterpriseCloud:
+		// The config URL is the REST API host (api.github.com, or
+		// api.<tenant>.ghe.com for data residency). Browsing hits that host, but
+		// cloning uses the matching web host (the same host without the leading
+		// "api."), so allow both.
+		apiHost := hostFromURL(c.URL)
+		if apiHost == "" {
+			return nil
+		}
+		webHost := strings.TrimPrefix(apiHost, "api.")
+		return []string{apiHost, webHost}
+	default:
+		host := hostFromURL(c.URL)
+		if host == "" {
+			return nil
+		}
+		return []string{host}
+	}
+}
+
+// AllowsHost reports whether this configuration's credentials may be sent to the
+// host of targetURL. This binds a credential to its own instance, so a token
+// cannot be forwarded to an unrelated host.
+func (c Configuration) AllowsHost(targetURL string) bool {
+	target := hostFromURL(targetURL)
+	if target == "" {
+		return false
+	}
+	for _, allowed := range c.AllowedHosts() {
+		if strings.EqualFold(allowed, target) {
+			return true
+		}
+	}
+	return false
+}
+
+func NewManager(secretLoader SecretLister) (*Manager, error) {
+	logger := helpers.Logger.With("component", "GitManager")
+
+	secretSelector := labels.Set(map[string]string{
+		kubernetes.DFlowAPIGitCredentialsLabelKey: "true",
+	}).AsSelector().String()
+
+	secretList, err := secretLoader.List(
+		context.Background(),
+		metav1.ListOptions{LabelSelector: secretSelector},
+	)
+	if err != nil {
+		return nil, err
+	}
+	configurations := NewConfigurationsFromSecrets(secretList.Items)
+
+	configIDs := []string{}
+	for _, config := range configurations {
+		configIDs = append(configIDs, config.ID)
+	}
+
+	// Sort the configurations to fetch always the same, in case of multiple matches.
+	// This will help in case of errors because in case of multiple configurations
+	// always the same will be chosen.
+	// Having instead a different one everytime could cause sporadic errors.
+	sort.Slice(configurations, func(i, j int) bool {
+		return configurations[i].ID < configurations[j].ID
+	})
+
+	logger.Debugw(
+		"found git configurations",
+		"count",
+		len(configurations),
+		"configs",
+		strings.Join(configIDs, ", "),
+	)
+
+	return &Manager{
+		SecretLister:   secretLoader,
+		Configurations: configurations,
+	}, nil
+}
+
+func NewConfigurationsFromSecrets(secrets []v1.Secret) []Configuration {
+	configs := make([]Configuration, 0, len(secrets))
+
+	logger := helpers.Logger.With("component", "GitManager")
+
+	for _, secret := range secrets {
+		// global is optional and defaults to false. A malformed value is logged
+		// rather than silently swallowed, but still falls back to false.
+		global := false
+		rawGlobal, hasGlobal := secret.Data["global"]
+		if hasGlobal {
+			parsed, err := strconv.ParseBool(string(rawGlobal))
+			if err != nil {
+				logger.Warnw(
+					"git config has a non-boolean global flag, defaulting to false",
+					"config", secret.Name, "global", string(rawGlobal), "error", err,
+				)
+			}
+			global = parsed
+		}
+
+		// GitProviderFromString returns ProviderUnknown on error, which we keep as
+		// the default while logging the error instead of ignoring it. An absent
+		// provider is a valid state and is not treated as an error.
+		provider := models.ProviderUnknown
+		rawProvider, hasProvider := secret.Data["provider"]
+		if hasProvider {
+			parsed, err := models.GitProviderFromString(string(rawProvider))
+			if err != nil {
+				logger.Warnw(
+					"git config has an invalid provider, using unknown",
+					"config", secret.Name, "provider", string(rawProvider), "error", err,
+				)
+			}
+			provider = parsed
+		}
+
+		// skipSSL is true only for the explicit string "true"; anything else is false.
+		skipSSL := false
+		rawSSL, ok := secret.Data["skipSSL"]
+		if ok && strings.ToLower(string(rawSSL)) == "true" {
+			skipSSL = true
+		}
+
+		configs = append(configs, Configuration{
+			Global:      global,
+			ID:          string(secret.Name),
+			CreatedAt:   secret.CreationTimestamp,
+			URL:         string(secret.Data["url"]),
+			Provider:    provider,
+			Username:    string(secret.Data["username"]),
+			Password:    string(secret.Data["password"]),
+			UserOrg:     string(secret.Data["userOrg"]),
+			Repository:  string(secret.Data["repo"]),
+			SkipSSL:     skipSSL,
+			Certificate: secret.Data["certificate"],
+		})
+	}
+
+	return configs
+}
+
+func NewSecretFromConfiguration(config Configuration) v1.Secret {
+	// helper to set the value in the map, if present
+	setValue := func(m map[string][]byte, key, value string) map[string][]byte {
+		if len(value) > 0 {
+			m[key] = []byte(value)
+		}
+		return m
+	}
+
+	dataMap := make(map[string][]byte)
+
+	dataMap = setValue(dataMap, "global", strconv.FormatBool(config.Global))
+	dataMap = setValue(dataMap, "url", string(config.URL))
+	dataMap = setValue(dataMap, "provider", string(config.Provider))
+	dataMap = setValue(dataMap, "username", string(config.Username))
+	dataMap = setValue(dataMap, "password", string(config.Password))
+	dataMap = setValue(dataMap, "userOrg", string(config.UserOrg))
+	dataMap = setValue(dataMap, "repo", string(config.Repository))
+	dataMap = setValue(dataMap, "certificate", string(config.Certificate))
+
+	if config.SkipSSL {
+		dataMap = setValue(dataMap, "skipSSL", "true")
+	} else {
+		dataMap = setValue(dataMap, "skipSSL", "false")
+	}
+
+	return v1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      config.ID,
+			Namespace: helmchart.Namespace(),
+			Labels: map[string]string{
+				kubernetes.DFlowAPIGitCredentialsLabelKey: "true",
+			},
+		},
+		Data: dataMap,
+	}
+}
+
+// Configuration returns the configuration with the given ID, and whether it
+// was found.
+func (m *Manager) Configuration(id string) (*Configuration, bool) {
+	for i := range m.Configurations {
+		if m.Configurations[i].ID == id {
+			return &m.Configurations[i], true
+		}
+	}
+	return nil, false
+}
+
+// FindConfiguration will load the most specific Configuration for the provided gitUrl.
+// A gitURL is a full git repo url like 'https://github.com/username/repo'
+func (m *Manager) FindConfiguration(gitURL string) (*Configuration, error) {
+
+	// We could have multiple configurations that are valid for a specific provider
+	// and we need to find the most specific one.
+	availableConfigurations := map[string][]Configuration{}
+
+	gitInfo, err := newGitRepoInfoFromURL(gitURL)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, config := range m.Configurations {
+		// create the key for this config
+		configMapKey := config.URL
+		if config.UserOrg != "" {
+			configMapKey = fmt.Sprintf("%s/%s", config.URL, config.UserOrg)
+		}
+		if config.Repository != "" {
+			configMapKey = fmt.Sprintf("%s/%s/%s", config.URL, config.UserOrg, config.Repository)
+		}
+
+		// append the config to the available configurations
+		configsForKey, found := availableConfigurations[configMapKey]
+		if !found {
+			configsForKey = []Configuration{}
+		}
+		availableConfigurations[configMapKey] = append(configsForKey, config)
+	}
+
+	// now we need to check if there is a configuration available for the specific repo,
+	// or for the userOrg, or at least for the provider.
+	// I.e. if we have a config for the 'https://github.com/username/repo' we should return it,
+	// otherwise we could return the more generic config for the 'https://github.com/username'
+	// or the global 'https://github.com' configuration
+
+	toMatch := fmt.Sprintf("%s/%s/%s", gitInfo.URL, gitInfo.UserOrg, gitInfo.Repository)
+	if userOrgRepoConfigs, found := availableConfigurations[toMatch]; found {
+		return &userOrgRepoConfigs[0], nil
+	}
+
+	toMatch = fmt.Sprintf("%s/%s", gitInfo.URL, gitInfo.UserOrg)
+	if userOrgRepoConfigs, found := availableConfigurations[toMatch]; found {
+		return &userOrgRepoConfigs[0], nil
+	}
+
+	if userOrgRepoConfigs, found := availableConfigurations[gitInfo.URL]; found {
+		return &userOrgRepoConfigs[0], nil
+	}
+
+	return nil, nil
+}
+
+type gitRepoInfo struct {
+	URL        string
+	UserOrg    string
+	Repository string
+}
+
+// newGitRepoInfoFromURL will create a gitRepoInfo from the full git URL
+func newGitRepoInfoFromURL(gitURL string) (*gitRepoInfo, error) {
+	url, err := url.Parse(gitURL)
+	if err != nil {
+		return nil, errors.Wrapf(err, "parsing gitURL [%s]", gitURL)
+	}
+
+	// gitRepoHost has the host of the gitURL, i.e.: https://github.com
+	gitRepoHost := fmt.Sprintf("%s://%s", url.Scheme, url.Host)
+
+	path := strings.TrimPrefix(url.Path, "/")
+	orgRepoPath := strings.Split(path, "/")
+
+	info := &gitRepoInfo{
+		URL:     gitRepoHost,
+		UserOrg: orgRepoPath[0],
+	}
+
+	if len(orgRepoPath) > 1 {
+		info.Repository = orgRepoPath[1]
+	}
+
+	return info, nil
+}

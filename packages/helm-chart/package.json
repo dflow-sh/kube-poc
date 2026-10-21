@@ -1,0 +1,9 @@
+{
+  "name": "@dflow/helm-chart",
+  "private": true,
+  "scripts": {
+    "build": "node -e \"const fs=require('fs'); const t=fs.readFileSync('Chart.yaml','utf8'); if(!/^name: dflow$/m.test(t)) { console.error('Chart.yaml name is not dflow'); process.exit(1); }\"",
+    "test": "node -e \"const fs=require('fs'); const v=fs.readFileSync('values.yaml','utf8'); if(!v.includes('dflowUI:')) { console.error('values.yaml is missing dflowUI'); process.exit(1); }\"",
+    "lint": "node -e \"const fs=require('fs'); const t=fs.readFileSync('Chart.yaml','utf8'); if(!t.includes('Apache-2.0')) { console.error('chart license annotation missing'); process.exit(1); }\""
+  }
+}

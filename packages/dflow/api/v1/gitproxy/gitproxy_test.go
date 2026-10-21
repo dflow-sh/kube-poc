@@ -1,0 +1,450 @@
+// Copyright © 2021 - 2023 SUSE LLC
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//     http://www.apache.org/licenses/LICENSE-2.0
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package gitproxy_test
+
+import (
+	"context"
+	"crypto/tls"
+	"encoding/pem"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+
+	"github.com/dflow-sh/kube-poc/packages/dflow/api/v1/gitproxy"
+	gitbridge "github.com/dflow-sh/kube-poc/packages/dflow/bridge/git"
+	"github.com/gin-gonic/gin"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+)
+
+var _ = Describe("Gitproxy Endpoint", func() {
+	var w *httptest.ResponseRecorder
+	var c *gin.Context
+	var ctx context.Context
+
+	BeforeEach(func() {
+		gin.SetMode(gin.TestMode)
+
+		w = httptest.NewRecorder()
+		c, _ = gin.CreateTestContext(w)
+		ctx = context.Background()
+	})
+
+	setupRequestBody := func(body string) {
+		GinkgoHelper()
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "url", strings.NewReader(body))
+		Expect(err).ToNot(HaveOccurred())
+		c.Request = req
+	}
+
+	When("JSON is malformed", func() {
+		It("returns status code 400", func() {
+			setupRequestBody(`{"url":"https://api.gi`)
+
+			gitManager := &gitbridge.Manager{Configurations: []gitbridge.Configuration{}}
+
+			errs := gitproxy.Proxy(c, gitManager)
+			Expect(w.Code).To(Equal(http.StatusBadRequest))
+			Expect(errs).To(HaveOccurred())
+		})
+	})
+
+	When("URL is malformed", func() {
+		It("returns status code 400", func() {
+			setupRequestBody(`{"url":"postgres://user:abc{DEf1=ghi@example.com:5432/db?sslmode=require"}`)
+
+			gitManager := &gitbridge.Manager{Configurations: []gitbridge.Configuration{}}
+
+			errs := gitproxy.Proxy(c, gitManager)
+			Expect(errs).To(HaveOccurred())
+		})
+	})
+
+	When("a gitconfig is named but not usable", func() {
+		It("returns 404 when the gitconfig does not exist", func() {
+			setupRequestBody(`{"url":"https://api.github.com/repos/dflow/dflow","gitconfig":"missing"}`)
+
+			gitManager := &gitbridge.Manager{Configurations: []gitbridge.Configuration{}}
+
+			errs := gitproxy.Proxy(c, gitManager)
+			Expect(errs).To(HaveOccurred())
+			Expect(errs.FirstStatus()).To(Equal(http.StatusNotFound))
+		})
+
+		It("returns 403 when the user may not use the gitconfig", func() {
+			setupRequestBody(`{"url":"https://api.github.com/repos/dflow/dflow","gitconfig":"private"}`)
+
+			gitManager := &gitbridge.Manager{Configurations: []gitbridge.Configuration{
+				{ID: "private"},
+			}}
+
+			errs := gitproxy.Proxy(c, gitManager)
+			Expect(errs).To(HaveOccurred())
+			Expect(errs.FirstStatus()).To(Equal(http.StatusForbidden))
+		})
+	})
+
+	When("proxying the request", func() {
+		It("returns the same response", func() {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(201)
+				fmt.Fprintf(w, `{"foo":"bar"}`)
+			}))
+			defer srv.Close()
+
+			setupRequestBody(fmt.Sprintf(`{"url":"%s/api/v3/repos/dflow/dflow"}`, srv.URL))
+
+			gitManager := &gitbridge.Manager{Configurations: []gitbridge.Configuration{}}
+
+			errs := gitproxy.Proxy(c, gitManager)
+			Expect(errs).ToNot(HaveOccurred())
+			Expect(w.Code).To(Equal(http.StatusCreated))
+
+			b, err := io.ReadAll(w.Body)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(string(b)).To(Equal(`{"foo":"bar"}`))
+		})
+
+		It("does not relay the upstream CORS headers", func() {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Access-Control-Allow-Origin", "*")
+				w.Header().Set("X-Upstream", "kept")
+				w.WriteHeader(200)
+			}))
+			defer srv.Close()
+
+			// what the server's CORS middleware sets before the handler runs
+			c.Header("Access-Control-Allow-Origin", "https://rancher.example.com")
+
+			setupRequestBody(fmt.Sprintf(`{"url":"%s/api/v3/repos/dflow/dflow"}`, srv.URL))
+
+			gitManager := &gitbridge.Manager{Configurations: []gitbridge.Configuration{}}
+
+			errs := gitproxy.Proxy(c, gitManager)
+			Expect(errs).ToNot(HaveOccurred())
+			Expect(w.Header().Values("Access-Control-Allow-Origin")).To(Equal([]string{"https://rancher.example.com"}))
+			Expect(w.Header().Get("X-Upstream")).To(Equal("kept"))
+		})
+
+		It("fails for unkwnown URLs", func() {
+			setupAndRun := func(path string) {
+				GinkgoHelper()
+
+				err := gitproxy.ValidateURL(fmt.Sprintf("https://mydomain.com%s", path))
+				Expect(err).To(HaveOccurred())
+			}
+
+			setupAndRun("")
+			setupAndRun("/apis")
+		})
+
+		It("fails for Github non whitelisted URLs", func() {
+			setupAndRun := func(path string) {
+				GinkgoHelper()
+
+				err := gitproxy.ValidateURL(fmt.Sprintf("https://api.github.com%s", path))
+				Expect(err).To(HaveOccurred())
+			}
+
+			setupAndRun("")
+			setupAndRun("/")
+			setupAndRun("/dflow")
+			setupAndRun("/dflow/dflow")
+			setupAndRun("/dflow/with/parts")
+			setupAndRun("/dflow/with/four/parts")
+			setupAndRun("/dflow/with/five/parts/here")
+			setupAndRun("/dflow/with/too/many/parts/here")
+		})
+
+		It("passes for Github whitelisted URLs", func() {
+			// - /repos/USERNAME/REPO
+			// - /repos/USERNAME/REPO/commits
+			// - /repos/USERNAME/REPO/branches
+			// - /repos/USERNAME/REPO/branches/BRANCH
+			// - /users/USERNAME/repos
+			// - /search/repositories
+
+			setupAndRun := func(path string) {
+				GinkgoHelper()
+
+				err := gitproxy.ValidateURL(fmt.Sprintf("https://api.github.com%s", path))
+				Expect(err).ToNot(HaveOccurred())
+			}
+
+			setupAndRun("/search/repositories?q=repo:USER/ORG")
+			setupAndRun("/users/USERNAME")
+			setupAndRun("/users/USERNAME/repos")
+			setupAndRun("/user/repos")
+			setupAndRun("/orgs/ORG/repos")
+			setupAndRun("/repos/USERNAME/REPO")
+			setupAndRun("/repos/USERNAME/REPO/commits")
+			setupAndRun("/repos/USERNAME/REPO/branches")
+			setupAndRun("/repos/USERNAME/REPO/branches/BRANCH")
+		})
+
+		It("passes for Github Enterprise Server whitelisted URLs", func() {
+			// - /api/v3/repos/USERNAME/REPO
+			// - /api/v3/repos/USERNAME/REPO/commits
+			// - /api/v3/repos/USERNAME/REPO/branches
+			// - /api/v3/repos/USERNAME/REPO/branches/BRANCH
+			// - /api/v3/users/USERNAME/repos
+			// - /api/v3/search/repositories
+
+			setupAndRun := func(path string) {
+				GinkgoHelper()
+
+				err := gitproxy.ValidateURL(fmt.Sprintf("https://github.mydomain.com/api/v3%s", path))
+				Expect(err).ToNot(HaveOccurred())
+			}
+
+			setupAndRun("/search/repositories")
+			setupAndRun("/users/USERNAME/repos")
+			setupAndRun("/repos/USERNAME/REPO")
+			setupAndRun("/repos/USERNAME/REPO/commits")
+			setupAndRun("/repos/USERNAME/REPO/branches")
+			setupAndRun("/repos/USERNAME/REPO/branches/BRANCH")
+		})
+
+		It("passes for Github Enterprise Cloud data-residency (ghe.com) whitelisted URLs", func() {
+			// Data-residency tenants serve the API from api.<subdomain>.ghe.com with
+			// the same bare paths as api.github.com (no /api/v3 prefix).
+			setupAndRun := func(path string) {
+				GinkgoHelper()
+
+				err := gitproxy.ValidateURL(fmt.Sprintf("https://api.octocorp.ghe.com%s", path))
+				Expect(err).ToNot(HaveOccurred())
+			}
+
+			setupAndRun("/search/repositories?q=repo:USER/ORG")
+			setupAndRun("/users/USERNAME")
+			setupAndRun("/repos/USERNAME/REPO")
+			setupAndRun("/repos/USERNAME/REPO/commits")
+			setupAndRun("/repos/USERNAME/REPO/branches")
+		})
+
+		It("fails for a non-ghe.com host using bare Github paths", func() {
+			// The ghe.com allowance must not open bare-path proxying to arbitrary hosts.
+			err := gitproxy.ValidateURL("https://api.evil.com/repos/USER/REPO")
+			Expect(err).To(HaveOccurred())
+		})
+
+		It("fails for Gitlab Server non whitelisted URLs", func() {
+			setupAndRun := func(path string) {
+				GinkgoHelper()
+
+				err := gitproxy.ValidateURL(fmt.Sprintf("https://gitlab.mydomain.com/api/v4%s", path))
+				Expect(err).To(HaveOccurred())
+			}
+
+			setupAndRun("")
+			setupAndRun("/")
+			setupAndRun("/any")
+			setupAndRun("/search/something")
+			setupAndRun("/search/repositories") // GitHub-shaped, not a GitLab endpoint
+			setupAndRun("/USERNAME/projects")
+			setupAndRun("/projects/USERNAME%2FREPO/repository/stars")
+			setupAndRun("/projects/USERNAME%2FREPO/repository/commits/BRANCH")
+			setupAndRun("/api/with/too/many/parts/api")
+		})
+
+		It("passes for Gitlab Server whitelisted URLs", func() {
+			// - /api/v4/avatar
+			// - /api/v4/projects (and ?membership=true)
+			// - /api/v4/users (and ?username=NAME)
+			// - /api/v4/groups/GROUP
+			// - /api/v4/users/USERNAME/projects (and ?search=TERM)
+			// - /api/v4/groups/USERNAME/projects (and ?search=TERM)
+			// - /api/v4/projects/USERNAME%2FREPO
+			// - /api/v4/projects/USERNAME%2FREPO/repository/commits
+			// - /api/v4/projects/USERNAME%2FREPO/repository/branches
+			// - /api/v4/projects/USERNAME%2FREPO/repository/branches/BRANCH
+
+			setupAndRun := func(path string) {
+				GinkgoHelper()
+
+				err := gitproxy.ValidateURL(fmt.Sprintf("https://gitlab.mydomain.com/api/v4%s", path))
+				Expect(err).ToNot(HaveOccurred())
+			}
+
+			setupAndRun("/avatar")
+			setupAndRun("/projects")
+			setupAndRun("/projects?membership=true")
+			setupAndRun("/users")
+			setupAndRun("/users?username=USERNAME")
+			setupAndRun("/groups/GROUP")
+			setupAndRun("/users/USERNAME/projects")
+			setupAndRun("/users/USERNAME/projects?search=TERM")
+			setupAndRun("/groups/USERNAME/projects")
+			setupAndRun("/projects/USERNAME%2FREPO")
+			setupAndRun("/projects/USERNAME%2FREPO/repository/commits")
+			setupAndRun("/projects/USERNAME%2FREPO/repository/branches")
+			setupAndRun("/projects/USERNAME%2FREPO/repository/branches/BRANCH")
+		})
+
+		When("gitconfig with username and password is provided", func() {
+			It("passes the BasicAuth header and returns the proxied response", func() {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					authHeader := r.Header.Get("Authorization")
+					Expect(authHeader).To(Equal("Basic ZGZsb3c6cGFzc3dvcmQ="))
+
+					w.WriteHeader(201)
+					fmt.Fprintf(w, `{"foo":"bar"}`)
+				}))
+				defer srv.Close()
+
+				gitConfig := "my-git-conf"
+				setupRequestBody(fmt.Sprintf(`{"url":"%s/api/v3/repos/dflow/dflow","gitconfig":"%s"}`, srv.URL, gitConfig))
+
+				gitManager := &gitbridge.Manager{Configurations: []gitbridge.Configuration{
+					{ID: gitConfig, Global: true, URL: srv.URL, Username: "dflow", Password: "password"},
+				}}
+
+				errs := gitproxy.Proxy(c, gitManager)
+				Expect(errs).ToNot(HaveOccurred())
+				Expect(w.Code).To(Equal(http.StatusCreated))
+
+				b, err := io.ReadAll(w.Body)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(string(b)).To(Equal(`{"foo":"bar"}`))
+			})
+		})
+	})
+
+	When("the gitconfig host does not match the proxied host", func() {
+		It("refuses with 403 and never forwards the credentials", func() {
+			gotAuth := ""
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotAuth = r.Header.Get("Authorization")
+				w.WriteHeader(200)
+			}))
+			defer srv.Close()
+
+			gitConfig := "my-git-conf"
+			// Proxy target is srv, but the config is bound to a different host.
+			setupRequestBody(fmt.Sprintf(`{"url":"%s/api/v3/repos/dflow/dflow","gitconfig":"%s"}`, srv.URL, gitConfig))
+
+			gitManager := &gitbridge.Manager{Configurations: []gitbridge.Configuration{
+				{ID: gitConfig, Global: true, URL: "https://ghe.example.com", Username: "dflow", Password: "password"},
+			}}
+
+			errs := gitproxy.Proxy(c, gitManager)
+			Expect(errs).To(HaveOccurred())
+			Expect(errs.FirstStatus()).To(Equal(http.StatusForbidden))
+			Expect(gotAuth).To(BeEmpty())
+		})
+	})
+
+	When("the proxied host redirects to a different host", func() {
+		It("blocks the redirect and never forwards the PRIVATE-TOKEN", func() {
+			gotToken := ""
+			attacker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if v := r.Header.Get("PRIVATE-TOKEN"); v != "" {
+					gotToken = v
+				}
+				w.WriteHeader(200)
+			}))
+			defer attacker.Close()
+
+			// The configured instance issues a cross-host redirect to the attacker.
+			instance := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, attacker.URL+"/api/v4/projects", http.StatusFound)
+			}))
+			defer instance.Close()
+
+			gitConfig := "gl-ent"
+			setupRequestBody(fmt.Sprintf(`{"url":"%s/api/v4/projects","gitconfig":"%s"}`, instance.URL, gitConfig))
+
+			gitManager := &gitbridge.Manager{Configurations: []gitbridge.Configuration{
+				{ID: gitConfig, Global: true, URL: instance.URL, Provider: "gitlab_enterprise", Password: "super-secret-token"},
+			}}
+
+			errs := gitproxy.Proxy(c, gitManager)
+			Expect(errs).To(HaveOccurred())
+			Expect(gotToken).To(BeEmpty())
+		})
+	})
+
+	When("proxying the request to HTTPS server", func() {
+		When("no gitconfig is provided", func() {
+			It("fails for unknown authority", func() {
+				srv := httptest.NewTLSServer(nil)
+				defer srv.Close()
+
+				setupRequestBody(fmt.Sprintf(`{"url":"%s/api/v3/repos/dflow/dflow"}`, srv.URL))
+
+				gitManager := &gitbridge.Manager{Configurations: []gitbridge.Configuration{}}
+
+				errs := gitproxy.Proxy(c, gitManager)
+				Expect(errs).To(HaveOccurred())
+			})
+		})
+
+		When("gitconfig with skipSSL is provided", func() {
+			It("returns the proxied response", func() {
+				srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(201)
+					fmt.Fprintf(w, `{"foo":"bar"}`)
+				}))
+				defer srv.Close()
+
+				gitConfig := "my-git-conf"
+				setupRequestBody(fmt.Sprintf(`{"url":"%s/api/v3/repos/dflow/dflow","gitconfig":"%s"}`, srv.URL, gitConfig))
+
+				gitManager := &gitbridge.Manager{Configurations: []gitbridge.Configuration{
+					{ID: gitConfig, Global: true, URL: srv.URL, SkipSSL: true},
+				}}
+
+				errs := gitproxy.Proxy(c, gitManager)
+				Expect(errs).ToNot(HaveOccurred())
+				Expect(w.Code).To(Equal(http.StatusCreated))
+
+				b, err := io.ReadAll(w.Body)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(string(b)).To(Equal(`{"foo":"bar"}`))
+			})
+		})
+
+		When("gitconfig with the right CA bundle is provided", func() {
+			It("returns the proxied response", func() {
+				srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(201)
+					fmt.Fprintf(w, `{"foo":"bar"}`)
+				}))
+				defer srv.Close()
+
+				gitConfig := "my-git-conf"
+				setupRequestBody(fmt.Sprintf(`{"url":"%s/api/v3/repos/dflow/dflow","gitconfig":"%s"}`, srv.URL, gitConfig))
+
+				// load PEM certificate from TLS server
+				conn, err := tls.Dial("tcp", strings.TrimPrefix(srv.URL, "https://"), &tls.Config{InsecureSkipVerify: true})
+				Expect(err).ToNot(HaveOccurred())
+				defer conn.Close()
+				pemCert := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: conn.ConnectionState().PeerCertificates[0].Raw})
+
+				gitManager := &gitbridge.Manager{Configurations: []gitbridge.Configuration{
+					{ID: gitConfig, Global: true, URL: srv.URL, Certificate: pemCert},
+				}}
+
+				errs := gitproxy.Proxy(c, gitManager)
+				Expect(errs).ToNot(HaveOccurred())
+				Expect(w.Code).To(Equal(http.StatusCreated))
+
+				b, err := io.ReadAll(w.Body)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(string(b)).To(Equal(`{"foo":"bar"}`))
+			})
+		})
+	})
+})

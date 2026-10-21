@@ -1,0 +1,418 @@
+// Copyright © 2021 - 2023 SUSE LLC
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+// http://www.apache.org/licenses/LICENSE-2.0
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package usercmd
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/go-logr/logr"
+	"github.com/pkg/errors"
+	"k8s.io/apimachinery/pkg/util/validation"
+
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers"
+	"github.com/dflow-sh/kube-poc/packages/dflow/cli/termui"
+	"github.com/dflow-sh/kube-poc/packages/dflow/duration"
+	"github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/client"
+	"github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/models"
+)
+
+type PushParams struct {
+	models.ApplicationManifest
+}
+
+// Push pushes an app
+// * validate
+// * upload
+// * stage
+// * (tail logs)
+// * wait for staging to be done (complete or fail)
+// * deploy
+// * wait for app
+func (c *DFlowClient) AppPush(ctx context.Context, manifest models.ApplicationManifest) error { // nolint: gocyclo // Many ifs for view purposes
+
+	// Use settings default if user did not specify --app-chart
+	if manifest.Configuration.AppChart == "" {
+		manifest.Configuration.AppChart = c.Settings.AppChart
+	}
+
+	source := manifest.Origin.String()
+	appRef := models.AppRef{
+		Meta: models.Meta{
+			Name:      manifest.Name,
+			Namespace: c.Settings.Namespace,
+		},
+	}
+	log := c.Log.
+		WithName("Push").
+		WithValues("Name", appRef.Name,
+			"Namespace", appRef.Namespace,
+			"Sources", source)
+	log.Info("start")
+	defer log.Info("return")
+	details := log.V(1) // NOTE: Increment of level, not absolute. Visible via TRACE_LEVEL=2
+
+	msg := c.ui.Note().
+		WithStringValue("Manifest", manifest.Self). // This path is already platform-specific
+		WithStringValue("Name", appRef.Name).
+		WithStringValue("Source Origin", source).
+		WithStringValue("AppChart", manifest.Configuration.AppChart).
+		WithStringValue("Target Namespace", appRef.Namespace)
+	for _, ev := range manifest.Configuration.Environment.List() {
+		msg = msg.WithStringValue(fmt.Sprintf("Environment '%s'", ev.Name), ev.Value)
+	}
+	// TODO ? Make this a table for nicer alignment
+
+	if err := c.TargetOk(); err != nil {
+		return err
+	}
+
+	// Show builder, if relevant (i.e. path/git sources, not for container)
+	if manifest.Origin.Kind != models.OriginContainer &&
+		manifest.Staging.Builder != "" {
+		msg = msg.WithStringValue("Builder", manifest.Staging.Builder)
+	}
+
+	if manifest.Configuration.Instances != nil {
+		msg = msg.WithStringValue("Instances",
+			strconv.Itoa(int(*manifest.Configuration.Instances)))
+	}
+	if len(manifest.Configuration.Configurations) > 0 {
+		msg = msg.WithStringValue("Configurations",
+			strings.Join(manifest.Configuration.Configurations, ", "))
+	}
+
+	details.Info("validate app name")
+	errorMsgs := validation.IsDNS1123Subdomain(appRef.Name)
+	if len(errorMsgs) > 0 {
+		return fmt.Errorf("%s: %s", "app name incorrect", strings.Join(errorMsgs, "\n"))
+	}
+
+	if err := validateLocalDockerfile(manifest); err != nil {
+		return err
+	}
+
+	msg = routeMessage(msg, manifest.Configuration.Routes)
+
+	msg.Msg("About to push an application with the given setup")
+
+	c.ui.Exclamation().
+		Timeout(duration.UserAbort()).
+		Msg("Hit Enter to continue or Ctrl+C to abort (deployment will continue automatically in 5 seconds)")
+
+	// AppCreate
+	c.ui.Normal().Msg("Create the application resource ...")
+
+	updateRequest := models.NewApplicationUpdateRequest(manifest)
+	_, err := c.API.AppCreate(models.ApplicationCreateRequest{
+		Name:          appRef.Name,
+		Configuration: updateRequest,
+	}, appRef.Namespace)
+	if err != nil {
+		// try to recover if it's a response type Conflict error and not a http connection error
+		dflowAPIError := &client.APIError{}
+		if !errors.As(err, &dflowAPIError) {
+			return err
+		}
+
+		if dflowAPIError.StatusCode != http.StatusConflict {
+			return err
+		}
+
+		c.ui.Normal().Msg("Application exists, updating ...")
+		details.Info("app exists conflict")
+
+		// do not restart during a push
+		restart := false
+		updateRequest.Restart = &restart
+
+		_, err := c.API.AppUpdate(updateRequest, appRef.Namespace, appRef.Name)
+		if err != nil {
+			return err
+		}
+	}
+
+	// check customization
+	_, err = c.API.AppValidateCV(appRef.Namespace, appRef.Name)
+	if err != nil {
+		return err
+	}
+
+	// AppUpload / AppImportGit
+	var blobUID string
+	switch manifest.Origin.Kind {
+	case models.OriginNone:
+		return fmt.Errorf("%s", "No application origin")
+	case models.OriginPath:
+		uploadedSourceBlobID, err := c.uploadSources(log, appRef, source, manifest)
+		if err != nil {
+			return err
+		}
+		blobUID = uploadedSourceBlobID
+	case models.OriginGit:
+		c.ui.Normal().Msg("Importing the application sources from Git ...")
+
+		gitOrigin := manifest.Origin.Git
+		if gitOrigin == nil {
+			return errors.New("git origin is nil")
+		}
+
+		response, err := c.API.AppImportGit(appRef.Namespace, appRef.Name, *gitOrigin)
+		if err != nil {
+			return errors.Wrap(err, "importing git remote")
+		}
+
+		blobUID = response.BlobUID
+		// if the server resolved the branch use that in the Git Origin
+		if response.Branch != "" {
+			manifest.Origin.Git.Branch = response.Branch
+		}
+		// update the revision with the one updated by the server
+		manifest.Origin.Git.Revision = response.Revision
+
+	case models.OriginContainer:
+		// Nothing to upload (nor stage)
+	}
+
+	// Async stage/build/deploy (same endpoint as the UI) — avoids long blocking POST timeouts.
+	asyncReq := models.AsyncDeployRequest{
+		App:    appRef,
+		Origin: manifest.Origin,
+	}
+	if manifest.Origin.Kind == models.OriginContainer {
+		asyncReq.ImageURL = manifest.Origin.Container
+	} else {
+		asyncReq.BlobUID = blobUID
+		asyncReq.BuilderImage = manifest.Staging.Builder
+		asyncReq.BuildMode = manifest.Staging.BuildMode
+		asyncReq.DockerfilePath = manifest.Staging.DockerfilePath
+	}
+
+	c.ui.Normal().Msg("Building and deploying application on the server ...")
+	c.ui.ProgressNote().Msg("Build and deploy")
+
+	details.Info("async deploy start", "app", appRef)
+	startStatus, err := c.API.AppDeploymentsStart(asyncReq)
+	if err != nil {
+		return errors.Wrap(err, "starting async deployment")
+	}
+	if startStatus == nil || startStatus.ID == "" {
+		return errors.New("async deployment did not return a deployment id")
+	}
+
+	s := c.ui.Progress("Waiting for deployment")
+	defer s.Stop()
+
+	finalStatus, err := c.waitAsyncDeployment(ctx, appRef, startStatus.ID, details)
+	if err != nil {
+		c.ui.Note().Msgf(
+			"You can access the staging logs at any time, either in the UI or with the CLI using this command:\n\ndflow app logs --staging %s",
+			appRef.Name)
+		return errors.Wrap(err, "async deployment failed")
+	}
+
+	details.Info("deployment finished", "status", finalStatus.Status)
+
+	routes := []string{}
+	for _, d := range finalStatus.Routes {
+		routes = append(routes, fmt.Sprintf("https://%s", d))
+	}
+
+	c.reportOK(appRef, manifest.Staging.Builder, routes)
+	return nil
+}
+
+func (c *DFlowClient) waitAsyncDeployment(ctx context.Context, appRef models.AppRef, deploymentID string, details logr.Logger) (*models.AsyncDeployStatus, error) {
+	deadline := time.Now().Add(duration.ToAppBuilt())
+	stagingLogsStarted := false
+
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
+		status, err := c.API.AppDeploymentStatus(appRef.Namespace, appRef.Name, deploymentID)
+		if err != nil {
+			return nil, err
+		}
+
+		if status.StageID != "" && !stagingLogsStarted {
+			stagingLogsStarted = true
+			details.Info("start tailing logs", "StageID", status.StageID)
+			c.stageLogs(appRef, status.StageID)
+		}
+
+		switch status.Status {
+		case "succeeded":
+			return &status, nil
+		case "failed":
+			if status.Error != "" {
+				return nil, errors.New(status.Error)
+			}
+			return nil, errors.New("async deployment failed")
+		}
+
+		time.Sleep(2 * time.Second)
+	}
+
+	return nil, errors.New("timed out waiting for async deployment")
+}
+
+func (c *DFlowClient) uploadSources(log logr.Logger, appRef models.AppRef, source string, manifest models.ApplicationManifest) (string, error) {
+	c.ui.Normal().Msg("Collecting the application sources ...")
+
+	fileInfo, err := os.Stat(source)
+	if err != nil {
+		return "", err
+	}
+
+	archive := source
+
+	if fileInfo.IsDir() {
+		// package directory as archive/tarball
+		// Pass ignore patterns from manifest
+		tmpDir, tarball, err := helpers.Tar(source, manifest.Configuration.Ignore)
+
+		defer func() {
+			if err := os.RemoveAll(tmpDir); err != nil {
+				if helpers.Logger != nil {
+					helpers.Logger.Errorw("failed to remove temporary directory", "error", err)
+				}
+			}
+		}()
+
+		if err != nil {
+			return "", err
+		}
+		archive = tarball
+	}
+
+	c.ui.Normal().Msg("Uploading application code ...")
+
+	log.V(1).Info("upload code")
+
+	// open the archive
+	file, err := os.Open(archive)
+	if err != nil {
+		return "", errors.Wrap(err, "failed to open archive")
+	}
+
+	defer func() {
+		if err := file.Close(); err != nil {
+			if helpers.Logger != nil {
+				helpers.Logger.Errorw("failed to close file", "error", err)
+			}
+		}
+	}()
+
+	upload, err := c.API.AppUpload(appRef.Namespace, appRef.Name, file)
+	if err != nil {
+		return "", err
+	}
+	log.V(3).Info("upload response", "response", upload)
+
+	return upload.BlobUID, nil
+}
+
+func (c *DFlowClient) stageLogs(appRef models.AppRef, stageID string) {
+	go func() {
+		err := c.AppLogs(appRef.Name, stageID, true, nil)
+		if err != nil {
+			c.ui.Problem().Msg(fmt.Sprintf("failed to tail logs: %s", err.Error()))
+		}
+	}()
+}
+
+func routeMessage(msg *termui.Message, routes []string) *termui.Message {
+	if routes == nil {
+		return msg.WithStringValue("Routes", "<<default>>")
+	}
+	if len(routes) == 0 {
+		return msg.WithStringValue("Routes", "<<none>>")
+	}
+
+	msg = msg.WithStringValue("Routes", "")
+	sort.Strings(routes)
+	for i, d := range routes {
+		msg = msg.WithStringValue(strconv.Itoa(i+1), d)
+	}
+
+	return msg
+}
+
+func (c *DFlowClient) reportOK(appRef models.AppRef, builder string, routes []string) {
+	msg := c.ui.Success().
+		WithStringValue("Name", appRef.Name).
+		WithStringValue("Namespace", appRef.Namespace).
+		WithStringValue("Builder Image", builder).
+		WithStringValue("Routes", "")
+
+	if len(routes) > 0 {
+		sort.Strings(routes)
+		for i, r := range routes {
+			msg = msg.WithStringValue(strconv.Itoa(i+1), r)
+		}
+	}
+	msg.Msg("App is online.")
+}
+
+// validateLocalDockerfile checks that a Dockerfile path exists under a local
+// path origin before upload/staging. Git/archive origins are skipped.
+func validateLocalDockerfile(manifest models.ApplicationManifest) error {
+	mode := manifest.Staging.BuildMode
+	if mode == "" {
+		return nil
+	}
+	validatedMode, err := models.ValidateBuildMode(mode)
+	if err != nil {
+		return err
+	}
+	if validatedMode != models.BuildModeDockerfile {
+		return nil
+	}
+	if manifest.Origin.Kind != models.OriginPath || manifest.Origin.Path == "" {
+		return nil
+	}
+
+	// Ready archives (tar/zip) are valid push sources; only directories have a
+	// local Dockerfile tree to validate before upload.
+	if originInfo, err := os.Stat(manifest.Origin.Path); err != nil || !originInfo.IsDir() {
+		return nil
+	}
+
+	dockerfilePath, err := models.ValidateDockerfilePath(manifest.Staging.DockerfilePath)
+	if err != nil {
+		return err
+	}
+
+	fullPath := filepath.Join(manifest.Origin.Path, filepath.FromSlash(dockerfilePath))
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("dockerfile not found at %q (relative to application sources)", fullPath)
+		}
+		return errors.Wrap(err, "failed to access dockerfile path")
+	}
+	if info.IsDir() {
+		return fmt.Errorf("dockerfile path %q is a directory, not a file", fullPath)
+	}
+	return nil
+}

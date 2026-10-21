@@ -1,0 +1,24 @@
+{{- if .Values.dflowUI.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dflow-ui
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: dflow-ui
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  {{- with .Values.dflowUI.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: dflow-ui
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  ports:
+  - name: ui
+    port: {{ .Values.dflowUI.service.port | default 80 }}
+    targetPort: {{ .Values.dflowUI.service.containerPort | default 8000 }}
+{{- end }}

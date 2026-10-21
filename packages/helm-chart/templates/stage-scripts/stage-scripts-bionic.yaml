@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  labels:
+    app.kubernetes.io/component: dflow-staging
+    app.kubernetes.io/part-of: dflow
+    app.kubernetes.io/version: {{ default .Chart.AppVersion .Values.image.dflow.tag }}
+  name: dflow-stage-scripts-bionic
+  namespace: {{ .Release.Namespace }}
+data:
+  builder: "paketobuildpacks/builder:*"
+  userID: "1000"
+  groupID: "1000"
+  env: |-
+    CNB_PLATFORM_API: "0.4"
+  base: dflow-stage-scripts
+  {{- with .Values.server.stagingWorkloads }}
+  staging-values.json: |-
+    {{- toJson . | nindent 4 }}
+  {{- end }}
+

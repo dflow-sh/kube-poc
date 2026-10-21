@@ -37,6 +37,15 @@ yarn-error.log*
 /data/
 *.kubeconfig
 kubeconfig
+.e2e-settings.yaml
+
+# go
+/dist/
+apps/*/dist/
+bin/
+.turbo/
+*.test
+coverage.out
 
 # vercel
 .vercel

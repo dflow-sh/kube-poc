@@ -1,0 +1,19 @@
+apiVersion: application.dflow.sh/v1
+kind: AppChart
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: standard
+  labels:
+    app.kubernetes.io/component: dflow
+    app.kubernetes.io/instance: default
+    app.kubernetes.io/name: dflow-standard-app-chart
+    app.kubernetes.io/part-of: dflow
+    app.kubernetes.io/version: {{ default .Chart.AppVersion .Values.image.dflow.tag }}
+spec:
+  shortDescription: dFlow standard deployment
+  description: dFlow standard support chart for application deployment
+  helmChart: {{ .Values.appChart.default | quote }}
+  settings:
+    appListeningPort:
+      type: 'integer'
+      minimum: '0'

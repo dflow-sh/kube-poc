@@ -1,0 +1,21 @@
+apiVersion: application.dflow.sh/v1
+kind: AppChart
+metadata:
+  namespace: {{ .Release.Namespace }}
+  name: gateway-api-application
+  labels:
+    app.kubernetes.io/component: dflow
+    app.kubernetes.io/instance: gateway-api-application
+    app.kubernetes.io/name: dflow-gateway-api-app-chart
+    app.kubernetes.io/part-of: dflow
+    app.kubernetes.io/version: {{ default .Chart.AppVersion .Values.image.dflow.tag }}
+spec:
+  shortDescription: dFlow deployment leveraging Gateway API
+  description: dFlow Gateway API support chart for application deployment
+  helmChart: {{ .Values.appChart.gatewayAPI | quote }}
+  settings:
+    httpsRedirect:
+      type: 'bool'
+    appListeningPort:
+      type: 'integer'
+      minimum: '0'

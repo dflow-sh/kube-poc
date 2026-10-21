@@ -1,0 +1,1675 @@
+// Copyright © 2021 - 2023 SUSE LLC
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//     http://www.apache.org/licenses/LICENSE-2.0
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package application
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	nethttp "net/http"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
+	"github.com/spf13/viper"
+	"golang.org/x/exp/slices"
+	"gopkg.in/yaml.v3"
+	batchv1 "k8s.io/api/batch/v1"
+	"k8s.io/utils/ptr"
+
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
+
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/cahash"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/randstr"
+	"github.com/dflow-sh/kube-poc/packages/dflow/api/v1/response"
+	"github.com/dflow-sh/kube-poc/packages/dflow/application"
+	"github.com/dflow-sh/kube-poc/packages/dflow/auth"
+	gitbridge "github.com/dflow-sh/kube-poc/packages/dflow/bridge/git"
+	"github.com/dflow-sh/kube-poc/packages/dflow/builderimage"
+	"github.com/dflow-sh/kube-poc/packages/dflow/cli/server/requestctx"
+	"github.com/dflow-sh/kube-poc/packages/dflow/duration"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helmchart"
+	"github.com/dflow-sh/kube-poc/packages/dflow/names"
+	"github.com/dflow-sh/kube-poc/packages/dflow/registry"
+	"github.com/dflow-sh/kube-poc/packages/dflow/s3manager"
+	apierror "github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/errors"
+	"github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/models"
+)
+
+type stageParam struct {
+	models.AppRef
+	BlobUID             string
+	BuilderImage        string
+	BuildMode           string
+	DockerfilePath      string
+	DockerBuildImage    string
+	DownloadImage       string
+	UnpackImage         string
+	Environment         models.EnvVariableList
+	Owner               metav1.OwnerReference
+	RegistryURL         string
+	S3ConnectionDetails s3manager.ConnectionDetails
+	Stage               models.StageRef
+	Username            string
+	PreviousStageID     string
+	RegistryCASecret    string
+	RegistryCAHash      string
+	RegistryCACertKey   string // "ca.crt" or "tls.crt"
+	UserID              int64
+	GroupID             int64
+	Scripts             string
+	HelmValues          HelmValuesMap
+}
+
+// resolveDefaultBuilderImage returns the BuilderImage CR selected as the
+// cluster default, falling back to the legacy environment configuration when
+// no CR is marked as default, or when listing BuilderImage CRs is forbidden.
+func resolveDefaultBuilderImage(
+	ctx context.Context,
+	cluster *kubernetes.Cluster,
+) (string, error) {
+	client, err := cluster.ClientBuilderImage()
+	if err != nil {
+		return "", err
+	}
+
+	defaultBuilder, err := builderimage.Default(ctx, client)
+	if err != nil {
+		return "", err
+	}
+	if defaultBuilder != nil {
+		return defaultBuilder.Image, nil
+	}
+
+	return viper.GetString("default-builder-image"), nil
+}
+
+type HelmValuesMap struct {
+	ServiceAccountName      string                      `json:"serviceAccountName"`
+	NodeSelector            map[string]string           `json:"nodeSelector,omitempty"`
+	Tolerations             []corev1.Toleration         `json:"tolerations,omitempty"`
+	Affinity                corev1.Affinity             `json:"affinity,omitempty"`
+	Resources               corev1.ResourceRequirements `json:"resources,omitempty"`
+	TTLSecondsAfterFinished int32                       `json:"ttlSecondsAfterFinished,omitempty"`
+	Storage                 struct {
+		SourceBlobs StagingStorageValues `json:"sourceBlobs,omitempty"`
+		Cache       StagingStorageValues `json:"cache,omitempty"`
+	} `json:"storage,omitempty"`
+}
+
+type StagingStorageValues struct {
+	Size             string                              `json:"size,omitempty"`
+	StorageClassName string                              `json:"storageClassName,omitempty"`
+	VolumeMode       corev1.PersistentVolumeMode         `json:"volumeMode,omitempty"`
+	AccessModes      []corev1.PersistentVolumeAccessMode `json:"accessModes,omitempty"`
+	EmptyDir         bool                                `json:"emptyDir,omitempty"`
+}
+
+// ImageURL returns the URL of the container image to be, using the
+// ImageID. The ImageURL is later used in app.yml and to send in the
+// stage response.
+func (app *stageParam) ImageURL(registryURL string) string {
+	return fmt.Sprintf("%s/%s-%s:%s", registryURL, app.Namespace, app.Name, app.Stage.ID)
+}
+
+// ensurePVC creates a PVC for the application if one doesn't already exist.
+// This PVC is used to store the application source blobs (as they are uploaded
+// on the "upload" endpoint). It is also mounted in the staging pod, as the
+// "source" workspace.
+// The same PVC stores the application's build cache (on a separate directory).
+func ensurePVC(ctx context.Context, cluster *kubernetes.Cluster, config StagingStorageValues, pvcName string) error {
+	_, err := cluster.Kubectl.CoreV1().PersistentVolumeClaims(helmchart.Namespace()).
+		Get(ctx, pvcName, metav1.GetOptions{})
+	if err != nil && !apierrors.IsNotFound(err) { // Unknown error, irrelevant to non-existence
+		return err
+	}
+	if err == nil { // pvc already exists
+		return nil
+	}
+
+	// Insert a default of last resort. See also note below.
+	if config.Size == "" {
+		config.Size = "1Gi"
+	}
+
+	if len(config.AccessModes) == 0 {
+		config.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
+	}
+
+	if config.VolumeMode == "" {
+		config.VolumeMode = corev1.PersistentVolumeFilesystem
+	}
+
+	pvcObject := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      pvcName,
+			Namespace: helmchart.Namespace(),
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: config.AccessModes,
+			VolumeMode:  &config.VolumeMode,
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: map[corev1.ResourceName]resource.Quantity{
+					corev1.ResourceStorage: resource.MustParse(config.Size),
+				},
+			},
+		},
+	}
+
+	if config.StorageClassName != "" {
+		pvcObject.Spec.StorageClassName = &config.StorageClassName
+	}
+
+	// From here on, only if the PVC is missing
+	_, err = cluster.Kubectl.CoreV1().PersistentVolumeClaims(helmchart.Namespace()).
+		Create(ctx, pvcObject, metav1.CreateOptions{})
+
+	return err
+}
+
+// Stage handles the API endpoint /namespaces/:namespace/applications/:app/stage
+// It creates a Job resource to stage the app
+func Stage(c *gin.Context) apierror.APIErrors {
+	ctx := c.Request.Context()
+	log := requestctx.Logger(ctx)
+
+	namespace := c.Param("namespace")
+	name := c.Param("app")
+	username := requestctx.User(ctx).Username
+
+	req := models.StageRequest{}
+	if err := c.BindJSON(&req); err != nil {
+		return apierror.NewBadRequestError(err.Error()).WithDetails("failed to unmarshal app stage request")
+	}
+	if name != req.App.Name {
+		return apierror.NewBadRequestError("name parameter from URL does not match name param in body")
+	}
+	if namespace != req.App.Namespace {
+		return apierror.NewBadRequestError("namespace parameter from URL does not match namespace param in body")
+	}
+	if apiErr := validateStageRequestBuildSettings(req); apiErr != nil {
+		return apiErr
+	}
+
+	cluster, err := kubernetes.GetCluster(ctx)
+	if err != nil {
+		return apierror.InternalError(err, "failed to get access to a kube client")
+	}
+
+	// check application resource
+	app, err := application.Get(ctx, cluster, req.App)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return apierror.AppIsNotKnown("cannot stage app, application resource is missing")
+		}
+		return apierror.InternalError(err, "failed to get the application resource")
+	}
+
+	// quickly reject conflict with (still) active staging
+	staging, err := application.IsCurrentlyStaging(ctx, cluster, req.App.Namespace, req.App.Name)
+	if err != nil {
+		return apierror.InternalError(err)
+	}
+	if staging {
+		return apierror.NewBadRequestError("staging job for image ID still running")
+	}
+
+	buildMode, dockerfilePath, builderImage, config, setupErr := resolveStagingImagesAndScripts(ctx, cluster, req, app)
+	if setupErr != nil {
+		return setupErr
+	}
+
+	log.Infow("staging app", "scripts", config.Name)
+	log.Infow("staging app", "build mode", buildMode)
+	log.Infow("staging app", "builder", builderImage)
+	log.Infow("staging app", "dockerfile", dockerfilePath)
+	log.Infow("staging app", "docker build image", config.DockerfileBuildImage)
+	log.Infow("staging app", "download", config.DownloadImage)
+	log.Infow("staging app", "unpack", config.UnpackImage)
+	log.Infow("staging app", "userid", config.UserID)
+	log.Infow("staging app", "groupid", config.GroupID)
+	log.Infow("staging app", "build env", config.Env)
+	log.Infow("staging app", "Staging Values", config.HelmValues)
+	log.Infow("staging app", "namespace", namespace, "app", req)
+
+	s3ConnectionDetails, err := s3manager.GetConnectionDetails(ctx, cluster,
+		helmchart.Namespace(), helmchart.S3ConnectionDetailsSecretName)
+	if err != nil {
+		return apierror.InternalError(err, "failed to fetch the S3 connection details")
+	}
+
+	blobUID, blobErr := resolveBlobUID(
+		ctx, cluster, s3ConnectionDetails, req, app, username,
+	)
+	if blobErr != nil {
+		return blobErr
+	}
+
+	// Create uid identifying the staging job to be
+
+	uid, err := randstr.Hex16()
+	if err != nil {
+		return apierror.InternalError(err, "failed to generate a uid")
+	}
+
+	environment, err := application.Environment(ctx, cluster, req.App)
+	if err != nil {
+		return apierror.InternalError(err, "failed to access application runtime environment")
+	}
+
+	owner := metav1.OwnerReference{
+		APIVersion: app.GetAPIVersion(),
+		Kind:       app.GetKind(),
+		Name:       app.GetName(),
+		UID:        app.GetUID(),
+	}
+
+	// Determine stage id of currently running deployment. Fallback to itself when no such exists.
+	// From the view of the new build we are about to create this is the previous id.
+	previousID, err := application.StageID(app)
+	if err != nil {
+		return apierror.InternalError(err, "failed to determine application stage id")
+	}
+	if previousID == "" {
+		previousID = uid
+	}
+
+	registryPublicURL, err := getRegistryURL(ctx, cluster)
+	if err != nil {
+		return apierror.InternalError(err, "getting the dFlow registry public URL")
+	}
+
+	registryCertificateSecret, registryCACertKey, registryCertificateHash, err :=
+		resolveRegistryCertHash(ctx, cluster)
+	if err != nil {
+		return apierror.InternalError(err, "cannot calculate Certificate hash")
+	}
+
+	// merge buildpack and general EV, i.e. `config.Env`, and `environment`.
+	// ATTENTION: in case of conflict the general, i.e. user-specified!, EV has priority.
+	for name, value := range config.Env {
+		if _, found := environment[name]; found {
+			continue
+		}
+		environment[name] = value
+	}
+
+	params := stageParam{
+		AppRef:              req.App,
+		BuilderImage:        builderImage,
+		BuildMode:           buildMode,
+		DockerfilePath:      dockerfilePath,
+		DockerBuildImage:    config.DockerfileBuildImage,
+		BlobUID:             blobUID,
+		DownloadImage:       config.DownloadImage,
+		UnpackImage:         config.UnpackImage,
+		Environment:         environment.List(),
+		Owner:               owner,
+		RegistryURL:         registryPublicURL,
+		S3ConnectionDetails: s3ConnectionDetails,
+		Stage:               models.NewStage(uid),
+		PreviousStageID:     previousID,
+		Username:            username,
+		RegistryCAHash:      registryCertificateHash,
+		RegistryCASecret:    registryCertificateSecret,
+		RegistryCACertKey:   registryCACertKey,
+		UserID:              config.UserID,
+		GroupID:             config.GroupID,
+		Scripts:             config.Name,
+		HelmValues:          config.HelmValues,
+	}
+
+	stageResponse, stageErr := executeStage(ctx, cluster, app, req, params)
+	if stageErr != nil {
+		return stageErr
+	}
+
+	response.OKReturn(c, stageResponse)
+	return nil
+}
+
+// executeStage runs the staging job for the given params. It is called by both Stage and SourcePatch.
+func executeStage(
+	ctx context.Context,
+	cluster *kubernetes.Cluster,
+	app *unstructured.Unstructured,
+	req models.StageRequest,
+	params stageParam,
+) (models.StageResponse, apierror.APIErrors) {
+	log := requestctx.Logger(ctx)
+
+	pvcError := ensureStagingPVCs(ctx, cluster, req, params.HelmValues)
+	if pvcError != nil {
+		return models.StageResponse{}, pvcError
+	}
+
+	job, jobenv := newJobRun(params)
+
+	// Note: The secret is deleted with the job in function `Unstage()`.
+	createSecretError := cluster.CreateSecret(ctx, helmchart.Namespace(), *jobenv)
+	if createSecretError != nil {
+		return models.StageResponse{}, apierror.InternalError(
+			createSecretError,
+			fmt.Sprintf("failed to create job env: %#v", jobenv),
+		)
+	}
+
+	createJobError := cluster.CreateJob(ctx, helmchart.Namespace(), job)
+	if createJobError != nil {
+		return models.StageResponse{}, apierror.InternalError(
+			createJobError,
+			fmt.Sprintf("failed to create job run: %#v", job),
+		)
+	}
+
+	updateAppError := updateApp(ctx, cluster, app, params)
+	if updateAppError != nil {
+		return models.StageResponse{}, apierror.InternalError(
+			updateAppError,
+			"updating application CR with staging information",
+		)
+	}
+
+	imageURL := params.ImageURL(params.RegistryURL)
+	log.Infow(
+		"staged app",
+		"namespace", helmchart.Namespace(),
+		"app", params.AppRef,
+		"uid", params.Stage.ID,
+		"image", imageURL,
+	)
+
+	return models.StageResponse{
+		Stage:    params.Stage,
+		ImageURL: imageURL,
+	}, nil
+}
+
+// stageJobs returns the jobs responsible for the staging run of the provided stageID.
+func stageJobs(ctx context.Context, cluster *kubernetes.Cluster, namespace, stageID string) ([]batchv1.Job, apierror.APIErrors) {
+	selector := fmt.Sprintf("app.kubernetes.io/component=staging,app.kubernetes.io/part-of=%s,dflow.sh/stage-id=%s",
+		namespace, stageID)
+
+	jobList, err := cluster.ListJobs(ctx, helmchart.Namespace(), selector)
+	if err != nil {
+		return nil, apierror.InternalError(err)
+	}
+	if len(jobList.Items) == 0 {
+		return nil, apierror.InternalError(fmt.Errorf("no jobs in %s with selector %s", namespace, selector))
+	}
+
+	return jobList.Items, nil
+}
+
+// waitForStagingCompletion waits until all provided jobs finish and reports success or failure.
+// It returns (true, nil) on success, (false, nil) on job failure, or (false, err) on unexpected errors.
+func waitForStagingCompletion(ctx context.Context, cluster *kubernetes.Cluster, jobs []batchv1.Job) (bool, error) {
+	for _, job := range jobs {
+		if err := cluster.WaitForJobDone(ctx, helmchart.Namespace(), job.Name, duration.ToAppBuilt()); err != nil {
+			return false, err
+		}
+
+		failed, err := cluster.IsJobFailed(ctx, job.Name, helmchart.Namespace())
+		if err != nil {
+			return false, err
+		}
+		if failed {
+			return false, nil
+		}
+	}
+
+	return true, nil
+}
+
+// jobDoneState checks current job conditions and reports if all jobs are done and whether they succeeded.
+func jobDoneState(jobs []batchv1.Job) (done bool, success bool) {
+	if len(jobs) == 0 {
+		return false, false
+	}
+
+	allDone := true
+	allSuccess := true
+
+	for _, job := range jobs {
+		jobDone := false
+		jobSuccess := false
+		for _, condition := range job.Status.Conditions {
+			if condition.Status != corev1.ConditionTrue {
+				continue
+			}
+
+			if condition.Type == batchv1.JobFailed {
+				jobDone = true
+				jobSuccess = false
+				break
+			}
+
+			if condition.Type == batchv1.JobComplete {
+				jobDone = true
+				jobSuccess = true
+				break
+			}
+		}
+
+		if !jobDone {
+			allDone = false
+		}
+		if !jobSuccess {
+			allSuccess = false
+		}
+	}
+
+	return allDone, allSuccess
+}
+
+// Staged handles the API endpoint /namespaces/:namespace/staging/:stage_id/complete
+// It waits for the Job resource staging the app to complete
+func Staged(c *gin.Context) apierror.APIErrors {
+	ctx := c.Request.Context()
+
+	namespace := c.Param("namespace")
+	id := c.Param("stage_id")
+
+	cluster, err := kubernetes.GetCluster(ctx)
+	if err != nil {
+		return apierror.InternalError(err)
+	}
+
+	jobs, apiErr := stageJobs(ctx, cluster, namespace, id)
+	if apiErr != nil {
+		return apiErr
+	}
+
+	success, err := waitForStagingCompletion(ctx, cluster, jobs)
+	if err != nil {
+		return apierror.InternalError(err)
+	}
+	if !success {
+		return apierror.NewInternalError("Failed to stage",
+			fmt.Sprintf("stage-id = %s", id))
+	}
+
+	response.OK(c)
+	return nil
+}
+
+// StagedWebsocket handles the websocket endpoint /namespaces/:namespace/staging/:stage_id/complete
+// It streams a small status payload when the staging job finishes (success or failure) and then closes the socket.
+func StagedWebsocket(c *gin.Context) {
+	ctx := c.Request.Context()
+	log := requestctx.Logger(ctx)
+
+	namespace := c.Param("namespace")
+	stageID := c.Param("stage_id")
+
+	cluster, err := kubernetes.GetCluster(ctx)
+	if err != nil {
+		response.Error(c, apierror.InternalError(err))
+		return
+	}
+
+	jobs, apiErr := stageJobs(ctx, cluster, namespace, stageID)
+	if apiErr != nil {
+		response.Error(c, apiErr)
+		return
+	}
+
+	upgrader := newUpgrader()
+	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+	if err != nil {
+		response.Error(c, apierror.InternalError(err))
+		return
+	}
+	defer func() {
+		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+		_ = conn.Close()
+	}()
+
+	sendUpdate := func(status, message string, completed bool) error {
+		payload := models.StageCompleteEvent{
+			StageID:   stageID,
+			Namespace: namespace,
+			Status:    status,
+			Message:   message,
+			Completed: completed,
+		}
+
+		data, marshalErr := json.Marshal(payload)
+		if marshalErr != nil {
+			return marshalErr
+		}
+
+		return conn.WriteMessage(websocket.TextMessage, data)
+	}
+
+	// initial acknowledgement so the caller knows the socket is established
+	if err := sendUpdate(models.StageStatusWaiting, "waiting for staging job to finish", false); err != nil {
+		log.Errorw("failed to send initial staging websocket message",
+			"error", err,
+		)
+		return
+	}
+
+	// If the job already completed before the websocket upgrade, send the final state immediately.
+	if done, success := jobDoneState(jobs); done {
+		if success {
+			_ = sendUpdate(models.StageStatusSucceeded, "", true)
+		} else {
+			_ = sendUpdate(models.StageStatusFailed, fmt.Sprintf("stage-id = %s failed to complete", stageID), true)
+		}
+		return
+	}
+
+	// Cancel the wait if the client disconnects.
+	waitCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	conn.SetCloseHandler(func(code int, text string) error {
+		cancel()
+		return nil
+	})
+
+	type result struct {
+		success bool
+		err     error
+	}
+	resultCh := make(chan result, 1)
+
+	go func() {
+		success, waitErr := waitForStagingCompletion(waitCtx, cluster, jobs)
+		resultCh <- result{success: success, err: waitErr}
+	}()
+
+	heartbeat := time.NewTicker(10 * time.Second)
+	defer heartbeat.Stop()
+
+	for {
+		select {
+		case <-waitCtx.Done():
+			_ = sendUpdate(models.StageStatusError, "staging wait cancelled", true)
+			return
+		case res := <-resultCh:
+			if res.err != nil {
+				log.Errorw("staging completion watcher failed", "error", res.err)
+				_ = sendUpdate(models.StageStatusError, res.err.Error(), true)
+				return
+			}
+			if res.success {
+				_ = sendUpdate(models.StageStatusSucceeded, "", true)
+				return
+			}
+			_ = sendUpdate(
+				models.StageStatusFailed,
+				fmt.Sprintf("stage-id = %s failed to complete", stageID),
+				true,
+			)
+			return
+		case <-heartbeat.C:
+			if err := sendUpdate(
+				models.StageStatusWaiting,
+				"waiting for staging job to finish",
+				false,
+			); err != nil {
+				log.Errorw("failed to send staging heartbeat", "error", err)
+			}
+		}
+	}
+}
+
+func validateBlob(
+	ctx context.Context,
+	blobUID string,
+	app models.AppRef,
+	s3ConnectionDetails s3manager.ConnectionDetails,
+) apierror.APIErrors {
+
+	manager, err := s3manager.New(s3ConnectionDetails)
+	if err != nil {
+		return apierror.InternalError(err, "creating an S3 manager")
+	}
+
+	blobMeta, err := manager.Meta(ctx, blobUID)
+	if err != nil {
+		return apierror.InternalError(err, "querying blob id meta-data")
+	}
+
+	// S3 and SeaweedFS return user metadata keys in lowercase (per S3/HTTP behavior)
+	blobApp, ok := blobMeta["app"]
+	if !ok {
+		blobApp, ok = blobMeta["App"]
+	}
+	if !ok {
+		return apierror.NewInternalError("blob has no app name meta data")
+	}
+	if blobApp != app.Name {
+		return apierror.NewBadRequestError("blob app mismatch").
+			WithDetailsf("expected: [%s], found: [%s]", app.Name, blobApp)
+	}
+
+	blobNamespace, ok := blobMeta["namespace"]
+	if !ok {
+		blobNamespace, ok = blobMeta["Namespace"]
+	}
+	if !ok {
+		return apierror.NewInternalError("blob has no namespace meta data")
+	}
+	if blobNamespace != app.Namespace {
+		return apierror.NewBadRequestError("blob namespace mismatch").
+			WithDetailsf("expected: [%s], found: [%s]", app.Namespace, blobNamespace)
+	}
+
+	return nil
+}
+
+// newJobRun is a helper which creates the Job related resources from
+// the given staging params. That is the job itself, and a secret
+// holding the job's environment. Which is a copy of the app
+// environment + standard variables.
+func newJobRun(app stageParam) (*batchv1.Job, *corev1.Secret) {
+	jobName := names.GenerateResourceName("stage", app.Namespace, app.Name, app.Stage.ID)
+
+	// fake stage params of the previous to pull the old image url from.
+	previous := app
+	previous.Stage = models.NewStage(app.PreviousStageID)
+
+	// TODO: Simplify env setup -- https://github.com/dflow-sh/kube-poc/packages/dflow/issues/1176
+	// Note: `source` is required because the mounted files are not executable.
+
+	// runtime: AWSCLIImage
+	awsScript := fmt.Sprintf("source /stage-support/%s", helmchart.DFlowStageDownload)
+
+	// runtime: BashImage
+	unpackScript := fmt.Sprintf(`source /stage-support/%s`, helmchart.DFlowStageUnpack)
+
+	// runtime: app.BuilderImage or Kaniko image
+	buildpackScript := fmt.Sprintf(`source /stage-support/%s`, helmchart.DFlowStageBuild)
+	dockerfileScript := fmt.Sprintf(`. /stage-support/%s`, helmchart.DFlowStageDockerfileBuild)
+
+	// build configuration
+	// - shared between all the phases, even if each phase uses only part of the set
+	stageEnv := assembleStageEnv(app, previous)
+
+	// Shared mounts for unpack + build. S3 credentials/certs stay off these on
+	// purpose: only download-s3-blob talks to object storage. Build (especially
+	// Kaniko) runs arbitrary user code and must not inherit installation-wide
+	// S3 credentials.
+	volumeMounts := []corev1.VolumeMount{
+		{
+			Name:      "source",
+			SubPath:   "source",
+			MountPath: "/workspace/source",
+		},
+		{
+			Name:      "cache",
+			SubPath:   "cache",
+			MountPath: "/workspace/cache",
+		},
+		{
+			Name:      "registry-creds",
+			MountPath: "/home/cnb/.docker/",
+			ReadOnly:  true,
+		},
+		{
+			Name:      "staging",
+			MountPath: "/stage-support",
+		},
+		{
+			Name:      "app-environment",
+			MountPath: "/workspace/source/appenv",
+			ReadOnly:  true,
+		},
+	}
+
+	downloadMounts := append([]corev1.VolumeMount{}, volumeMounts...)
+	if app.S3ConnectionDetails.AccessKeyID != "" && app.S3ConnectionDetails.SecretAccessKey != "" {
+		downloadMounts = append(downloadMounts, corev1.VolumeMount{
+			Name:      "s3-creds",
+			MountPath: "/root/.aws",
+			ReadOnly:  true,
+		})
+	}
+
+	// Cache Volume
+	CacheVolumeSource := corev1.VolumeSource{
+		PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+			ClaimName: app.MakeCachePVCName(),
+			ReadOnly:  false,
+		},
+	}
+	if app.HelmValues.Storage.Cache.EmptyDir {
+		CacheVolumeSource = corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}
+	}
+
+	// Source Blobs Volume
+	SourceBlobsVolumeSource := corev1.VolumeSource{
+		PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+			ClaimName: app.MakeSourceBlobsPVCName(),
+			ReadOnly:  false,
+		},
+	}
+	if app.HelmValues.Storage.SourceBlobs.EmptyDir {
+		SourceBlobsVolumeSource = corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}
+	}
+
+	volumes := []corev1.Volume{
+		{
+			Name: "staging",
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: app.Scripts,
+					},
+					DefaultMode: ptr.To[int32](420),
+				},
+			},
+		},
+		{
+			// See `jobenv` for the Secret providing the information.
+			Name: "app-environment",
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName:  jobName,
+					DefaultMode: ptr.To[int32](420),
+				},
+			},
+		},
+		{
+			Name:         "cache",
+			VolumeSource: CacheVolumeSource,
+		},
+		{
+			Name:         "source",
+			VolumeSource: SourceBlobsVolumeSource,
+		},
+		{
+			Name: "s3-creds",
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName:  helmchart.S3ConnectionDetailsSecretName,
+					DefaultMode: ptr.To[int32](420),
+				},
+			},
+		},
+		{
+			Name: "registry-creds",
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName:  registry.CredentialsSecretName,
+					DefaultMode: ptr.To[int32](420),
+					Items: []corev1.KeyToPath{
+						{
+							Key:  ".dockerconfigjson",
+							Path: "config.json",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// S3 TLS certs are only needed by the download stage.
+	volumes, downloadMounts = mountS3Certs(volumes, downloadMounts)
+	volumes, volumeMounts = mountRegistryCerts(app, volumes, volumeMounts)
+	for _, m := range volumeMounts {
+		if m.Name == "registry-certs" {
+			downloadMounts = append(downloadMounts, m)
+			break
+		}
+	}
+
+	// Create job environment as a copy of the app environment
+	env := make(map[string][]byte)
+	for _, ev := range app.Environment {
+		env[ev.Name] = []byte(ev.Value)
+	}
+
+	jobenv := &corev1.Secret{
+		Data: env,
+		ObjectMeta: metav1.ObjectMeta{
+			Name: jobName,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":       app.Name,
+				"app.kubernetes.io/part-of":    app.Namespace,
+				models.DFlowStageIDLabel:      app.Stage.ID,
+				models.DFlowStageIDPrevious:   app.PreviousStageID,
+				models.DFlowStageBlobUIDLabel: app.BlobUID,
+				"app.kubernetes.io/managed-by": "dflow",
+				"app.kubernetes.io/component":  "staging",
+			},
+			Annotations: map[string]string{
+				models.DFlowCreatedByAnnotation: app.Username,
+			},
+		},
+	}
+
+	initContainers := []corev1.Container{
+		{
+			Name:         "download-s3-blob",
+			Image:        app.DownloadImage,
+			VolumeMounts: downloadMounts,
+			Command:      []string{"/bin/bash"},
+			Args: []string{
+				"-c",
+				awsScript,
+			},
+			Env: stageEnv,
+		},
+		{
+			Name:         "unpack-blob",
+			Image:        app.UnpackImage,
+			VolumeMounts: volumeMounts,
+			Command:      []string{"bash"},
+			Args: []string{
+				"-c",
+				unpackScript,
+			},
+			Env: stageEnv,
+		},
+	}
+
+	buildContainer := stagingBuildContainer(app, volumeMounts, stageEnv, buildpackScript, dockerfileScript)
+
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: jobName,
+			Labels: map[string]string{
+				"app.kubernetes.io/name":       app.Name,
+				"app.kubernetes.io/part-of":    app.Namespace,
+				models.DFlowStageIDLabel:      app.Stage.ID,
+				models.DFlowStageIDPrevious:   app.PreviousStageID,
+				models.DFlowStageBlobUIDLabel: app.BlobUID,
+				"app.kubernetes.io/managed-by": "dflow",
+				"app.kubernetes.io/component":  "staging",
+			},
+			Annotations: map[string]string{
+				models.DFlowCreatedByAnnotation: app.Username,
+			},
+		},
+		Spec: batchv1.JobSpec{
+			BackoffLimit:            ptr.To[int32](0),
+			TTLSecondsAfterFinished: &app.HelmValues.TTLSecondsAfterFinished,
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						"app.kubernetes.io/name":       app.Name,
+						"app.kubernetes.io/part-of":    app.Namespace,
+						models.DFlowStageIDLabel:      app.Stage.ID,
+						models.DFlowStageIDPrevious:   app.PreviousStageID,
+						models.DFlowStageBlobUIDLabel: app.BlobUID,
+						"app.kubernetes.io/managed-by": "dflow",
+						"app.kubernetes.io/component":  "staging",
+					},
+					Annotations: map[string]string{
+						// Allow communication with the Registry even before the proxy is ready
+						"config.linkerd.io/skip-outbound-ports": "443",
+						models.DFlowCreatedByAnnotation:        app.Username,
+					},
+				},
+				Spec: corev1.PodSpec{
+					ServiceAccountName: app.HelmValues.ServiceAccountName,
+					InitContainers:     initContainers,
+					Containers:         []corev1.Container{buildContainer},
+					RestartPolicy:      corev1.RestartPolicyNever,
+					Volumes:            volumes,
+					Tolerations:        app.HelmValues.Tolerations,
+					NodeSelector:       app.HelmValues.NodeSelector,
+					Affinity:           &app.HelmValues.Affinity,
+				},
+			},
+		},
+	}
+
+	return job, jobenv
+}
+
+// stagingBuildContainer picks the final staging container for buildpack or Dockerfile mode.
+func stagingBuildContainer(
+	app stageParam,
+	volumeMounts []corev1.VolumeMount,
+	stageEnv []corev1.EnvVar,
+	buildpackScript string,
+	dockerfileScript string,
+) corev1.Container {
+	if models.NormalizeBuildMode(app.BuildMode) == models.BuildModeDockerfile {
+		return corev1.Container{
+			Name:         "dockerfile",
+			Image:        app.DockerBuildImage,
+			VolumeMounts: volumeMounts,
+			Command:      []string{"/busybox/sh", "-c"},
+			Args:         []string{dockerfileScript},
+			Env:          stageEnv,
+			Resources:    app.HelmValues.Resources,
+		}
+	}
+
+	return corev1.Container{
+		Name:         "buildpack",
+		Image:        app.BuilderImage,
+		Command:      []string{"/bin/bash"},
+		Args:         []string{"-c", buildpackScript},
+		Env:          stageEnv,
+		VolumeMounts: volumeMounts,
+		SecurityContext: &corev1.SecurityContext{
+			RunAsUser:  ptr.To[int64](app.UserID),
+			RunAsGroup: ptr.To[int64](app.GroupID),
+		},
+		Resources: app.HelmValues.Resources,
+	}
+}
+
+func assembleStageEnv(app, previous stageParam) []corev1.EnvVar {
+	stageEnv := []corev1.EnvVar{}
+
+	protocol := "http"
+	if app.S3ConnectionDetails.UseSSL {
+		protocol = "https"
+	}
+
+	stageEnv = appendEnvVar(stageEnv, "PROTOCOL", protocol)
+	stageEnv = appendEnvVar(stageEnv, "ENDPOINT", app.S3ConnectionDetails.Endpoint)
+	stageEnv = appendEnvVar(stageEnv, "BUCKET", app.S3ConnectionDetails.Bucket)
+	stageEnv = appendEnvVar(stageEnv, "BLOBID", app.BlobUID)
+	stageEnv = appendEnvVar(stageEnv, "PREIMAGE", previous.ImageURL(previous.RegistryURL))
+	stageEnv = appendEnvVar(stageEnv, "APPIMAGE", app.ImageURL(app.RegistryURL))
+	stageEnv = appendEnvVar(stageEnv, "USERID", strconv.FormatInt(app.UserID, 10))
+	stageEnv = appendEnvVar(stageEnv, "GROUPID", strconv.FormatInt(app.GroupID, 10))
+
+	if models.NormalizeBuildMode(app.BuildMode) == models.BuildModeDockerfile {
+		stageEnv = appendEnvVar(stageEnv, "DOCKERFILE_PATH", app.DockerfilePath)
+	}
+
+	return stageEnv
+}
+
+func getRegistryURL(ctx context.Context, cluster *kubernetes.Cluster) (string, error) {
+	cd, err := registry.GetConnectionDetails(
+		ctx,
+		cluster,
+		helmchart.Namespace(),
+		registry.CredentialsSecretName,
+	)
+	if err != nil {
+		return "", err
+	}
+
+	//Use universal registry URL for staging.
+	registryPublicURL, err := cd.RepositoryBase()
+	if err != nil {
+		return "", err
+	}
+
+	return registryPublicURL, nil
+}
+
+// The equivalent of:
+// kubectl get secret -n (helmchart.Namespace()) dflow-registry-tls -o json | jq -r '.["data"]["ca.crt"]' | base64 -d | openssl x509 -hash -noout
+// written in golang.
+// Returns (certKey, hash, error). Prefers ca.crt (the CA root) over tls.crt
+// (the server leaf cert). When cert-manager issues the registry cert with a
+// separate CA, mounting the leaf cert as a trusted CA does not work; the CA
+// cert must be used instead. Falls back to tls.crt for self-signed certs where
+// ca.crt is absent.
+func getRegistryCertificateHash(ctx context.Context, c *kubernetes.Cluster, namespace string, name string) (string, string, error) {
+	secret, err := c.Kubectl.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return "", "", err
+	}
+
+	// Prefer ca.crt (CA root) so staging jobs trust the registry regardless of
+	// whether the cert is self-signed or issued by an internal CA. Fall back to
+	// tls.crt for self-signed setups where ca.crt is absent.
+	certKey := "ca.crt"
+	certData, found := secret.Data["ca.crt"]
+	if !found || len(certData) == 0 {
+		// cert-manager doesn't add the CA for ACME certificates:
+		// https://github.com/jetstack/cert-manager/issues/2111
+		certKey = "tls.crt"
+		certData, found = secret.Data["tls.crt"]
+		if !found {
+			return "", "", nil
+		}
+	}
+
+	hash, err := cahash.GenerateHash(certData)
+	if err != nil {
+		return "", "", err
+	}
+
+	return certKey, hash, nil
+}
+
+// getBuilderImage returns the builder image defined on the request. If that
+// one is not defined, it tries to find the builder image previously used on the
+// Application CR. If one is not found, it returns an error.
+func getBuilderImage(req models.StageRequest, app *unstructured.Unstructured) (string, apierror.APIErrors) {
+	var returnErr apierror.APIErrors
+
+	if req.BuilderImage != "" {
+		return req.BuilderImage, nil
+	}
+
+	builderImage, _, err := unstructured.NestedString(app.UnstructuredContent(), "spec", "builderimage")
+	if err != nil {
+		returnErr = apierror.InternalError(err, "builderimage should be a string!")
+		return "", returnErr
+	}
+
+	return builderImage, nil
+}
+
+// resolveBlobUID returns the blob to stage, in three cases.
+//
+// A blob named explicitly in the request must validate: a caller that asked for
+// a specific blob and cannot have it gets an error, never a silent substitute.
+// A blob recorded on the app CR may have been reaped from S3, so failing to use
+// it falls through to the git origin. With neither, the git origin is the only
+// source left.
+func resolveBlobUID(
+	ctx context.Context,
+	cluster *kubernetes.Cluster,
+	s3ConnectionDetails s3manager.ConnectionDetails,
+	req models.StageRequest,
+	app *unstructured.Unstructured,
+	username string,
+) (string, apierror.APIErrors) {
+	log := requestctx.Logger(ctx)
+	namespace := req.App.Namespace
+	name := req.App.Name
+
+	if req.BlobUID != "" {
+		validateError := validateBlob(
+			ctx, req.BlobUID, req.App, s3ConnectionDetails,
+		)
+		if validateError != nil {
+			return "", validateError
+		}
+
+		return req.BlobUID, nil
+	}
+
+	storedBlobUID, lookupError := application.BlobUID(app)
+	if lookupError != nil {
+		return "", apierror.InternalError(
+			lookupError, "looking up the previous blob UID",
+		)
+	}
+
+	if storedBlobUID != "" {
+		validateError := validateBlob(
+			ctx, storedBlobUID, req.App, s3ConnectionDetails,
+		)
+		if validateError == nil {
+			return storedBlobUID, nil
+		}
+
+		log.Infow("stored blob unusable, checking for git origin fallback",
+			"namespace", namespace, "app", name,
+			"blobUID", storedBlobUID, "error", validateError,
+		)
+	}
+
+	blobError := apierror.NewBadRequestError(
+		"application has no usable source: no blobuid was provided, " +
+			"no stored blob is available, and it has no git origin to re-clone",
+	)
+
+	origin, originError := application.Origin(app)
+	if originError != nil || origin.Git == nil {
+		log.Infow("no git origin available for fallback",
+			"namespace", namespace, "app", name,
+		)
+		return "", blobError
+	}
+
+	log.Infow("git origin found, re-cloning to S3",
+		"namespace", namespace, "app", name,
+		"url", origin.Git.URL, "revision", origin.Git.Revision,
+	)
+
+	// Resolve the gitconfig for this system re-clone. The stamp is re-authorized
+	// on every re-clone rather than trusted from push time.
+	manager, managerError := gitbridge.NewManager(
+		cluster.Kubectl.CoreV1().Secrets(helmchart.Namespace()),
+	)
+	if managerError != nil {
+		return "", apierror.InternalError(managerError, "creating git configuration manager")
+	}
+
+	var gitConfig *gitbridge.Configuration
+	if origin.Git.Gitconfig != "" {
+		// Preferred path: the app carries an explicit per-app gitconfig stamp.
+		// A name that no longer exists falls back to an unauthenticated clone;
+		// a name that still exists must re-pass authorization and host binding.
+		config, found := manager.Configuration(origin.Git.Gitconfig)
+		if !found {
+			log.Infow("stored gitconfig no longer exists, cloning without it",
+				"namespace", namespace, "app", name, "gitconfig", origin.Git.Gitconfig,
+			)
+		} else {
+			user := requestctx.User(ctx)
+			if !auth.CanUseGitconfig(user, *config) {
+				return "", apierror.NewAPIError(
+					fmt.Sprintf(
+						"user unauthorized to use gitconfig [%s]",
+						origin.Git.Gitconfig,
+					),
+					nethttp.StatusForbidden,
+				)
+			}
+
+			if !config.AllowsHost(origin.Git.URL) {
+				return "", apierror.NewAPIError(
+					fmt.Sprintf(
+						"gitconfig [%s] is not allowed for the host of url [%s]",
+						origin.Git.Gitconfig,
+						origin.Git.URL,
+					),
+					nethttp.StatusForbidden,
+				)
+			}
+			gitConfig = config
+		}
+	} else {
+		// Legacy fallback: apps pushed before per-app gitconfig stamping have no
+		// origin.git.gitconfig. Match a configuration by repo URL, preserving the
+		// pre-upgrade behavior so private-repo re-clones keep working on redeploy.
+		config, findError := manager.FindConfiguration(origin.Git.URL)
+		if findError != nil {
+			return "", apierror.InternalError(findError,
+				fmt.Sprintf("finding git configuration for gitURL [%s]", origin.Git.URL))
+		}
+		if config != nil {
+			log.Infow("legacy app without stored gitconfig, matched by url",
+				"namespace", namespace, "app", name, "gitconfig", config.ID,
+			)
+			gitConfig = config
+		}
+	}
+
+	blobUID, _, _, cloneError := cloneAndUpload(
+		ctx, cluster,
+		origin.Git.URL, origin.Git.Revision,
+		namespace, name, username, gitConfig,
+	)
+	if cloneError != nil {
+		return "", cloneError
+	}
+	log.Infow("git fallback clone succeeded",
+		"namespace", namespace, "app", name, "blobUID", blobUID,
+	)
+	return blobUID, nil
+}
+
+// ensureStagingPVCs creates persistent volume claims for the staging job
+// when the helm values do not use emptyDir for cache or source blobs.
+func ensureStagingPVCs(
+	ctx context.Context,
+	cluster *kubernetes.Cluster,
+	req models.StageRequest,
+	helmValues HelmValuesMap,
+) apierror.APIErrors {
+	if !helmValues.Storage.Cache.EmptyDir {
+		cacheErr := ensurePVC(
+			ctx, cluster,
+			helmValues.Storage.Cache,
+			req.App.MakeCachePVCName(),
+		)
+		if cacheErr != nil {
+			return apierror.InternalError(
+				cacheErr,
+				"failed to ensure a PersistentVolumeClaim for the application cache",
+			)
+		}
+	}
+	if !helmValues.Storage.SourceBlobs.EmptyDir {
+		blobsErr := ensurePVC(
+			ctx, cluster,
+			helmValues.Storage.SourceBlobs,
+			req.App.MakeSourceBlobsPVCName(),
+		)
+		if blobsErr != nil {
+			return apierror.InternalError(
+				blobsErr,
+				"failed to ensure a PersistentVolumeClaim for the application source blobs",
+			)
+		}
+	}
+	return nil
+}
+
+// resolveRegistryCertHash reads the registry certificate secret name from
+// config and returns the secret name and its hash. Returns empty strings when
+// no secret is configured.
+func resolveRegistryCertHash(
+	ctx context.Context,
+	cluster *kubernetes.Cluster,
+) (string, string, string, error) {
+	secret := viper.GetString("registry-certificate-secret")
+	if secret == "" {
+		return "", "", "", nil
+	}
+	certKey, hash, hashErr := getRegistryCertificateHash(
+		ctx, cluster, helmchart.Namespace(), secret,
+	)
+	if hashErr != nil {
+		return "", "", "", hashErr
+	}
+	return secret, certKey, hash, nil
+}
+
+func updateApp(ctx context.Context, cluster *kubernetes.Cluster, app *unstructured.Unstructured, params stageParam) error {
+	client, err := cluster.ClientApp()
+	if err != nil {
+		return err
+	}
+
+	namespace, _, err := unstructured.NestedString(app.UnstructuredContent(), "metadata", "namespace")
+	if err != nil {
+		return err
+	}
+	name, _, err := unstructured.NestedString(app.UnstructuredContent(), "metadata", "name")
+	if err != nil {
+		return err
+	}
+
+	specPatch := map[string]any{
+		"stageid":        params.Stage.ID,
+		"blobuid":        params.BlobUID,
+		"buildmode":      params.BuildMode,
+		"dockerfilepath": params.DockerfilePath,
+	}
+	if models.NormalizeBuildMode(params.BuildMode) == models.BuildModeBuildpack {
+		specPatch["builderimage"] = params.BuilderImage
+	}
+
+	// Merge patch avoids resourceVersion update conflicts for these spec fields.
+	patchBody, err := json.Marshal(map[string]any{"spec": specPatch})
+	if err != nil {
+		return err
+	}
+
+	_, err = client.Namespace(namespace).Patch(
+		ctx,
+		name,
+		types.MergePatchType,
+		patchBody,
+		metav1.PatchOptions{},
+	)
+	return err
+}
+
+func mountS3Certs(volumes []corev1.Volume, volumeMounts []corev1.VolumeMount) ([]corev1.Volume, []corev1.VolumeMount) {
+	if s3CertificateSecret := viper.GetString("s3-certificate-secret"); s3CertificateSecret != "" {
+		volumes = append(volumes, corev1.Volume{
+			Name: "s3-certs",
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName:  s3CertificateSecret,
+					DefaultMode: ptr.To[int32](420),
+				},
+			},
+		})
+
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      "s3-certs",
+			MountPath: "/certs",
+			ReadOnly:  true,
+		})
+	}
+
+	return volumes, volumeMounts
+}
+
+func mountRegistryCerts(app stageParam, volumes []corev1.Volume, volumeMounts []corev1.VolumeMount) ([]corev1.Volume, []corev1.VolumeMount) {
+	// If there is a certificate to trust
+	if app.RegistryCASecret != "" && app.RegistryCAHash != "" {
+		volumes = append(volumes, corev1.Volume{
+			Name: "registry-certs",
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName:  app.RegistryCASecret,
+					DefaultMode: ptr.To[int32](420),
+				},
+			},
+		})
+
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      "registry-certs",
+			MountPath: fmt.Sprintf("/etc/ssl/certs/%s", app.RegistryCAHash),
+			SubPath:   app.RegistryCACertKey,
+			ReadOnly:  true,
+		})
+	}
+
+	return volumes, volumeMounts
+}
+
+func appendEnvVar(envs []corev1.EnvVar, name, value string) []corev1.EnvVar {
+	return append(envs, corev1.EnvVar{Name: name, Value: value})
+}
+
+// StagingScriptConfig holds all the information for using a (set of) buildpack(s)
+type StagingScriptConfig struct {
+	Name                 string // config name. Needed to mount the resource in the pod
+	Builder              string // glob pattern for builders supported by this resource
+	UserID               int64  // user id to run the build phase with (`cnb` user)
+	GroupID              int64  // group id to run the build phase with
+	Base                 string // optional, name of resource to pull the other parts from
+	DownloadImage        string // image to run the download phase with
+	UnpackImage          string // image to run the unpack phase with
+	DockerfileBuildImage string // image to run Dockerfile builds with (Kaniko)
+	Env                  models.EnvVariableMap
+	HelmValues           HelmValuesMap
+}
+
+func DetermineStagingScripts(ctx context.Context,
+	cluster *kubernetes.Cluster,
+	namespace, builder string) (*StagingScriptConfig, error) {
+	logger := requestctx.Logger(ctx).With("component", "staging-scripts")
+
+	logger.Infow("locate staging scripts", "namespace", namespace)
+	logger.Infow("locate staging scripts", "builder", builder)
+
+	configmapSelector := labels.Set(map[string]string{
+		"app.kubernetes.io/component": "dflow-staging",
+	}).AsSelector().String()
+
+	configmapList, err := cluster.Kubectl.CoreV1().ConfigMaps(namespace).List(ctx,
+		metav1.ListOptions{
+			LabelSelector: configmapSelector,
+		})
+	if err != nil {
+		return nil, err
+	}
+
+	logger.Infow("locate staging scripts", "possibles", len(configmapList.Items))
+
+	var candidates []*StagingScriptConfig
+	for _, configmap := range configmapList.Items {
+		config, err := NewStagingScriptConfig(configmap)
+		if err != nil {
+			logger.Infow("Error loading config item", "error", fmt.Sprintf("%+v", err))
+			return nil, err
+		}
+		candidates = append(candidates, config)
+	}
+
+	// Sort the candidates by name to have a deterministic search order
+	slices.SortFunc(candidates, SortByName)
+
+	var fallback *StagingScriptConfig
+
+	// Show the entire ordered list (except fallbacks), also save fallbacks, and show last. NOTE
+	// that this loop excises the fallbacks from the regular list to avoid having to check for
+	// them again when matching.
+	var matchable []*StagingScriptConfig
+	for _, config := range candidates {
+		pattern := config.Builder
+		if pattern == "*" || pattern == "" {
+			fallback = config
+			continue
+		}
+		logger.Infow("locate staging scripts - found",
+			"name", config.Name, "match", pattern)
+		matchable = append(matchable, config)
+	}
+	if fallback != nil {
+		logger.Infow("locate staging scripts - fallback",
+			"name", fallback.Name, "match", fallback.Builder)
+	}
+
+	// match by pattern
+	for _, config := range matchable {
+		pattern := config.Builder
+		logger.Infow("locate staging scripts - checking",
+			"name", config.Name, "match", pattern)
+
+		matched, err := filepath.Match(pattern, builder)
+		if err != nil {
+			return nil, err
+		}
+		if matched {
+			logger.Infow("locate staging scripts - match",
+				"name", config.Name, "match", pattern, "builder", builder)
+
+			err := StagingScriptConfigResolve(ctx, cluster, config)
+			if err != nil {
+				return nil, err
+			}
+
+			return config, nil
+		}
+	}
+
+	if fallback != nil {
+		logger.Infow("locate staging scripts - using fallback", "name", fallback.Name)
+		err := StagingScriptConfigResolve(ctx, cluster, fallback)
+		if err != nil {
+			return nil, err
+		}
+		return fallback, nil
+	}
+
+	return nil, fmt.Errorf("no matches, no fallback")
+}
+
+func StagingScriptConfigResolve(ctx context.Context, cluster *kubernetes.Cluster, config *StagingScriptConfig) error {
+	if config.Base == "" {
+		// nothing to do without a base
+		return nil
+	}
+
+	logger := requestctx.Logger(ctx).With("component", "staging-scripts")
+	logger.Infow("locate staging scripts - inherit", "base", config.Base)
+
+	base, err := cluster.GetConfigMap(ctx, helmchart.Namespace(), config.Base)
+	if err != nil {
+		return apierror.InternalError(err, "failed to retrieve staging base")
+	}
+
+	// Fill config from the base.
+	// BEWARE: Keep user/group data of the incoming config.
+	// BEWARE: Keep environment data of the incoming config.
+
+	config.Name = base.Name
+	config.DownloadImage = base.Data["downloadImage"]
+	config.UnpackImage = base.Data["unpackImage"]
+	if config.DockerfileBuildImage == "" {
+		config.DockerfileBuildImage = base.Data["dockerfileBuildImage"]
+	}
+
+	return nil
+}
+
+func NewStagingScriptConfig(config corev1.ConfigMap) (*StagingScriptConfig, error) {
+	stagingScript := &StagingScriptConfig{
+		Name:                 config.Name,
+		Builder:              config.Data["builder"],
+		Base:                 config.Data["base"],
+		DownloadImage:        config.Data["downloadImage"],
+		UnpackImage:          config.Data["unpackImage"],
+		DockerfileBuildImage: config.Data["dockerfileBuildImage"],
+		// env, user, group id, Helm Values, see below.
+	}
+
+	userID, err := strconv.ParseInt(config.Data["userID"], 10, 64)
+	if err != nil {
+		return nil, apierror.InternalError(err)
+	}
+	groupID, err := strconv.ParseInt(config.Data["groupID"], 10, 64)
+	if err != nil {
+		return nil, err
+	}
+
+	envString := config.Data["env"]
+
+	err = yaml.Unmarshal([]byte(envString), &stagingScript.Env)
+	if err != nil {
+		return nil, err
+	}
+
+	var cfg HelmValuesMap
+	stagingValues, ok := config.Data["staging-values.json"]
+	if ok {
+		err = json.Unmarshal([]byte(stagingValues), &cfg)
+		if err != nil {
+			return nil, err
+		}
+		stagingScript.HelmValues = cfg
+	}
+
+	stagingScript.GroupID = groupID
+	stagingScript.UserID = userID
+
+	return stagingScript, nil
+}
+
+func SortByName(s1, s2 *StagingScriptConfig) int {
+	return strings.Compare(s1.Name, s2.Name)
+}
+
+func validateStageRequestBuildSettings(req models.StageRequest) apierror.APIErrors {
+	if req.BuildMode != "" {
+		if _, err := models.ValidateBuildMode(req.BuildMode); err != nil {
+			return apierror.NewBadRequestError(err.Error())
+		}
+	}
+	if req.DockerfilePath != "" {
+		if _, err := models.ValidateDockerfilePath(req.DockerfilePath); err != nil {
+			return apierror.NewBadRequestError(err.Error())
+		}
+	}
+	return nil
+}
+
+// resolveStagingImagesAndScripts resolves build mode, Dockerfile path, builder
+// image, and the matching staging-script ConfigMap for a stage request.
+func resolveStagingImagesAndScripts(
+	ctx context.Context,
+	cluster *kubernetes.Cluster,
+	req models.StageRequest,
+	app *unstructured.Unstructured,
+) (string, string, string, *StagingScriptConfig, apierror.APIErrors) {
+	buildMode, resolveErr := resolveBuildMode(req, app)
+	if resolveErr != nil {
+		return "", "", "", nil, resolveErr
+	}
+	dockerfilePath, pathErr := resolveDockerfilePath(req, app)
+	if pathErr != nil {
+		return "", "", "", nil, pathErr
+	}
+
+	var builderImage string
+	if buildMode == models.BuildModeBuildpack {
+		var builderErr apierror.APIErrors
+		builderImage, builderErr = getBuilderImage(req, app)
+		if builderErr != nil {
+			return "", "", "", nil, builderErr
+		}
+		if builderImage == "" {
+			var err error
+			builderImage, err = resolveDefaultBuilderImage(ctx, cluster)
+			if err != nil {
+				return "", "", "", nil, apierror.InternalError(err, "failed to resolve the default builder image")
+			}
+			if builderImage == "" {
+				return "", "", "", nil, apierror.NewBadRequestError("no builder image specified and no default configured")
+			}
+		}
+	}
+
+	var config *StagingScriptConfig
+	var err error
+	if models.NormalizeBuildMode(buildMode) == models.BuildModeDockerfile {
+		config, err = loadDockerfileStagingConfig(ctx, cluster, helmchart.Namespace())
+	} else {
+		config, err = DetermineStagingScripts(ctx, cluster, helmchart.Namespace(), builderImage)
+	}
+	if err != nil {
+		return "", "", "", nil, apierror.InternalError(err, "failed to retrieve staging configuration")
+	}
+
+	return buildMode, dockerfilePath, builderImage, config, nil
+}
+
+func resolveBuildMode(req models.StageRequest, app *unstructured.Unstructured) (string, apierror.APIErrors) {
+	if req.BuildMode != "" {
+		mode, err := models.ValidateBuildMode(req.BuildMode)
+		if err != nil {
+			return "", apierror.NewBadRequestError(err.Error())
+		}
+		return mode, nil
+	}
+
+	mode, _, err := unstructured.NestedString(app.UnstructuredContent(), "spec", "buildmode")
+	if err != nil || mode == "" {
+		return models.BuildModeBuildpack, nil
+	}
+
+	validated, err := models.ValidateBuildMode(mode)
+	if err != nil {
+		return "", apierror.NewBadRequestError(err.Error())
+	}
+	return validated, nil
+}
+
+func resolveDockerfilePath(req models.StageRequest, app *unstructured.Unstructured) (string, apierror.APIErrors) {
+	if req.DockerfilePath != "" {
+		path, err := models.ValidateDockerfilePath(req.DockerfilePath)
+		if err != nil {
+			return "", apierror.NewBadRequestError(err.Error())
+		}
+		return path, nil
+	}
+
+	path, _, err := unstructured.NestedString(app.UnstructuredContent(), "spec", "dockerfilepath")
+	if err != nil || path == "" {
+		return "Dockerfile", nil
+	}
+
+	validated, err := models.ValidateDockerfilePath(path)
+	if err != nil {
+		return "", apierror.NewBadRequestError(err.Error())
+	}
+	return validated, nil
+}
+
+func loadDockerfileStagingConfig(ctx context.Context,
+	cluster *kubernetes.Cluster,
+	namespace string) (*StagingScriptConfig, error) {
+	// Dockerfile builds do not use a Paketo builder image. Staging images and
+	// the Kaniko executor come from the base dflow-stage-scripts ConfigMap.
+	configmap, err := cluster.GetConfigMap(ctx, namespace, "dflow-stage-scripts")
+	if err != nil {
+		return nil, err
+	}
+
+	config, err := NewStagingScriptConfig(*configmap)
+	if err != nil {
+		return nil, err
+	}
+
+	if config.DockerfileBuildImage == "" {
+		return nil, fmt.Errorf("no dockerfile build image configured")
+	}
+
+	return config, nil
+}

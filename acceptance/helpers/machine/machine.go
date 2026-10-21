@@ -1,0 +1,451 @@
+// Copyright © 2021 - 2023 SUSE LLC
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//     http://www.apache.org/licenses/LICENSE-2.0
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Package machine provides a number of utility functions encapsulating often-used sequences.
+// I.e. create/delete applications/configurations, bind/unbind configurations, etc.
+// This is done in the hope of enhancing the readability of various before/after blocks.
+package machine
+
+import (
+	"bytes"
+	"context"
+	"crypto/tls"
+	"fmt"
+	"io"
+	"net/http"
+	urlpkg "net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+	"github.com/pkg/errors"
+
+	"github.com/dflow-sh/kube-poc/acceptance/helpers/proc"
+	"github.com/dflow-sh/kube-poc/packages/dflow/cli/settings"
+	"github.com/gorilla/websocket"
+)
+
+type Machine struct {
+	nodeTmpDir       string
+	user             string
+	password         string
+	adminToken       string
+	userToken        string
+	root             string
+	dflowBinaryPath string
+}
+
+func New(dir, user, password, adminToken, userToken, root, dflowBinaryPath string) Machine {
+	return Machine{
+		nodeTmpDir:       dir,
+		user:             user,
+		password:         password,
+		adminToken:       adminToken,
+		userToken:        userToken,
+		root:             root,
+		dflowBinaryPath: dflowBinaryPath,
+	}
+}
+
+func (m *Machine) ShowStagingLogs(app string) {
+	_, _ = m.dFlow("", "app", "logs", "--staging", app)
+}
+
+// dFlow invokes the `dflow` binary, running the specified command.
+// It returns the command output and/or error.
+// dir parameter defines the directory from which the command should be run.
+// It defaults to the current dir if left empty.
+func (m *Machine) dFlow(dir, command string, arg ...string) (string, error) {
+	var out string
+	var err error
+	args := append([]string{command}, arg...)
+	for attempt := 1; attempt <= 5; attempt++ {
+		out, err = proc.Run(dir, false, m.dflowBinaryPath, args...)
+		if err == nil {
+			return out, nil
+		}
+		if !isTransientAPIError(out) || attempt == 5 {
+			break
+		}
+		_, _ = fmt.Fprintf(GinkgoWriter, "[dFlow] transient error retry %d/5 command=%s err=%v out=%s\n", attempt, command, err, out)
+		time.Sleep(time.Duration(attempt) * time.Second)
+	}
+	return out, err
+}
+
+// DFlowCLI runs the dflow binary with a full argv (e.g. "apps", "exec", name).
+// stdinFactory is invoked per attempt so stdin can be rewound between retries.
+func (m *Machine) DFlowCLI(dir string, stdinFactory func() io.Reader, args ...string) (string, error) {
+	wd := dir
+	if wd == "" {
+		var err error
+		wd, err = os.Getwd()
+		if err != nil {
+			return "", err
+		}
+	}
+	var lastOut string
+	var lastErr error
+	for attempt := 1; attempt <= 5; attempt++ {
+		var b bytes.Buffer
+		// Bound each interactive attempt so flaky websocket exec calls can retry
+		// instead of hanging for the whole spec duration.
+		ctx, cancel := context.WithTimeout(context.Background(), 75*time.Second)
+		cmd := exec.CommandContext(ctx, m.dflowBinaryPath, args...) // nolint:gosec // acceptance helper
+		cmd.Dir = wd
+		if stdinFactory != nil {
+			cmd.Stdin = stdinFactory()
+		}
+		cmd.Stdout = &b
+		cmd.Stderr = &b
+		lastErr = cmd.Run()
+		cancel()
+		lastOut = b.String()
+		if ctx.Err() == context.DeadlineExceeded {
+			if lastOut == "" {
+				lastOut = "dflow CLI command timed out after 75s"
+			}
+			lastErr = ctx.Err()
+		}
+		if lastErr == nil {
+			return lastOut, nil
+		}
+		if !isTransientAPIError(lastOut) || attempt == 5 {
+			break
+		}
+		_, _ = fmt.Fprintf(GinkgoWriter, "[DFlowCLI] transient error retry %d/5 args=%v err=%v out=%s\n", attempt, args, lastErr, lastOut)
+		time.Sleep(time.Duration(attempt) * time.Second)
+	}
+	return lastOut, lastErr
+}
+
+// DFlowCmd creates a Cmd to run the dFlow client
+func (m *Machine) DFlowCmd(command string, arg ...string) *exec.Cmd {
+	return exec.Command(m.dflowBinaryPath, append([]string{command}, arg...)...) // nolint:gosec // test setup
+}
+
+func (m *Machine) Versions() {
+	out, err := m.dFlow("", "info")
+	Expect(err).ToNot(HaveOccurred(), out)
+	out = strings.ReplaceAll(out, "\n", " ")
+	out = strings.ReplaceAll(out, "    ", "")
+	out = strings.ReplaceAll(out, "dFlow ", "")
+	out = strings.ReplaceAll(out, "Environment Platform: ", "")
+	out = strings.ReplaceAll(out, "Version: ", "")
+	By(out)
+}
+
+const stagingError = "Failed to stage"
+
+// isTransientAPIError detects CLI/API failures that often clear after a short wait
+// (parallel CI load, ingress rollouts, or systemd-resolved timeouts to *.sslip.io).
+func isTransientAPIError(out string) bool {
+	if out == "" {
+		return false
+	}
+	lo := strings.ToLower(out)
+	if strings.Contains(lo, "making the request") &&
+		(strings.Contains(lo, "eof") || strings.Contains(lo, "i/o timeout") || strings.Contains(lo, "connection reset")) {
+		return true
+	}
+	if strings.Contains(out, "unexpected EOF") ||
+		strings.Contains(out, "connection reset by peer") ||
+		strings.Contains(out, "TLS handshake timeout") {
+		return true
+	}
+	if strings.Contains(lo, "dial tcp:") && strings.Contains(lo, "lookup") && strings.Contains(lo, "i/o timeout") {
+		return true
+	}
+	if strings.Contains(lo, "read udp") && strings.Contains(lo, "127.0.0.53:53") && strings.Contains(lo, "i/o timeout") {
+		return true
+	}
+	return false
+}
+
+func isTransientPushError(out string) bool {
+	return isTransientAPIError(out)
+}
+
+// isTransient403 detects the "user unauthorized for namespace X" 403 that
+// intermittently appears under parallel CI load when concurrent writes to the
+// admin user secret briefly clobber its role annotation. It clears on its own
+// once a subsequent mutation rewrites the secret, so retry rather than fail.
+func isTransient403(out string) bool {
+	if out == "" {
+		return false
+	}
+	return strings.Contains(out, "user unauthorized") &&
+		strings.Contains(out, "403")
+}
+
+// DFlowPush shows the staging log if the error indicates that staging
+// failed
+func (m *Machine) DFlowPush(
+	dir string,
+	name string,
+	arg ...string,
+) (string, error) {
+	var out string
+	var err error
+
+	for attempt := 1; attempt <= 3; attempt++ {
+		out, err = proc.Run(
+			dir,
+			false,
+			m.dflowBinaryPath,
+			append([]string{"apps", "push"}, arg...)...,
+		)
+
+		if err == nil {
+			return out, nil
+		}
+
+		if !isTransientPushError(out) || attempt == 3 {
+			break
+		}
+
+		_, _ = fmt.Fprintf(
+			GinkgoWriter,
+			"[DFlowPush] transient push error for app=%s attempt=%d/3, retrying: %v\nout=%s\n",
+			name,
+			attempt,
+			err,
+			out,
+		)
+
+		time.Sleep(time.Duration(attempt) * 2 * time.Second)
+	}
+
+	if err != nil && strings.Contains(out, stagingError) {
+		_, _ = fmt.Fprintf(GinkgoWriter, "[DFlowPush] staging failed for app=%s, dumping staging logs\n", name)
+		m.ShowStagingLogs(name)
+	}
+
+	return out, err
+}
+
+func (m *Machine) SetupNamespace(namespace string) {
+	By(fmt.Sprintf("creating a namespace: %s", namespace))
+
+	var attempt int
+	// Namespace creation can race with internal secret propagation on busy CI nodes.
+	EventuallyWithOffset(1, func() error {
+		attempt++
+		_, _ = fmt.Fprintf(GinkgoWriter, "[SetupNamespace] attempt %d namespace=%s\n", attempt, namespace)
+
+		t0 := time.Now()
+		out, err := m.dFlow(m.nodeTmpDir, "namespace", "create", namespace)
+		elapsedCreate := time.Since(t0)
+		if err != nil && !strings.Contains(out, "already exists") {
+			_, _ = fmt.Fprintf(GinkgoWriter, "[SetupNamespace] namespace create failed namespace=%s err=%v elapsed=%v out=%s\n", namespace, err, elapsedCreate, out)
+			if strings.Contains(out, "EOF") || strings.Contains(out, "making the request") {
+				_, _ = fmt.Fprintf(GinkgoWriter, "[SetupNamespace] root cause: API connection closed (EOF) or request failed before response - often under parallel load\n")
+			}
+			return errors.New(out)
+		}
+
+		t1 := time.Now()
+		out, err = m.dFlow(m.nodeTmpDir, "namespace", "show", namespace)
+		elapsedShow := time.Since(t1)
+		if err != nil {
+			_, _ = fmt.Fprintf(GinkgoWriter, "[SetupNamespace] namespace show failed namespace=%s err=%v elapsed=%v out=%s\n", namespace, err, elapsedShow, out)
+			if strings.Contains(out, "EOF") || strings.Contains(out, "making the request") {
+				_, _ = fmt.Fprintf(GinkgoWriter, "[SetupNamespace] root cause: API connection closed (EOF) - often under parallel load\n")
+			}
+			if isTransient403(out) {
+				_, _ = fmt.Fprintf(GinkgoWriter, "[SetupNamespace] root cause: transient 403 - admin role annotation temporarily clobbered by concurrent UpdateUser, will retry\n")
+			}
+			return errors.New(out)
+		}
+
+		if !strings.Contains(out, namespace) {
+			_, _ = fmt.Fprintf(GinkgoWriter, "[SetupNamespace] namespace show output missing namespace=%s out=%s\n", namespace, out)
+			return errors.New(out)
+		}
+
+		// Probe for registry-creds and log readiness for diagnostics.
+		// Do not block namespace setup on this secret: some suites do not
+		// require it and propagation timing varies across CI jobs.
+		t2 := time.Now()
+		secretOut, secretErr := proc.Kubectl("get", "secret", "registry-creds", "-n", namespace, "-o", "name")
+		elapsedSecret := time.Since(t2)
+		if secretErr != nil || !strings.Contains(secretOut, "registry-creds") {
+			_, _ = fmt.Fprintf(GinkgoWriter, "[SetupNamespace] registry-creds not ready namespace=%s err=%v elapsed=%v out=%s (continuing)\n", namespace, secretErr, elapsedSecret, secretOut)
+		} else {
+			_, _ = fmt.Fprintf(GinkgoWriter, "[SetupNamespace] registry-creds ready namespace=%s elapsed=%v out=%s\n", namespace, elapsedSecret, secretOut)
+		}
+
+		_, _ = fmt.Fprintf(GinkgoWriter, "[SetupNamespace] success attempt=%d namespace=%s create=%v show=%v\n", attempt, namespace, elapsedCreate, elapsedShow)
+		return nil
+	}, "6m", "5s").Should(Succeed(), "SetupNamespace failed for namespace=%s (check logs above for create/show errors)", namespace)
+}
+
+func (m *Machine) TargetNamespace(namespace string) {
+	By(fmt.Sprintf("targeting a namespace: %s", namespace))
+
+	var attempt int
+	var lastOut string
+	// Retries any error, primary motivation is the transient 403 role-annotation
+	// race under parallel CI load.
+	EventuallyWithOffset(1, func() error {
+		attempt++
+		out, err := m.dFlow(m.nodeTmpDir, "target", namespace)
+		lastOut = out
+		if err != nil {
+			_, _ = fmt.Fprintf(
+				GinkgoWriter,
+				"[TargetNamespace] attempt %d dflow target %s failed: err=%v out=%s\n",
+				attempt,
+				namespace,
+				err,
+				out,
+			)
+			return errors.New(out)
+		}
+		return nil
+	}, "6m", "5s").Should(Succeed(), "dflow target %s: out=%s", namespace, lastOut)
+
+	out, err := m.dFlow(m.nodeTmpDir, "target")
+	if err != nil {
+		_, _ = fmt.Fprintf(GinkgoWriter, "[TargetNamespace] dflow target (show) failed: err=%v out=%s\n", err, out)
+	}
+	ExpectWithOffset(1, err).ToNot(HaveOccurred(), out)
+	ExpectWithOffset(1, out).To(MatchRegexp("Currently targeted namespace: "+namespace), "target output should show current namespace; got out=%s", out)
+}
+
+func (m *Machine) SetupAndTargetNamespace(namespace string) {
+	m.SetupNamespace(namespace)
+	m.TargetNamespace(namespace)
+}
+
+func (m *Machine) DeleteNamespace(namespace string) {
+	GinkgoHelper()
+
+	By(fmt.Sprintf("deleting a namespace: %s", namespace))
+
+	out, err := m.dFlow(m.nodeTmpDir, "namespace", "delete", "-f", namespace)
+	Expect(err).ToNot(HaveOccurred(), out)
+
+	out, err = proc.Kubectl("get", "namespace", namespace)
+	Expect(err).To(HaveOccurred())
+	Expect(out).To(ContainSubstring("not found"))
+}
+
+func (m *Machine) VerifyNamespaceNotExist(namespace string) {
+	EventuallyWithOffset(1, func() string {
+		out, err := m.dFlow(m.nodeTmpDir, "namespace", "list")
+		ExpectWithOffset(1, err).ToNot(HaveOccurred(), out)
+		return out
+	}, "2m").ShouldNot(MatchRegexp(namespace))
+}
+
+func (m *Machine) MakeWebSocketConnection(authToken string, url string, subprotocols ...string) (*websocket.Conn, error) {
+	u, err := urlpkg.Parse(url)
+	if err != nil {
+		return nil, errors.Wrapf(err, "parsing url: %s", url)
+	}
+
+	values := u.Query()
+	values.Add("authtoken", authToken)
+	u.RawQuery = values.Encode()
+
+	// disable tls cert verification for web socket connections - See also `Curl` above
+	websocket.DefaultDialer.TLSClientConfig = &tls.Config{
+		InsecureSkipVerify: true, // nolint:gosec // tests using self signed certs
+	}
+
+	dialer := websocket.DefaultDialer
+	dialer.Subprotocols = subprotocols
+	ws, response, err := dialer.Dial(u.String(), http.Header{})
+
+	var b []byte
+	if response != nil {
+		b, _ = io.ReadAll(response.Body)
+	}
+	if err != nil {
+		return nil, errors.Wrapf(err, "Dialing endpoint. Response: %s", string(b))
+	}
+
+	Expect(response.StatusCode).To(Equal(http.StatusSwitchingProtocols))
+
+	return ws, nil
+}
+
+func (m *Machine) GetPodNames(appName, namespaceName string) []string {
+	jsonPath := `{range .items[*]}{.metadata.name}{"\n"}{end}`
+	out, err := proc.Kubectl("get", "pods",
+		"--namespace", namespaceName,
+		"--selector", fmt.Sprintf("app.kubernetes.io/component=application,app.kubernetes.io/name=%s, app.kubernetes.io/part-of=%s", appName, namespaceName),
+		"-o", "jsonpath="+jsonPath)
+	Expect(err).NotTo(HaveOccurred())
+
+	return strings.Split(out, "\n")
+}
+
+func (m *Machine) GetSettingsFrom(location string) (*settings.Settings, error) {
+	return settings.LoadFrom(location)
+}
+
+func (m *Machine) GetSettings() (*settings.Settings, error) {
+	return settings.Load()
+}
+
+// SaveApplicationSpec is a debugging helper function saving the
+// specified application's manifest and helm data (values, chart) into
+// file and directory named after the application.
+//
+// Note: Intended use is debugging of a test case. Most tests cases
+// will not need this as part of their regular operation.
+//
+// __Attention__: The created files and directory are __not cleaned up automatically__
+func (m *Machine) SaveApplicationSpec(appName string) {
+
+	out, err := m.dFlow("", "app", "manifest", appName,
+		filepath.Join(m.nodeTmpDir, appName+"-manifest.yaml"))
+	Expect(err).ToNot(HaveOccurred(), out)
+
+	out, err = m.dFlow("", "app", "export",
+		filepath.Join(m.nodeTmpDir, appName, appName+"-helm"))
+	Expect(err).ToNot(HaveOccurred(), out)
+}
+
+// SaveServerLogs is a debugging helper function saving the
+// test server's logs (last 3 minutes) into the specified file.
+//
+// Note: Intended use is debugging of a test case. Most tests cases
+// will not need this as part of their regular operation.
+//
+// __Attention__: The created file is __not cleaned up automatically__
+func (m *Machine) SaveServerLogs(destination string) {
+	// Locate the server pod
+	serverPodName, err := proc.Kubectl("get", "pod",
+		"-n", "dflow",
+		"-l", "app.kubernetes.io/component=dflow-server",
+		"-o", "name")
+	Expect(err).ToNot(HaveOccurred(), serverPodName)
+	serverPodName = strings.TrimSpace(serverPodName)
+
+	// Get server logs of the last 3 minutes
+	log, err := proc.Kubectl("logs",
+		"-c", "dflow-server",
+		"-n", "dflow",
+		"--since", "3m",
+		serverPodName)
+	Expect(err).ToNot(HaveOccurred(), log)
+
+	// And save them into the specified file
+	err = os.WriteFile(filepath.Join(m.nodeTmpDir, destination), []byte(log), 0600)
+	Expect(err).ToNot(HaveOccurred())
+}

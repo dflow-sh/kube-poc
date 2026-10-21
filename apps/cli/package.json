@@ -1,0 +1,9 @@
+{
+  "name": "@dflow/cli",
+  "private": true,
+  "scripts": {
+    "build": "CGO_ENABLED=0 go build -o dist/dflow .",
+    "test": "go test .",
+    "lint": "go vet ."
+  }
+}
