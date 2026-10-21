@@ -54,26 +54,20 @@ The script also prints the k3s join URL and token. The URL is `https://<first-se
 
 The first server stays the only control plane. Another Ubuntu 22.04 or 24.04 machine joins as a worker. Clone this private repository on that machine the same way as the first server (`GITHUB_TOKEN` for HTTPS, or a deploy key). The join command itself does not need a token beyond the k3s node token.
 
-On the first server, after install, the URL and token are in the installer output. Print them again any time:
-
-```bash
-sudo dflow join-info
-```
-
-That reads `/var/lib/rancher/k3s/server/node-token` and `node-external-ip` from `/etc/rancher/k3s/config.yaml`. The same token file is:
+On the first server, `scripts/install.sh` prints the URL and token when it finishes. The URL is `https://<first-server-public-ipv4>:6443`. Read the token again from the k3s node-token file:
 
 ```bash
 sudo cat /var/lib/rancher/k3s/server/node-token
 ```
 
-The server URL is `https://<first-server-public-ipv4>:6443`.
+`node-external-ip` in `/etc/rancher/k3s/config.yaml` is that same public IPv4.
 
 On the worker, from the checkout:
 
 ```bash
 sudo ./scripts/join-node.sh \
   --server https://203.0.113.10:6443 \
-  --token '<token from dflow join-info>'
+  --token '<token printed by scripts/install.sh>'
 ```
 
 Replace the IP and the token. The script installs the k3s agent and joins this host as a worker. Run it again with the same server and token and it leaves a healthy agent in place. A bad token, a server that does not answer `https://<ip>:6443/ping`, or a k3s agent that does not stay active exits non-zero and prints the reason. Do not run it on the first server.
@@ -193,15 +187,7 @@ sudo --preserve-env=GITHUB_TOKEN ./scripts/update.sh v1.0.0
 
 If that tag does not exist, the script stops. It does not build a different commit and label it with the missing tag. If no latest release exists, it builds from the checkout, tags the image `dev-<git sha>`, upgrades with that image, and still runs the self-test. `GITHUB_TOKEN` (or `GH_TOKEN`) needs repository read for the release, and `read:packages` plus `GHCR_USER` when the server image is pulled from ghcr.io.
 
-CLI only, on the server or on a Mac:
-
-```bash
-export GITHUB_TOKEN=...   # or: gh auth login
-./scripts/update.sh --cli
-./scripts/update.sh --cli v1.0.0
-```
-
-`--cli` replaces `/usr/local/bin/dflow` with the release binary for this OS and CPU, or builds it from the checkout when the release asset is missing.
+A Mac installs or replaces the CLI with `scripts/install-cli.sh`, not with `scripts/update.sh`.
 
 ## Release workflow
 

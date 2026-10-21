@@ -153,6 +153,16 @@ dflow namespace list
 
 `sample` is not in the list.
 
+## Worker node
+
+On the first server, after `scripts/join-node.sh` on another Ubuntu machine:
+
+```bash
+sudo kubectl get nodes
+```
+
+The new node is `Ready`. The first server is `control-plane`. The join URL and token are what `scripts/install.sh` printed (`https://<first-server-public-ipv4>:6443` and the k3s node token). Firewall ports are TCP 6443, UDP 8472, and TCP 10250. Later high availability is three server nodes with embedded etcd. That is not part of this check. Details are in [docs/INSTALL.md](INSTALL.md).
+
 ## Uninstall and reset
 
 This removes dFlow, cert-manager, and k3s from the server. It deletes cluster data under `/var/lib/rancher/k3s`.

@@ -1071,7 +1071,7 @@ Join a worker from another Ubuntu 22.04 or 24.04 machine. docs/INSTALL.md has th
 
   sudo ./scripts/join-node.sh --server ${server} --token '${token}'
 
-Print this again later with: sudo dflow join-info
+The token is also in ${token_file}. The server URL uses this machine's public IPv4.
 EOF
 }
 

@@ -18,13 +18,13 @@ import (
 	"os"
 	"strings"
 
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes/config"
 	"github.com/dflow-sh/kube-poc/packages/dflow/cli/cmd"
 	settings "github.com/dflow-sh/kube-poc/packages/dflow/cli/settings"
 	"github.com/dflow-sh/kube-poc/packages/dflow/cli/termui"
 	"github.com/dflow-sh/kube-poc/packages/dflow/cli/usercmd"
 	"github.com/dflow-sh/kube-poc/packages/dflow/duration"
-	"github.com/dflow-sh/kube-poc/packages/dflow/helpers"
-	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes/config"
 	"github.com/dflow-sh/kube-poc/packages/dflow/version"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
@@ -161,7 +161,6 @@ func NewRootCmd() (*cobra.Command, error) {
 		cmd.NewConfigurationCmd(client, cfg),
 		CmdServer,
 		cmd.NewVersionCmd(),
-		cmd.NewJoinInfoCmd(),
 		cmd.NewServicesCmd(client, cfg),
 		cmd.NewLoginCmd(client),
 		cmd.NewLogoutCmd(client),

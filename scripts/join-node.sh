@@ -4,8 +4,8 @@
 #
 #   sudo ./scripts/join-node.sh --server https://203.0.113.10:6443 --token '<token>'
 #
-# The server URL and token come from the first server: scripts/install.sh prints
-# them, and `sudo dflow join-info` prints them again.
+# The server URL and token are printed by scripts/install.sh on the first server.
+# The token is also in /var/lib/rancher/k3s/server/node-token.
 set -euo pipefail
 
 SCRIPT_NAME=join-node.sh
@@ -27,7 +27,7 @@ usage() {
 Usage: sudo ./scripts/join-node.sh --server https://<first-server-ip>:6443 --token <token>
 
   --server URL     k3s API on the first server, https://<ip>:6443
-  --token TOKEN    token printed by scripts/install.sh or `sudo dflow join-info`
+  --token TOKEN    token printed by scripts/install.sh on the first server
   --k3s-version V  optional k3s version passed to the installer (default: current stable)
 
 Run this on a fresh Ubuntu 22.04 or 24.04 machine. It installs the k3s agent
@@ -81,7 +81,7 @@ parse_args() {
     esac
   done
   [[ -n "$SERVER" ]] || die "--server is required, for example https://203.0.113.10:6443"
-  [[ -n "$TOKEN" ]] || die "--token is required. On the first server run: sudo dflow join-info"
+  [[ -n "$TOKEN" ]] || die "--token is required. On the first server, read it with: sudo cat /var/lib/rancher/k3s/server/node-token"
 }
 
 validate_server() {
@@ -141,7 +141,7 @@ check_server() {
   case "$code" in
     200) ;;
     401|403)
-      die "the join token was rejected by ${SERVER} (HTTP ${code}). On the first server, print a fresh token with: sudo dflow join-info"
+      die "the join token was rejected by ${SERVER} (HTTP ${code}). On the first server, read a fresh token with: sudo cat /var/lib/rancher/k3s/server/node-token"
       ;;
     000)
       die "lost contact with ${SERVER} while checking the token. TCP 6443 must stay open from this host."
@@ -205,14 +205,14 @@ wait_for_agent() {
       active)
         if agent_auth_failed; then
           dump_agent_log
-          die "k3s agent rejected the token. On the first server run: sudo dflow join-info"
+          die "k3s agent rejected the token. On the first server run: sudo cat /var/lib/rancher/k3s/server/node-token"
         fi
         return 0
         ;;
       failed)
         dump_agent_log
         if agent_auth_failed; then
-          die "k3s agent rejected the token. On the first server run: sudo dflow join-info"
+          die "k3s agent rejected the token. On the first server run: sudo cat /var/lib/rancher/k3s/server/node-token"
         fi
         die "k3s agent failed to start."
         ;;
