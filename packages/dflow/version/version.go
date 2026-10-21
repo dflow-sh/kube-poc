@@ -14,7 +14,7 @@ package version
 
 // Version contains the client's version number. The string found in
 // the code is just a placeholder for the actual value inserted when
-// building the client. See the LDFLAGS variable in the Makefile.
+// building the client. See ldflags in .goreleaser.yaml.
 var Version = "v0.0.0-dev"
 
 // ChartVersion contains the version of the Helm Chart used to release dFlow.
