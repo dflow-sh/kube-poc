@@ -20,6 +20,7 @@ package models
 import (
 	"fmt"
 	"io"
+	"os"
 	"path"
 	"path/filepath"
 	"strings"
@@ -137,31 +138,57 @@ type ApplicationManifest struct {
 
 // Build mode constants for staging.
 const (
+	BuildModeRailpack   = "railpack"
 	BuildModeBuildpack  = "buildpack"
 	BuildModeDockerfile = "dockerfile"
 )
 
-// ValidateBuildMode returns a canonical build mode.
-// Empty defaults to buildpack. Unknown values (e.g. typos) return an error —
-// they must not silently fall back to buildpack.
-func ValidateBuildMode(mode string) (string, error) {
-	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "", BuildModeBuildpack:
+// DefaultBuildMode is the staging mode used when a request does not name one.
+// DEFAULT_BUILD_MODE selects buildpack or dockerfile. An empty value is railpack.
+func DefaultBuildMode() (string, error) {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("DEFAULT_BUILD_MODE"))) {
+	case "", BuildModeRailpack:
+		return BuildModeRailpack, nil
+	case BuildModeBuildpack:
 		return BuildModeBuildpack, nil
 	case BuildModeDockerfile:
 		return BuildModeDockerfile, nil
 	default:
-		return "", fmt.Errorf("invalid build mode %q: must be %q or %q", mode, BuildModeBuildpack, BuildModeDockerfile)
+		return "", fmt.Errorf(
+			"invalid DEFAULT_BUILD_MODE %q: must be %q, %q, or %q",
+			os.Getenv("DEFAULT_BUILD_MODE"),
+			BuildModeRailpack, BuildModeBuildpack, BuildModeDockerfile,
+		)
 	}
 }
 
-// NormalizeBuildMode returns a known build mode for empty/"buildpack"/"dockerfile".
+// ValidateBuildMode returns a canonical build mode.
+// Empty uses DefaultBuildMode (railpack, unless DEFAULT_BUILD_MODE is set).
+// Unknown values return an error and are not coerced to a known mode.
+func ValidateBuildMode(mode string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "":
+		return DefaultBuildMode()
+	case BuildModeRailpack:
+		return BuildModeRailpack, nil
+	case BuildModeBuildpack:
+		return BuildModeBuildpack, nil
+	case BuildModeDockerfile:
+		return BuildModeDockerfile, nil
+	default:
+		return "", fmt.Errorf(
+			"invalid build mode %q: must be %q, %q, or %q",
+			mode, BuildModeRailpack, BuildModeBuildpack, BuildModeDockerfile,
+		)
+	}
+}
+
+// NormalizeBuildMode returns a known build mode for empty, railpack, buildpack, or dockerfile.
 // Prefer ValidateBuildMode at CLI/API boundaries so typos are rejected instead of
-// being coerced to buildpack.
+// being returned unchanged.
 func NormalizeBuildMode(mode string) string {
 	normalized, err := ValidateBuildMode(mode)
 	if err != nil {
-		// Do not map unknown values to buildpack; callers should validate first.
 		return strings.ToLower(strings.TrimSpace(mode))
 	}
 	return normalized

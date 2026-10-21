@@ -37,9 +37,6 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 
-	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/cahash"
-	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
-	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/randstr"
 	"github.com/dflow-sh/kube-poc/packages/dflow/api/v1/response"
 	"github.com/dflow-sh/kube-poc/packages/dflow/application"
 	"github.com/dflow-sh/kube-poc/packages/dflow/auth"
@@ -48,11 +45,14 @@ import (
 	"github.com/dflow-sh/kube-poc/packages/dflow/cli/server/requestctx"
 	"github.com/dflow-sh/kube-poc/packages/dflow/duration"
 	"github.com/dflow-sh/kube-poc/packages/dflow/helmchart"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/cahash"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/randstr"
 	"github.com/dflow-sh/kube-poc/packages/dflow/names"
-	"github.com/dflow-sh/kube-poc/packages/dflow/registry"
-	"github.com/dflow-sh/kube-poc/packages/dflow/s3manager"
 	apierror "github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/errors"
 	"github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/models"
+	"github.com/dflow-sh/kube-poc/packages/dflow/registry"
+	"github.com/dflow-sh/kube-poc/packages/dflow/s3manager"
 )
 
 type stageParam struct {
@@ -62,6 +62,7 @@ type stageParam struct {
 	BuildMode           string
 	DockerfilePath      string
 	DockerBuildImage    string
+	RailpackBuildImage  string
 	DownloadImage       string
 	UnpackImage         string
 	Environment         models.EnvVariableList
@@ -319,6 +320,7 @@ func Stage(c *gin.Context) apierror.APIErrors {
 		BuildMode:           buildMode,
 		DockerfilePath:      dockerfilePath,
 		DockerBuildImage:    config.DockerfileBuildImage,
+		RailpackBuildImage:  config.RailpackBuildImage,
 		BlobUID:             blobUID,
 		DownloadImage:       config.DownloadImage,
 		UnpackImage:         config.UnpackImage,
@@ -702,6 +704,7 @@ func newJobRun(app stageParam) (*batchv1.Job, *corev1.Secret) {
 	// runtime: app.BuilderImage or Kaniko image
 	buildpackScript := fmt.Sprintf(`source /stage-support/%s`, helmchart.DFlowStageBuild)
 	dockerfileScript := fmt.Sprintf(`. /stage-support/%s`, helmchart.DFlowStageDockerfileBuild)
+	railpackScript := fmt.Sprintf(`. /stage-support/%s`, helmchart.DFlowStageRailpackBuild)
 
 	// build configuration
 	// - shared between all the phases, even if each phase uses only part of the set
@@ -848,9 +851,9 @@ func newJobRun(app stageParam) (*batchv1.Job, *corev1.Secret) {
 			Labels: map[string]string{
 				"app.kubernetes.io/name":       app.Name,
 				"app.kubernetes.io/part-of":    app.Namespace,
-				models.DFlowStageIDLabel:      app.Stage.ID,
-				models.DFlowStageIDPrevious:   app.PreviousStageID,
-				models.DFlowStageBlobUIDLabel: app.BlobUID,
+				models.DFlowStageIDLabel:       app.Stage.ID,
+				models.DFlowStageIDPrevious:    app.PreviousStageID,
+				models.DFlowStageBlobUIDLabel:  app.BlobUID,
 				"app.kubernetes.io/managed-by": "dflow",
 				"app.kubernetes.io/component":  "staging",
 			},
@@ -885,7 +888,7 @@ func newJobRun(app stageParam) (*batchv1.Job, *corev1.Secret) {
 		},
 	}
 
-	buildContainer := stagingBuildContainer(app, volumeMounts, stageEnv, buildpackScript, dockerfileScript)
+	buildContainer := stagingBuildContainer(app, volumeMounts, stageEnv, buildpackScript, dockerfileScript, railpackScript)
 
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -893,9 +896,9 @@ func newJobRun(app stageParam) (*batchv1.Job, *corev1.Secret) {
 			Labels: map[string]string{
 				"app.kubernetes.io/name":       app.Name,
 				"app.kubernetes.io/part-of":    app.Namespace,
-				models.DFlowStageIDLabel:      app.Stage.ID,
-				models.DFlowStageIDPrevious:   app.PreviousStageID,
-				models.DFlowStageBlobUIDLabel: app.BlobUID,
+				models.DFlowStageIDLabel:       app.Stage.ID,
+				models.DFlowStageIDPrevious:    app.PreviousStageID,
+				models.DFlowStageBlobUIDLabel:  app.BlobUID,
 				"app.kubernetes.io/managed-by": "dflow",
 				"app.kubernetes.io/component":  "staging",
 			},
@@ -911,16 +914,16 @@ func newJobRun(app stageParam) (*batchv1.Job, *corev1.Secret) {
 					Labels: map[string]string{
 						"app.kubernetes.io/name":       app.Name,
 						"app.kubernetes.io/part-of":    app.Namespace,
-						models.DFlowStageIDLabel:      app.Stage.ID,
-						models.DFlowStageIDPrevious:   app.PreviousStageID,
-						models.DFlowStageBlobUIDLabel: app.BlobUID,
+						models.DFlowStageIDLabel:       app.Stage.ID,
+						models.DFlowStageIDPrevious:    app.PreviousStageID,
+						models.DFlowStageBlobUIDLabel:  app.BlobUID,
 						"app.kubernetes.io/managed-by": "dflow",
 						"app.kubernetes.io/component":  "staging",
 					},
 					Annotations: map[string]string{
 						// Allow communication with the Registry even before the proxy is ready
 						"config.linkerd.io/skip-outbound-ports": "443",
-						models.DFlowCreatedByAnnotation:        app.Username,
+						models.DFlowCreatedByAnnotation:         app.Username,
 					},
 				},
 				Spec: corev1.PodSpec{
@@ -940,15 +943,17 @@ func newJobRun(app stageParam) (*batchv1.Job, *corev1.Secret) {
 	return job, jobenv
 }
 
-// stagingBuildContainer picks the final staging container for buildpack or Dockerfile mode.
+// stagingBuildContainer picks the final staging container for railpack, buildpack, or Dockerfile mode.
 func stagingBuildContainer(
 	app stageParam,
 	volumeMounts []corev1.VolumeMount,
 	stageEnv []corev1.EnvVar,
 	buildpackScript string,
 	dockerfileScript string,
+	railpackScript string,
 ) corev1.Container {
-	if models.NormalizeBuildMode(app.BuildMode) == models.BuildModeDockerfile {
+	switch models.NormalizeBuildMode(app.BuildMode) {
+	case models.BuildModeDockerfile:
 		return corev1.Container{
 			Name:         "dockerfile",
 			Image:        app.DockerBuildImage,
@@ -958,20 +963,45 @@ func stagingBuildContainer(
 			Env:          stageEnv,
 			Resources:    app.HelmValues.Resources,
 		}
-	}
-
-	return corev1.Container{
-		Name:         "buildpack",
-		Image:        app.BuilderImage,
-		Command:      []string{"/bin/bash"},
-		Args:         []string{"-c", buildpackScript},
-		Env:          stageEnv,
-		VolumeMounts: volumeMounts,
-		SecurityContext: &corev1.SecurityContext{
-			RunAsUser:  ptr.To[int64](app.UserID),
-			RunAsGroup: ptr.To[int64](app.GroupID),
-		},
-		Resources: app.HelmValues.Resources,
+	case models.BuildModeRailpack:
+		// BuildKit's OCI worker needs a privileged pod so it can run nested
+		// containers and push the result to the in-cluster registry.
+		return corev1.Container{
+			Name:         "railpack",
+			Image:        app.RailpackBuildImage,
+			VolumeMounts: volumeMounts,
+			Command:      []string{"/bin/sh", "-c"},
+			Args:         []string{railpackScript},
+			Env:          stageEnv,
+			SecurityContext: &corev1.SecurityContext{
+				Privileged: ptr.To(true),
+			},
+			Resources: app.HelmValues.Resources,
+		}
+	case models.BuildModeBuildpack:
+		return corev1.Container{
+			Name:         "buildpack",
+			Image:        app.BuilderImage,
+			Command:      []string{"/bin/bash"},
+			Args:         []string{"-c", buildpackScript},
+			Env:          stageEnv,
+			VolumeMounts: volumeMounts,
+			SecurityContext: &corev1.SecurityContext{
+				RunAsUser:  ptr.To[int64](app.UserID),
+				RunAsGroup: ptr.To[int64](app.GroupID),
+			},
+			Resources: app.HelmValues.Resources,
+		}
+	default:
+		return corev1.Container{
+			Name:         "buildpack",
+			Image:        app.BuilderImage,
+			Command:      []string{"/bin/bash"},
+			Args:         []string{"-c", buildpackScript},
+			Env:          stageEnv,
+			VolumeMounts: volumeMounts,
+			Resources:    app.HelmValues.Resources,
+		}
 	}
 }
 
@@ -1376,6 +1406,7 @@ type StagingScriptConfig struct {
 	DownloadImage        string // image to run the download phase with
 	UnpackImage          string // image to run the unpack phase with
 	DockerfileBuildImage string // image to run Dockerfile builds with (Kaniko)
+	RailpackBuildImage   string // image to run Railpack/BuildKit builds with
 	Env                  models.EnvVariableMap
 	HelmValues           HelmValuesMap
 }
@@ -1495,6 +1526,9 @@ func StagingScriptConfigResolve(ctx context.Context, cluster *kubernetes.Cluster
 	if config.DockerfileBuildImage == "" {
 		config.DockerfileBuildImage = base.Data["dockerfileBuildImage"]
 	}
+	if config.RailpackBuildImage == "" {
+		config.RailpackBuildImage = base.Data["railpackBuildImage"]
+	}
 
 	return nil
 }
@@ -1507,6 +1541,7 @@ func NewStagingScriptConfig(config corev1.ConfigMap) (*StagingScriptConfig, erro
 		DownloadImage:        config.Data["downloadImage"],
 		UnpackImage:          config.Data["unpackImage"],
 		DockerfileBuildImage: config.Data["dockerfileBuildImage"],
+		RailpackBuildImage:   config.Data["railpackBuildImage"],
 		// env, user, group id, Helm Values, see below.
 	}
 
@@ -1577,34 +1612,9 @@ func resolveStagingImagesAndScripts(
 		return "", "", "", nil, pathErr
 	}
 
-	var builderImage string
-	if buildMode == models.BuildModeBuildpack {
-		var builderErr apierror.APIErrors
-		builderImage, builderErr = getBuilderImage(req, app)
-		if builderErr != nil {
-			return "", "", "", nil, builderErr
-		}
-		if builderImage == "" {
-			var err error
-			builderImage, err = resolveDefaultBuilderImage(ctx, cluster)
-			if err != nil {
-				return "", "", "", nil, apierror.InternalError(err, "failed to resolve the default builder image")
-			}
-			if builderImage == "" {
-				return "", "", "", nil, apierror.NewBadRequestError("no builder image specified and no default configured")
-			}
-		}
-	}
-
-	var config *StagingScriptConfig
-	var err error
-	if models.NormalizeBuildMode(buildMode) == models.BuildModeDockerfile {
-		config, err = loadDockerfileStagingConfig(ctx, cluster, helmchart.Namespace())
-	} else {
-		config, err = DetermineStagingScripts(ctx, cluster, helmchart.Namespace(), builderImage)
-	}
-	if err != nil {
-		return "", "", "", nil, apierror.InternalError(err, "failed to retrieve staging configuration")
+	builderImage, config, configErr := stagingImagesAndConfig(ctx, cluster, buildMode, req, app)
+	if configErr != nil {
+		return "", "", "", nil, configErr
 	}
 
 	return buildMode, dockerfilePath, builderImage, config, nil
@@ -1621,7 +1631,11 @@ func resolveBuildMode(req models.StageRequest, app *unstructured.Unstructured) (
 
 	mode, _, err := unstructured.NestedString(app.UnstructuredContent(), "spec", "buildmode")
 	if err != nil || mode == "" {
-		return models.BuildModeBuildpack, nil
+		defaultMode, defaultErr := models.DefaultBuildMode()
+		if defaultErr != nil {
+			return "", apierror.NewBadRequestError(defaultErr.Error())
+		}
+		return defaultMode, nil
 	}
 
 	validated, err := models.ValidateBuildMode(mode)
@@ -1652,6 +1666,53 @@ func resolveDockerfilePath(req models.StageRequest, app *unstructured.Unstructur
 	return validated, nil
 }
 
+// stagingImagesAndConfig resolves the builder image (buildpack only) and the
+// ConfigMap that holds the matching stage scripts.
+func stagingImagesAndConfig(
+	ctx context.Context,
+	cluster *kubernetes.Cluster,
+	buildMode string,
+	req models.StageRequest,
+	app *unstructured.Unstructured,
+) (string, *StagingScriptConfig, apierror.APIErrors) {
+	switch models.NormalizeBuildMode(buildMode) {
+	case models.BuildModeDockerfile:
+		config, err := loadDockerfileStagingConfig(ctx, cluster, helmchart.Namespace())
+		if err != nil {
+			return "", nil, apierror.InternalError(err, "failed to retrieve staging configuration")
+		}
+		return "", config, nil
+	case models.BuildModeRailpack:
+		config, err := loadRailpackStagingConfig(ctx, cluster, helmchart.Namespace())
+		if err != nil {
+			return "", nil, apierror.InternalError(err, "failed to retrieve staging configuration")
+		}
+		return "", config, nil
+	case models.BuildModeBuildpack:
+		builderImage, builderErr := getBuilderImage(req, app)
+		if builderErr != nil {
+			return "", nil, builderErr
+		}
+		if builderImage == "" {
+			resolved, err := resolveDefaultBuilderImage(ctx, cluster)
+			if err != nil {
+				return "", nil, apierror.InternalError(err, "failed to resolve the default builder image")
+			}
+			builderImage = resolved
+		}
+		if builderImage == "" {
+			return "", nil, apierror.NewBadRequestError("no builder image specified and no default configured")
+		}
+		config, err := DetermineStagingScripts(ctx, cluster, helmchart.Namespace(), builderImage)
+		if err != nil {
+			return "", nil, apierror.InternalError(err, "failed to retrieve staging configuration")
+		}
+		return builderImage, config, nil
+	default:
+		return "", nil, apierror.NewBadRequestError(fmt.Sprintf("invalid build mode %q", buildMode))
+	}
+}
+
 func loadDockerfileStagingConfig(ctx context.Context,
 	cluster *kubernetes.Cluster,
 	namespace string) (*StagingScriptConfig, error) {
@@ -1669,6 +1730,26 @@ func loadDockerfileStagingConfig(ctx context.Context,
 
 	if config.DockerfileBuildImage == "" {
 		return nil, fmt.Errorf("no dockerfile build image configured")
+	}
+
+	return config, nil
+}
+
+func loadRailpackStagingConfig(ctx context.Context,
+	cluster *kubernetes.Cluster,
+	namespace string) (*StagingScriptConfig, error) {
+	configmap, err := cluster.GetConfigMap(ctx, namespace, "dflow-stage-scripts")
+	if err != nil {
+		return nil, err
+	}
+
+	config, err := NewStagingScriptConfig(*configmap)
+	if err != nil {
+		return nil, err
+	}
+
+	if config.RailpackBuildImage == "" {
+		return nil, fmt.Errorf("no railpack build image configured")
 	}
 
 	return config, nil

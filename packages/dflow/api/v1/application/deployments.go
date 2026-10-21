@@ -21,16 +21,16 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
-	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/randstr"
 	"github.com/dflow-sh/kube-poc/packages/dflow/api/v1/deploy"
 	"github.com/dflow-sh/kube-poc/packages/dflow/api/v1/response"
 	"github.com/dflow-sh/kube-poc/packages/dflow/application"
 	"github.com/dflow-sh/kube-poc/packages/dflow/cli/server/requestctx"
 	"github.com/dflow-sh/kube-poc/packages/dflow/helmchart"
-	"github.com/dflow-sh/kube-poc/packages/dflow/s3manager"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/randstr"
 	apierror "github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/errors"
 	"github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/models"
+	"github.com/dflow-sh/kube-poc/packages/dflow/s3manager"
 	"github.com/gin-gonic/gin"
 	"github.com/spf13/viper"
 )
@@ -441,6 +441,7 @@ func stageForAsyncDeploy(
 		BuildMode:           resolvedBuildMode,
 		DockerfilePath:      resolvedDockerfilePath,
 		DockerBuildImage:    config.DockerfileBuildImage,
+		RailpackBuildImage:  config.RailpackBuildImage,
 		DownloadImage:       config.DownloadImage,
 		UnpackImage:         config.UnpackImage,
 		BlobUID:             resolvedBlobUID,

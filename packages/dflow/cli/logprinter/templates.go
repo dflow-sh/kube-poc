@@ -43,3 +43,20 @@ func DefaultSingleNamespaceTemplate() *template.Template {
 
 	return template
 }
+
+// StagingPlainTemplate prints a short dim container tag and the log text.
+// The stage pod name is printed once by the caller, not on every line.
+func StagingPlainTemplate() *template.Template {
+	t := "{{if .ContainerName}}{{dim .ContainerName}} {{end}}{{.Message}}"
+
+	funs := map[string]interface{}{
+		"dim": func(text string) string {
+			return color.New(color.Faint).Sprint(text)
+		},
+	}
+	parsed, err := template.New("staging-log").Funcs(funs).Parse(t)
+	if err != nil {
+		panic(errors.Wrap(err, "unable to parse staging log template"))
+	}
+	return parsed
+}

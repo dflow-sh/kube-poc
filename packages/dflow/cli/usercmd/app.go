@@ -27,12 +27,13 @@ import (
 	"github.com/pkg/errors"
 	"github.com/schollz/progressbar/v3"
 
-	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/bytes"
-	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes/tailer"
 	"github.com/dflow-sh/kube-poc/packages/dflow/cli/logprinter"
 	"github.com/dflow-sh/kube-poc/packages/dflow/duration"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/bytes"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes/tailer"
 	"github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/client"
 	"github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/models"
+	"github.com/spf13/viper"
 	"golang.org/x/term"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -533,14 +534,29 @@ func (c *DFlowClient) AppLogs(appName, stageID string, follow bool, options *cli
 
 	details.Info("application logs")
 
-	printer := logprinter.LogPrinter{Tmpl: logprinter.DefaultSingleNamespaceTemplate()}
+	verbose := (options != nil && options.Verbose) || viper.GetBool("staging-log-verbose")
+	plainStaging := stageID != "" && !verbose
+	tmpl := logprinter.DefaultSingleNamespaceTemplate()
+	if plainStaging {
+		tmpl = logprinter.StagingPlainTemplate()
+	}
+	printer := logprinter.LogPrinter{Tmpl: tmpl}
+	announcedPod := false
 	callback := func(logLine tailer.ContainerLogLine) {
+		if plainStaging && !announcedPod && logLine.PodName != "" {
+			announcedPod = true
+			c.ui.Normal().Msg(logLine.PodName)
+		}
+		line := c.ui.ProgressNote().Compact()
+		if plainStaging {
+			line = c.ui.Normal().Compact()
+		}
 		printer.Print(logprinter.Log{
 			Message:       logLine.Message,
 			Namespace:     logLine.Namespace,
 			PodName:       logLine.PodName,
 			ContainerName: logLine.ContainerName,
-		}, c.ui.ProgressNote().Compact())
+		}, line)
 	}
 
 	err := c.API.AppLogs(c.Settings.Namespace, appName, stageID, follow, options, callback)
@@ -571,9 +587,9 @@ func (c *DFlowClient) AppExec(ctx context.Context, appName, instance string) err
 	}
 
 	tty := kubectlterm.TTY{
-		In:     os.Stdin,
-		Out:    os.Stdout,
-		Raw:    term.IsTerminal(int(os.Stdin.Fd())),
+		In:  os.Stdin,
+		Out: os.Stdout,
+		Raw: term.IsTerminal(int(os.Stdin.Fd())),
 		// Avoid trying /dev/tty for non-interactive runs (e.g. CI pipes), which can
 		// cause exec sessions to hang before streaming starts.
 		TryDev: false,

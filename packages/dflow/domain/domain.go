@@ -15,11 +15,13 @@ package domain
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
-	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
 	"github.com/dflow-sh/kube-poc/packages/dflow/helmchart"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
 	"github.com/pkg/errors"
+	"github.com/spf13/viper"
 )
 
 // mainDomain is the memoization cache for the name of the main domain of the currently accessed
@@ -29,11 +31,24 @@ var mainDomain = ""
 // AppDefaultRoute constructs and returns an application's default route constructed from the main
 // domain, and the name of the application.
 func AppDefaultRoute(ctx context.Context, name, namespace string) (string, error) {
+	if appsDomain := configuredAppsDomain(); appsDomain != "" {
+		return fmt.Sprintf("%s.%s", name, appsDomain), nil
+	}
 	mainDomain, err := MainDomain(ctx)
 	if err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("%s.%s", name, mainDomain), nil
+}
+
+// configuredAppsDomain is the wildcard base for application hostnames
+// (<app>.<apps domain>). Empty keeps the historical route, which is the API
+// host with a leading "dflow." label removed.
+func configuredAppsDomain() string {
+	if value := strings.TrimSpace(os.Getenv("APPS_DOMAIN")); value != "" {
+		return value
+	}
+	return strings.TrimSpace(viper.GetString("apps-domain"))
 }
 
 // MainDomain determines the name of the main domain of the currently accessed dflow

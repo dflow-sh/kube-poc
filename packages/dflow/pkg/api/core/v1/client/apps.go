@@ -35,8 +35,8 @@ import (
 	"k8s.io/client-go/tools/remotecommand"
 	wsstream "k8s.io/client-go/transport/websocket"
 
-	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes/tailer"
 	api "github.com/dflow-sh/kube-poc/packages/dflow/api/v1"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes/tailer"
 	"github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/models"
 	v1 "k8s.io/api/core/v1"
 	kubectlterm "k8s.io/kubectl/pkg/util/term"
@@ -355,6 +355,9 @@ type LogOptions struct {
 	SinceTime         *time.Time
 	IncludeContainers []string // List of container names/patterns to include (regex patterns supported)
 	ExcludeContainers []string // List of container names/patterns to exclude (regex patterns supported)
+	// Verbose is client-side only. It restores the full pod and container
+	// prefix on staging log lines and is not sent to the API.
+	Verbose bool
 }
 
 // AppLogs streams the logs of all the application instances, in the targeted namespace
