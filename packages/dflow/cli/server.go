@@ -23,8 +23,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/dflow-sh/kube-poc/packages/dflow/helpers"
 	"github.com/dflow-sh/kube-poc/packages/dflow/cli/server"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers"
 	"github.com/dflow-sh/kube-poc/packages/dflow/tracing"
 	"github.com/dflow-sh/kube-poc/packages/dflow/version"
 	"github.com/gin-gonic/gin"
@@ -98,6 +98,18 @@ func init() {
 	err = viper.BindEnv("default-builder-image", "DEFAULT_BUILDER_IMAGE")
 	checkErr(err)
 
+	flags.String("default-build-mode", "", "(DEFAULT_BUILD_MODE) Staging build mode when a push omits one: railpack, buildpack, or dockerfile. Empty means railpack.")
+	err = viper.BindPFlag("default-build-mode", flags.Lookup("default-build-mode"))
+	checkErr(err)
+	err = viper.BindEnv("default-build-mode", "DEFAULT_BUILD_MODE")
+	checkErr(err)
+
+	flags.String("apps-domain", "", "(APPS_DOMAIN) Wildcard base for application routes, for example apps.dflow.sh. Empty keeps <app>.<system domain>.")
+	err = viper.BindPFlag("apps-domain", flags.Lookup("apps-domain"))
+	checkErr(err)
+	err = viper.BindEnv("apps-domain", "APPS_DOMAIN")
+	checkErr(err)
+
 	flags.Float32("kube-api-qps", rest.DefaultQPS, "(KUBE_API_QPS) The QPS indicates the maximum QPS of the Kubernetes client.")
 	err = viper.BindPFlag("kube-api-qps", flags.Lookup("kube-api-qps"))
 	checkErr(err)
@@ -135,6 +147,16 @@ var CmdServer = &cobra.Command{
 	Long:  "This command starts the dFlow server. `dflow install` ensures the server is running inside your cluster. Normally you don't need to run this command manually.",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cmd.SilenceUsage = true
+		if mode := strings.TrimSpace(viper.GetString("default-build-mode")); mode != "" {
+			if err := os.Setenv("DEFAULT_BUILD_MODE", mode); err != nil {
+				return errors.Wrap(err, "setting DEFAULT_BUILD_MODE")
+			}
+		}
+		if appsDomain := strings.TrimSpace(viper.GetString("apps-domain")); appsDomain != "" {
+			if err := os.Setenv("APPS_DOMAIN", appsDomain); err != nil {
+				return errors.Wrap(err, "setting APPS_DOMAIN")
+			}
+		}
 		// Ensure the centralized logger is initialized (root persistent pre-run normally does this)
 		if helpers.Logger == nil {
 			if err := helpers.InitLogger(viper.GetString("log-level")); err != nil {

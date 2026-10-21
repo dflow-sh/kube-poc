@@ -12,13 +12,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
-	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/randstr"
 	"github.com/dflow-sh/kube-poc/packages/dflow/api/v1/deploy"
 	"github.com/dflow-sh/kube-poc/packages/dflow/api/v1/response"
 	"github.com/dflow-sh/kube-poc/packages/dflow/application"
 	"github.com/dflow-sh/kube-poc/packages/dflow/cli/server/requestctx"
 	"github.com/dflow-sh/kube-poc/packages/dflow/helmchart"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/randstr"
 	"github.com/dflow-sh/kube-poc/packages/dflow/registry"
 	"github.com/dflow-sh/kube-poc/packages/dflow/s3manager"
 	"github.com/mholt/archives"
@@ -269,42 +269,9 @@ func buildAndPatch(
 		return models.StageResponse{}, stageParam{}, pathErr
 	}
 
-	var builderImage string
-	var builderError apierror.APIErrors
-	if models.NormalizeBuildMode(buildMode) == models.BuildModeBuildpack {
-		builderImage, builderError = getBuilderImage(req, app)
-		if builderError != nil {
-			return models.StageResponse{}, stageParam{}, builderError
-		}
-		if builderImage == "" {
-			resolvedBuilderImage, resolveError := resolveDefaultBuilderImage(ctx, cluster)
-			if resolveError != nil {
-				return models.StageResponse{}, stageParam{}, apierror.InternalError(
-					resolveError,
-					"failed to resolve the default builder image",
-				)
-			}
-			builderImage = resolvedBuilderImage
-		}
-	}
-
-	var config *StagingScriptConfig
-	var determineStagingError error
-	if models.NormalizeBuildMode(buildMode) == models.BuildModeDockerfile {
-		config, determineStagingError = loadDockerfileStagingConfig(ctx, cluster, helmchart.Namespace())
-	} else {
-		config, determineStagingError = DetermineStagingScripts(
-			ctx,
-			cluster,
-			helmchart.Namespace(),
-			builderImage,
-		)
-	}
-	if determineStagingError != nil {
-		return models.StageResponse{}, stageParam{}, apierror.InternalError(
-			determineStagingError,
-			"failed to retrieve staging configuration",
-		)
+	builderImage, config, configErr := stagingImagesAndConfig(ctx, cluster, buildMode, req, app)
+	if configErr != nil {
+		return models.StageResponse{}, stageParam{}, configErr
 	}
 
 	environment, getEnvironmentError := application.Environment(ctx, cluster, appRef)
@@ -373,6 +340,7 @@ func buildAndPatch(
 		BuildMode:           buildMode,
 		DockerfilePath:      dockerfilePath,
 		DockerBuildImage:    config.DockerfileBuildImage,
+		RailpackBuildImage:  config.RailpackBuildImage,
 		BlobUID:             newBlobUID,
 		DownloadImage:       config.DownloadImage,
 		UnpackImage:         config.UnpackImage,

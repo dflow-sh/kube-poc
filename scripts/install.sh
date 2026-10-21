@@ -6,7 +6,7 @@
 #
 #   sudo ./scripts/install.sh
 #   sudo ./scripts/install.sh --domain auto
-#   sudo ./scripts/install.sh --domain apps.example.com
+#   sudo ./scripts/install.sh --api-domain paas.dflow.sh --apps-domain apps.dflow.sh --email ops@dflow.sh
 #   sudo ./scripts/install.sh --domain auto --admin-password 'replace-this'
 #
 # The latest GitHub Release is tried first (CLI binary, ghcr.io server image,
@@ -25,9 +25,15 @@ IMAGE="${IMAGE:-ghcr.io/dflow-sh/dflow-server:${DFLOW_VERSION}}"
 ADMIN_USER="${ADMIN_USER:-admin}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-password}"
 DOMAIN="${DOMAIN:-auto}"
+API_DOMAIN="${DFLOW_API_DOMAIN:-${API_DOMAIN:-}}"
+APPS_DOMAIN="${DFLOW_APPS_DOMAIN:-${APPS_DOMAIN:-}}"
+LE_EMAIL="${DFLOW_EMAIL:-${LETSENCRYPT_EMAIL:-${LE_EMAIL:-}}}"
+TUNNEL_TOKEN="${DFLOW_TUNNEL_TOKEN:-${CLOUDFLARE_TUNNEL_TOKEN:-${TUNNEL_TOKEN:-}}}"
+LE_STAGING="${DFLOW_LETSENCRYPT_STAGING:-0}"
 SAMPLE_NAMESPACE="${SAMPLE_NAMESPACE:-sample}"
 SAMPLE_APP="${SAMPLE_APP:-hello}"
 SAMPLE_IMAGE="${SAMPLE_IMAGE:-traefik/whoami}"
+SAMPLE_ENV="${SAMPLE_ENV:-WHOAMI_PORT_NUMBER=8080}"
 GO_VERSION="${GO_VERSION:-1.26.0}"
 HELM_VERSION="${HELM_VERSION:-v3.17.3}"
 KUBECONFIG_PATH="${KUBECONFIG_PATH:-/etc/rancher/k3s/k3s.yaml}"
@@ -35,6 +41,21 @@ STATE_DIR="${STATE_DIR:-/var/lib/dflow}"
 
 ROOT=""
 PUBLIC_IP=""
+NODE_IP=""
+API_HOST=""
+APPS_BASE=""
+TLS_ISSUER="dflow-ca"
+USE_TUNNEL=0
+CURL_INSECURE=1
+HOSTNAME_OVERRIDE=""
+APPS_DOMAIN_VALUE=""
+DOMAIN_SET=0
+API_DOMAIN_SET=0
+APPS_DOMAIN_SET=0
+EMAIL_SET=0
+TUNNEL_SET=0
+PASSWORD_SET=0
+TRAEFIK_CONFIG_CHANGED=0
 TRAEFIK_HOST_IP=""
 GOARCH_NAME=""
 CONFIG_CHANGED=0
@@ -55,19 +76,27 @@ log() {
 
 usage() {
   cat <<'EOF'
-Usage: sudo ./scripts/install.sh [--domain NAME|auto] [--admin-password PASSWORD]
+Usage: sudo ./scripts/install.sh [options]
 
-  --domain auto          use <public-ipv4>.sslip.io (this is the default)
-  --domain NAME          use NAME (wildcard DNS must point at this server)
-  --admin-password PASS  API password for user admin (default: password)
+  --domain auto             use <public-ipv4>.sslip.io with a self-signed certificate
+  --domain NAME             apps are <app>.NAME and the API is https://dflow.NAME
+  --api-domain HOST         API hostname, for example paas.dflow.sh
+  --apps-domain NAME        apps are <app>.NAME, for example hello.apps.dflow.sh
+  --email ADDRESS           Let's Encrypt contact email (required for real domains)
+  --letsencrypt-staging     use the Let's Encrypt staging issuer
+  --tunnel-token TOKEN      Cloudflare Tunnel token when this host has no public IPv4
+  --admin-password PASS     API password for user admin (default: password)
 
-Run this from a clone of dflow-sh/kube-poc. docs/INSTALL.md has the clone
-command. docs/TESTING.md is the manual check after this script finishes.
+With no domain flags on a terminal, the script asks for the API host, the apps
+domain, and an email. Press Enter to keep <public-ipv4>.sslip.io.
 
-GITHUB_TOKEN or GH_TOKEN (repo read) selects the latest GitHub Release.
-sudo does not keep that variable unless you pass --preserve-env=GITHUB_TOKEN.
-An existing gh login is also used, including the invoking user's login when
-this script runs under sudo. Without a token, the checkout is built locally.
+A second run with no domain flags, or with --domain auto again, keeps the
+domains saved in /var/lib/dflow/install.env.
+
+GITHUB_TOKEN, GH_TOKEN, or GHCR_TOKEN (read:packages) can pull
+ghcr.io/dflow-sh/dflow-server. If that package is private and no token works,
+the script builds from this checkout. sudo drops those variables unless you
+pass --preserve-env.
 EOF
 }
 
@@ -77,19 +106,71 @@ parse_args() {
       --domain)
         [[ $# -ge 2 ]] || die "--domain needs a value (a DNS name, or auto)"
         DOMAIN="$2"
+        DOMAIN_SET=1
         shift 2
         ;;
       --domain=*)
         DOMAIN="${1#--domain=}"
+        DOMAIN_SET=1
+        shift
+        ;;
+      --api-domain)
+        [[ $# -ge 2 ]] || die "--api-domain needs a hostname such as paas.dflow.sh"
+        API_DOMAIN="$2"
+        API_DOMAIN_SET=1
+        shift 2
+        ;;
+      --api-domain=*)
+        API_DOMAIN="${1#--api-domain=}"
+        API_DOMAIN_SET=1
+        shift
+        ;;
+      --apps-domain)
+        [[ $# -ge 2 ]] || die "--apps-domain needs a hostname such as apps.dflow.sh"
+        APPS_DOMAIN="$2"
+        APPS_DOMAIN_SET=1
+        shift 2
+        ;;
+      --apps-domain=*)
+        APPS_DOMAIN="${1#--apps-domain=}"
+        APPS_DOMAIN_SET=1
+        shift
+        ;;
+      --email)
+        [[ $# -ge 2 ]] || die "--email needs an address"
+        LE_EMAIL="$2"
+        EMAIL_SET=1
+        shift 2
+        ;;
+      --email=*)
+        LE_EMAIL="${1#--email=}"
+        EMAIL_SET=1
+        shift
+        ;;
+      --letsencrypt-staging)
+        LE_STAGING=1
+        shift
+        ;;
+      --tunnel-token)
+        [[ $# -ge 2 ]] || die "--tunnel-token needs a Cloudflare tunnel token"
+        TUNNEL_TOKEN="$2"
+        TUNNEL_SET=1
+        shift 2
+        ;;
+      --tunnel-token=*)
+        TUNNEL_TOKEN="${1#--tunnel-token=}"
+        TUNNEL_SET=1
         shift
         ;;
       --admin-password)
         [[ $# -ge 2 ]] || die "--admin-password needs a value"
         ADMIN_PASSWORD="$2"
+        PASSWORD_SET=1
         shift 2
         ;;
       --admin-password=*)
         ADMIN_PASSWORD="${1#--admin-password=}"
+        PASSWORD_SET=1
         shift
         ;;
       -h|--help)
@@ -143,6 +224,46 @@ detect_arch() {
   esac
 }
 
+is_public_ipv4() {
+  local ip="$1" a b
+  [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+  IFS=. read -r a b _ _ <<<"$ip"
+  a=$((10#$a))
+  b=$((10#$b))
+  if (( a == 0 || a == 10 || a == 127 || a >= 224 )); then
+    return 1
+  fi
+  if (( a == 192 && b == 168 )); then
+    return 1
+  fi
+  if (( a == 169 && b == 254 )); then
+    return 1
+  fi
+  if (( a == 172 && b >= 16 && b <= 31 )); then
+    return 1
+  fi
+  if (( a == 100 && b >= 64 && b <= 127 )); then
+    return 1
+  fi
+  return 0
+}
+
+detect_node_ip() {
+  local ip=""
+  ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit }}' || true)"
+  if [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+    NODE_IP="$ip"
+    return 0
+  fi
+  return 1
+}
+
+ip_is_local() {
+  local ip="$1"
+  [[ -n "$ip" ]] || return 1
+  ip -4 -o addr show | awk '{ print $4 }' | cut -d/ -f1 | grep -Fxq "$ip"
+}
+
 detect_public_ip() {
   local ip="" candidate
   for candidate in \
@@ -150,32 +271,166 @@ detect_public_ip() {
     "https://ifconfig.me/ip" \
     "https://icanhazip.com"; do
     ip="$(curl -4fsS --max-time 10 "$candidate" 2>/dev/null | tr -d '[:space:]' || true)"
-    if [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+    if is_public_ipv4 "$ip"; then
       PUBLIC_IP="$ip"
       return 0
     fi
   done
-  ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit }}' || true)"
-  if [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
-    PUBLIC_IP="$ip"
+  detect_node_ip || true
+  if is_public_ipv4 "${NODE_IP:-}"; then
+    PUBLIC_IP="$NODE_IP"
     log "public IP lookup failed; using the address on the default route (${PUBLIC_IP})"
     return 0
   fi
   return 1
 }
 
+valid_dns_name() {
+  local name="$1"
+  [[ -n "$name" && "$name" != *"/"* && "$name" != *" "* && "$name" != *":"* ]] || return 1
+  [[ "$name" != "auto" ]] || return 1
+  return 0
+}
+
+prompt_line() {
+  local __var="$1" text="$2" value=""
+  if [[ -t 0 ]]; then
+    read -r -p "$text" value || true
+  fi
+  printf -v "$__var" '%s' "$value"
+}
+
+load_saved_endpoints() {
+  local saved="${STATE_DIR}/install.env"
+  [[ -f "$saved" ]] || return 1
+  local keep_password="$ADMIN_PASSWORD"
+  # shellcheck disable=SC1090
+  source "$saved"
+  if [[ "$PASSWORD_SET" -eq 1 ]]; then
+    ADMIN_PASSWORD="$keep_password"
+  fi
+  [[ -n "${API_HOST:-}" && -n "${APPS_BASE:-}" ]] || return 1
+  DOMAIN="$APPS_BASE"
+  log "reusing saved endpoints from ${saved}"
+  return 0
+}
+
+apply_tls_choice() {
+  CURL_INSECURE=1
+  if [[ "$APPS_BASE" == *.sslip.io || "$API_HOST" == *.sslip.io ]]; then
+    if [[ "$LE_STAGING" == "1" ]]; then
+      [[ -n "$LE_EMAIL" ]] || die "--email is required with --letsencrypt-staging"
+      TLS_ISSUER="letsencrypt-staging"
+    else
+      TLS_ISSUER="dflow-ca"
+    fi
+  elif [[ "$LE_STAGING" == "1" ]]; then
+    [[ -n "$LE_EMAIL" ]] || die "--email is required with --letsencrypt-staging"
+    TLS_ISSUER="letsencrypt-staging"
+  else
+    [[ -n "$LE_EMAIL" ]] || die "--email is required so Let's Encrypt can issue certificates for ${API_HOST}"
+    TLS_ISSUER="letsencrypt-production"
+    CURL_INSECURE=0
+  fi
+  if [[ "$API_HOST" != "dflow.${APPS_BASE}" ]]; then
+    HOSTNAME_OVERRIDE="$API_HOST"
+    APPS_DOMAIN_VALUE="$APPS_BASE"
+  else
+    HOSTNAME_OVERRIDE=""
+    APPS_DOMAIN_VALUE=""
+  fi
+}
+
 resolve_domain() {
+  detect_node_ip || true
   detect_public_ip || true
-  if [[ -z "$DOMAIN" || "$DOMAIN" == "auto" ]]; then
-    [[ -n "$PUBLIC_IP" ]] || die "could not detect a public IPv4 address. Pass --domain your.dns.name"
-    DOMAIN="${PUBLIC_IP}.sslip.io"
+
+  local domain_flags=0
+  if [[ "$DOMAIN_SET" -eq 1 || "$API_DOMAIN_SET" -eq 1 || "$APPS_DOMAIN_SET" -eq 1 || "$TUNNEL_SET" -eq 1 ]]; then
+    domain_flags=1
   fi
-  [[ "$DOMAIN" != *"/"* && "$DOMAIN" != *" "* ]] || die "domain must be a DNS name, not a URL: ${DOMAIN}"
-  if [[ -z "$PUBLIC_IP" ]]; then
-    die "could not detect this server's IPv4 address. Set it with a reachable --domain and retry from a host that can reach the internet."
+  # --domain auto picks sslip.io. A later run keeps the saved name so a
+  # different answer from the public-IP lookup does not rebuild the cluster.
+  local auto_only=0
+  if [[ "$DOMAIN_SET" -eq 1 && "$DOMAIN" == "auto" && "$API_DOMAIN_SET" -eq 0 && "$APPS_DOMAIN_SET" -eq 0 && "$TUNNEL_SET" -eq 0 ]]; then
+    auto_only=1
   fi
-  log "domain ${DOMAIN}"
-  log "public IPv4 ${PUBLIC_IP}"
+  if [[ "$domain_flags" -eq 0 || "$auto_only" -eq 1 ]] && load_saved_endpoints; then
+    local saved_public="${PUBLIC_IP:-}"
+    detect_node_ip || true
+    # Keep the address from install.env. A new lookup can be a different
+    # egress IP and would point --resolve at the wrong host.
+    if [[ -z "$saved_public" ]]; then
+      detect_public_ip || true
+    else
+      PUBLIC_IP="$saved_public"
+    fi
+    [[ -n "$TUNNEL_TOKEN" ]] && USE_TUNNEL=1
+    apply_tls_choice
+    log "API ${API_HOST}"
+    log "apps *.${APPS_BASE}"
+    return 0
+  fi
+
+  if [[ "$DOMAIN_SET" -eq 1 && -n "$DOMAIN" && "$DOMAIN" != "auto" && -z "$APPS_DOMAIN" ]]; then
+    APPS_DOMAIN="$DOMAIN"
+  fi
+
+  if [[ "$domain_flags" -eq 0 && -t 0 && -z "$API_DOMAIN" && -z "$APPS_DOMAIN" && ( -z "$DOMAIN" || "$DOMAIN" == "auto" ) && -z "$TUNNEL_TOKEN" ]]; then
+    echo "Press Enter on each line to use <public-ip>.sslip.io and a self-signed certificate."
+    local entered_api="" entered_apps="" entered_email=""
+    prompt_line entered_api "API host (example paas.dflow.sh): "
+    prompt_line entered_apps "Apps domain (example apps.dflow.sh): "
+    prompt_line entered_email "Let's Encrypt email: "
+    [[ -n "$entered_api" ]] && API_DOMAIN="$entered_api"
+    [[ -n "$entered_apps" ]] && APPS_DOMAIN="$entered_apps"
+    [[ -n "$entered_email" ]] && LE_EMAIL="$entered_email"
+  fi
+
+  if [[ -z "$PUBLIC_IP" && -z "$TUNNEL_TOKEN" ]]; then
+    if [[ -t 0 ]]; then
+      local use_tunnel=""
+      prompt_line use_tunnel "No public IPv4 detected. Use a Cloudflare Tunnel? [y/N]: "
+      case "${use_tunnel}" in
+        y|Y|yes|YES)
+          prompt_line TUNNEL_TOKEN "Cloudflare tunnel token: "
+          ;;
+      esac
+    fi
+  fi
+  if [[ -n "$TUNNEL_TOKEN" ]]; then
+    USE_TUNNEL=1
+  fi
+
+  if [[ -z "$API_DOMAIN" && -z "$APPS_DOMAIN" ]]; then
+    [[ -n "$PUBLIC_IP" ]] || die "no public IPv4 detected. Pass --api-domain, --apps-domain, and --tunnel-token, or run on a host with a public address."
+    APPS_BASE="${PUBLIC_IP}.sslip.io"
+    API_HOST="dflow.${APPS_BASE}"
+    DOMAIN="$APPS_BASE"
+  else
+    [[ -n "$APPS_DOMAIN" ]] || die "--apps-domain is required with --api-domain"
+    valid_dns_name "$APPS_DOMAIN" || die "apps domain must be a DNS name, not a URL: ${APPS_DOMAIN}"
+    if [[ -z "$API_DOMAIN" ]]; then
+      API_DOMAIN="dflow.${APPS_DOMAIN}"
+    fi
+    valid_dns_name "$API_DOMAIN" || die "API domain must be a DNS name, not a URL: ${API_DOMAIN}"
+    API_HOST="$API_DOMAIN"
+    APPS_BASE="$APPS_DOMAIN"
+    DOMAIN="$APPS_BASE"
+    if [[ "$USE_TUNNEL" -eq 0 && -z "$PUBLIC_IP" ]]; then
+      die "no public IPv4 detected. Pass --tunnel-token to publish ${API_HOST} through Cloudflare, or run on a host with a public address."
+    fi
+  fi
+
+  apply_tls_choice
+  log "API https://${API_HOST}"
+  log "apps https://<app>.${APPS_BASE}"
+  if [[ -n "$PUBLIC_IP" ]]; then
+    log "public IPv4 ${PUBLIC_IP}"
+  elif [[ "$USE_TUNNEL" -eq 1 ]]; then
+    log "no public IPv4; Cloudflare Tunnel will publish the hostnames"
+  fi
+  [[ -n "${NODE_IP:-}" ]] || die "could not find an IPv4 address on the default route"
 }
 
 install_packages() {
@@ -187,11 +442,22 @@ install_packages() {
   local attempt
   for attempt in $(seq 1 30); do
     if docker info >/dev/null 2>&1; then
-      return 0
+      break
+    fi
+    if [[ "$attempt" -eq 30 ]]; then
+      die "docker did not start. Check 'systemctl status docker'."
     fi
     sleep 2
   done
-  die "docker did not start. Check 'systemctl status docker'."
+  # Docker writes a legacy iptables FORWARD policy of DROP. Bridged pod
+  # traffic is evaluated there and never reaches the nft rules k3s installs,
+  # so pods cannot resolve cluster DNS. Accept forwarded packets.
+  if command -v iptables-legacy >/dev/null 2>&1; then
+    iptables-legacy -P FORWARD ACCEPT || true
+  fi
+  if command -v ip6tables-legacy >/dev/null 2>&1; then
+    ip6tables-legacy -P FORWARD ACCEPT || true
+  fi
 }
 
 install_helm() {
@@ -238,6 +504,14 @@ choose_flannel() {
 write_k3s_config() {
   choose_flannel
   mkdir -p /etc/rancher/k3s
+  # kube-proxy sends the kubernetes API service to node-external-ip. An
+  # egress address that is not configured on this host (NAT) is not answered
+  # here, so in-cluster clients time out. Use the public IP only when it is
+  # local. The join URL can still print the public address.
+  local external_ip="${NODE_IP}"
+  if ip_is_local "${PUBLIC_IP:-}"; then
+    external_ip="${PUBLIC_IP}"
+  fi
   local rendered
   rendered="$(cat <<EOF
 write-kubeconfig-mode: "644"
@@ -245,10 +519,10 @@ disable:
   - servicelb
 flannel-backend: ${FLANNEL_BACKEND}
 tls-san:
-  - ${PUBLIC_IP}
-  - ${DOMAIN}
-  - dflow.${DOMAIN}
-node-external-ip: ${PUBLIC_IP}
+  - ${NODE_IP:-${PUBLIC_IP}}
+  - ${API_HOST}
+  - ${APPS_BASE}
+node-external-ip: ${external_ip}
 EOF
 )"
   if [[ ! -f /etc/rancher/k3s/config.yaml ]] || ! cmp -s - /etc/rancher/k3s/config.yaml <<<"${rendered}"; then
@@ -262,8 +536,14 @@ write_traefik_config() {
   # and can stay stuck when that plugin cannot program the host. Traefik
   # itself joins the host network and listens on 80 and 443, so the service
   # stays ClusterIP and ServiceLB is not used.
+  # Recreate is required: a rolling update starts the new pod before the old
+  # one releases host ports 80 and 443, and the rollout never finishes.
+  # HTTP is not redirected to HTTPS so cert-manager HTTP-01 can use port 80.
   mkdir -p /var/lib/rancher/k3s/server/manifests
-  cat > /var/lib/rancher/k3s/server/manifests/dflow-traefik-config.yaml <<'EOF'
+  local dest="/var/lib/rancher/k3s/server/manifests/dflow-traefik-config.yaml"
+  local tmp
+  tmp="$(mktemp)"
+  cat > "$tmp" <<'EOF'
 apiVersion: helm.cattle.io/v1
 kind: HelmChartConfig
 metadata:
@@ -274,8 +554,13 @@ spec:
     hostNetwork: true
     deployment:
       dnsPolicy: ClusterFirstWithHostNet
+    # Traefik chart 40 (k3s 1.36) reads updateStrategy, not deployment.strategy.
+    # Recreate releases host ports 80 and 443 before the new pod starts.
+    updateStrategy:
+      type: Recreate
     service:
-      type: ClusterIP
+      spec:
+        type: ClusterIP
     ports:
       web:
         port: 80
@@ -297,6 +582,13 @@ spec:
       runAsUser: 0
       runAsGroup: 0
 EOF
+  if [[ -f "$dest" ]] && cmp -s "$tmp" "$dest"; then
+    rm -f "$tmp"
+    TRAEFIK_CONFIG_CHANGED=0
+    return 0
+  fi
+  mv "$tmp" "$dest"
+  TRAEFIK_CONFIG_CHANGED=1
 }
 
 install_k3s() {
@@ -337,8 +629,20 @@ kubectl() {
 
 apply_traefik() {
   log "Traefik host network"
-  kubectl apply -f /var/lib/rancher/k3s/server/manifests/dflow-traefik-config.yaml
-  local attempt
+  local manifest="/var/lib/rancher/k3s/server/manifests/dflow-traefik-config.yaml"
+  # k3s applies every file in this directory itself. apply is idempotent if
+  # that controller created the HelmChartConfig first. create is not: it
+  # returns AlreadyExists.
+  local apply_out
+  if ! apply_out="$(kubectl apply --server-side --force-conflicts --field-manager=dflow-install -f "$manifest" 2>&1)"; then
+    if grep -q 'AlreadyExists' <<<"$apply_out" && kubectl -n kube-system get helmchartconfig traefik >/dev/null 2>&1; then
+      log "traefik HelmChartConfig already exists; leaving the applied object"
+    else
+      printf '%s\n' "$apply_out" >&2
+      die "could not apply ${manifest}"
+    fi
+  fi
+  local attempt strategy host_net
   for attempt in $(seq 1 60); do
     if kubectl -n kube-system get deploy traefik >/dev/null 2>&1; then
       break
@@ -348,7 +652,25 @@ apply_traefik() {
     fi
     sleep 5
   done
-  kubectl -n kube-system rollout restart deploy/traefik
+  strategy="$(kubectl -n kube-system get deploy traefik -o jsonpath='{.spec.strategy.type}' 2>/dev/null || true)"
+  host_net="$(kubectl -n kube-system get pod -l app.kubernetes.io/name=traefik -o jsonpath='{.items[0].spec.hostNetwork}' 2>/dev/null || true)"
+  if [[ "$TRAEFIK_CONFIG_CHANGED" -eq 0 && "$strategy" == "Recreate" && "$host_net" == "true" ]]; then
+    log "Traefik is already on the host network with Recreate; not restarting it"
+  else
+    log "waiting for Traefik to adopt hostNetwork and Recreate"
+  fi
+  for attempt in $(seq 1 60); do
+    strategy="$(kubectl -n kube-system get deploy traefik -o jsonpath='{.spec.strategy.type}' 2>/dev/null || true)"
+    host_net="$(kubectl -n kube-system get pod -l app.kubernetes.io/name=traefik -o jsonpath='{.items[0].spec.hostNetwork}' 2>/dev/null || true)"
+    if [[ "$strategy" == "Recreate" && "$host_net" == "true" ]]; then
+      break
+    fi
+    if [[ "$attempt" -eq 60 ]]; then
+      kubectl -n kube-system get deploy traefik -o yaml >&2 || true
+      die "traefik did not switch to hostNetwork and a Recreate strategy (strategy=${strategy:-empty}, hostNetwork=${host_net:-empty})"
+    fi
+    sleep 5
+  done
   kubectl -n kube-system rollout status deploy/traefik --timeout=10m \
     || die "traefik did not become ready after switching to the host network"
   # Drop any ServiceLB DaemonSet left from an earlier LoadBalancer service.
@@ -571,11 +893,19 @@ verify_checksum() {
   dir="$(cd "$(dirname "$file")" && pwd)"
   base="$(basename "$file")"
   rm -f "$sums"
+  local check_out
   if command -v sha256sum >/dev/null 2>&1; then
-    printf '%s  %s\n' "$hash" "$base" | (cd "$dir" && sha256sum -c -)
+    check_out="$(printf '%s  %s\n' "$hash" "$base" | (cd "$dir" && sha256sum -c -) 2>&1)" || {
+      log "checksum failed for ${asset}: ${check_out}"
+      return 1
+    }
   else
-    printf '%s  %s\n' "$hash" "$base" | (cd "$dir" && shasum -a 256 -c -)
+    check_out="$(printf '%s  %s\n' "$hash" "$base" | (cd "$dir" && shasum -a 256 -c -) 2>&1)" || {
+      log "checksum failed for ${asset}: ${check_out}"
+      return 1
+    }
   fi
+  log "checksum matched for ${asset}"
 }
 
 host_goos() {
@@ -628,22 +958,39 @@ place_cli() {
   "$dest" version || die "the dflow binary at ${dest} does not run"
 }
 
+ghcr_pull_token() {
+  if [[ -n "${GHCR_TOKEN:-}" ]]; then
+    printf '%s' "$GHCR_TOKEN"
+    return 0
+  fi
+  release_token
+}
+
 pull_release_image() {
-  local token image tar user
+  local token image tar user pull_log
   image="ghcr.io/dflow-sh/dflow-server:${RELEASE_TAG}"
-  token="$(release_token || true)"
+  token="$(ghcr_pull_token || true)"
   if [[ -n "$token" ]]; then
     user="$(ghcr_user)"
     echo "$token" | docker login ghcr.io -u "$user" --password-stdin >/dev/null \
       || log "could not log in to ghcr.io"
   fi
-  if docker pull "$image"; then
+  pull_log="$(mktemp)"
+  if docker pull "$image" >"$pull_log" 2>&1; then
+    rm -f "$pull_log"
     docker save "$image" | k3s ctr images import - \
       || die "docker pulled ${image}, but k3s could not import it"
     IMAGE="$image"
     IMAGE_FROM_RELEASE=1
     return 0
   fi
+  if grep -Eqi '403|denied|unauthorized|insufficient_scope' "$pull_log"; then
+    log "pulling ${image} was denied. The GHCR package is private. Make it public (GitHub → Packages → dflow-server → Package settings → Change visibility → Public), or set GHCR_TOKEN with read:packages and GHCR_USER. Building from the checkout."
+  else
+    log "could not pull ${image}"
+  fi
+  cat "$pull_log" >&2 || true
+  rm -f "$pull_log"
   tar="/tmp/dflow-server-linux-${GOARCH_NAME}.tar.gz"
   if download_release_asset "dflow-server-linux-${GOARCH_NAME}.tar.gz" "$tar"; then
     gunzip -c "$tar" | k3s ctr images import - \
@@ -670,6 +1017,9 @@ import_or_build_image() {
   else
     log "${release_note}. Set GITHUB_TOKEN or GH_TOKEN, or run gh auth login. Building from the checkout."
   fi
+  if maybe_reuse_local_image; then
+    return 0
+  fi
   IMAGE="ghcr.io/dflow-sh/dflow-server:$(checkout_image_tag)"
   IMAGE_FROM_RELEASE=0
   log "building ${IMAGE} from ${ROOT}"
@@ -681,8 +1031,52 @@ import_or_build_image() {
     || die "server image install failed. ${release_note}. Importing the locally built image into k3s also failed."
 }
 
+checkout_sha() {
+  git -C "$ROOT" rev-parse HEAD 2>/dev/null || true
+}
+
+maybe_reuse_local_image() {
+  local sha tag image
+  sha="$(checkout_sha)"
+  if [[ -z "${CHECKOUT_SHA:-}" && -f "${STATE_DIR}/install.env" ]]; then
+    CHECKOUT_SHA="$( ( set +u; source "${STATE_DIR}/install.env"; printf '%s' "${CHECKOUT_SHA:-}" ) )"
+  fi
+  [[ -n "$sha" ]] || return 1
+  tag="$(checkout_image_tag)"
+  image="ghcr.io/dflow-sh/dflow-server:${tag}"
+  if k3s ctr images ls 2>/dev/null | awk '{print $1}' | grep -Fxq "$image"; then
+    IMAGE="$image"
+    IMAGE_FROM_RELEASE=0
+    log "reusing local image ${IMAGE}"
+    return 0
+  fi
+  return 1
+}
+
 install_cli_release_or_build() {
-  local goos asset dest
+  local goos asset dest sha
+  sha="$(checkout_sha)"
+  # The checkout image and the CLI are one build. A release binary can be
+  # older than the chart templates baked into that image.
+  if [[ "$IMAGE_FROM_RELEASE" -eq 0 ]]; then
+    if [[ -n "$sha" && "${CLI_FROM_CHECKOUT:-}" == "1" && "${CHECKOUT_SHA:-}" == "$sha" && -x /usr/local/bin/dflow ]] && /usr/local/bin/dflow version >/dev/null 2>&1; then
+      log "CLI already installed for this checkout"
+      return 0
+    fi
+    log "server image is from the checkout; installing the checkout CLI"
+    dest="/tmp/dflow-checkout"
+    if ! build_host_cli "$dest"; then
+      die "CLI install failed while building from the checkout."
+    fi
+    place_cli "$dest"
+    CLI_FROM_CHECKOUT=1
+    log "installed a CLI built from the checkout to /usr/local/bin/dflow"
+    return 0
+  fi
+  if [[ -n "$sha" && "${CHECKOUT_SHA:-}" == "$sha" && -x /usr/local/bin/dflow ]] && /usr/local/bin/dflow version >/dev/null 2>&1; then
+    log "CLI already installed for this checkout"
+    return 0
+  fi
   goos="$(host_goos)"
   asset="dflow-${goos}-${GOARCH_NAME}"
   dest="/tmp/${asset}"
@@ -690,13 +1084,18 @@ install_cli_release_or_build() {
     load_release_json "${RELEASE_TAG_REQUEST:-latest}" || true
   fi
   if [[ -n "$RELEASE_JSON" ]] && download_release_asset "$asset" "$dest"; then
-    if verify_checksum "$dest" "$asset" && "$dest" version >/dev/null 2>&1; then
+    chmod 0755 "$dest" || true
+    if ! verify_checksum "$dest" "$asset"; then
+      log "release asset ${asset} failed its checksum; building from the checkout"
+      rm -f "$dest"
+    elif ! "$dest" version >/dev/null 2>&1; then
+      log "release asset ${asset} downloaded but did not run; building from the checkout"
+      rm -f "$dest"
+    else
       place_cli "$dest"
       log "installed ${asset} from release ${RELEASE_TAG} to /usr/local/bin/dflow"
       return 0
     fi
-    log "release asset ${asset} failed checksum or did not run"
-    rm -f "$dest"
   else
     log "release asset ${asset} is not available"
   fi
@@ -714,12 +1113,14 @@ install_cli() {
 
 resolve_chart() {
   CHART_REF="${ROOT}/packages/helm-chart"
-  if [[ -n "$RELEASE_JSON" ]] && download_release_glob '^dflow-.+\.tgz$' /tmp/dflow-chart.tgz; then
+  if [[ "$IMAGE_FROM_RELEASE" -eq 1 && -n "$RELEASE_JSON" ]] && download_release_glob '^dflow-.+\.tgz$' /tmp/dflow-chart.tgz; then
     CHART_REF="/tmp/dflow-chart.tgz"
     log "using the Helm chart packaged in release ${RELEASE_TAG}"
     return 0
   fi
-  if [[ -n "$RELEASE_JSON" ]]; then
+  if [[ "$IMAGE_FROM_RELEASE" -eq 0 ]]; then
+    log "server image is from the checkout; using the checkout Helm chart"
+  elif [[ -n "$RELEASE_JSON" ]]; then
     log "release ${RELEASE_TAG} has no Helm chart package; using the checkout chart"
   fi
   [[ -e "$CHART_REF" ]] || die "Helm chart install failed. No chart in the release and ${CHART_REF} is missing."
@@ -731,12 +1132,25 @@ write_install_env() {
   umask 077
   cat > "${STATE_DIR}/install.env" <<EOF
 DOMAIN=$(printf '%q' "$DOMAIN")
+API_HOST=$(printf '%q' "$API_HOST")
+APPS_BASE=$(printf '%q' "$APPS_BASE")
+APPS_DOMAIN_VALUE=$(printf '%q' "$APPS_DOMAIN_VALUE")
+HOSTNAME_OVERRIDE=$(printf '%q' "$HOSTNAME_OVERRIDE")
+TLS_ISSUER=$(printf '%q' "$TLS_ISSUER")
+LE_EMAIL=$(printf '%q' "$LE_EMAIL")
+LE_STAGING=$(printf '%q' "$LE_STAGING")
+USE_TUNNEL=$(printf '%q' "$USE_TUNNEL")
+TUNNEL_TOKEN=$(printf '%q' "$TUNNEL_TOKEN")
+CURL_INSECURE=$(printf '%q' "$CURL_INSECURE")
+PUBLIC_IP=$(printf '%q' "$PUBLIC_IP")
 ADMIN_USER=$(printf '%q' "$ADMIN_USER")
 ADMIN_PASSWORD=$(printf '%q' "$ADMIN_PASSWORD")
 IMAGE=$(printf '%q' "$IMAGE")
 IMAGE_TAG=$(printf '%q' "$image_tag")
 RELEASE_TAG=$(printf '%q' "${RELEASE_TAG:-}")
 CHART_REF=$(printf '%q' "$CHART_REF")
+CHECKOUT_SHA=$(printf '%q' "$(checkout_sha)")
+CLI_FROM_CHECKOUT=$(printf '%q' "${CLI_FROM_CHECKOUT:-0}")
 EOF
   chmod 600 "${STATE_DIR}/install.env"
 }
@@ -748,6 +1162,9 @@ apply_dflow_release() {
   cat > "${STATE_DIR}/values.yaml" <<EOF
 global:
   domain: $(yaml_quote "$DOMAIN")
+  tlsIssuer: $(yaml_quote "$TLS_ISSUER")
+  tlsIssuerEmail: $(yaml_quote "$LE_EMAIL")
+$(if [[ -n "$APPS_DOMAIN_VALUE" ]]; then printf '  appsDomain: %s\n' "$(yaml_quote "$APPS_DOMAIN_VALUE")"; fi)
 certManager:
   install: false
   enabled: true
@@ -757,6 +1174,9 @@ api:
   adminPassword: $(yaml_quote "$ADMIN_PASSWORD")
 ingress:
   ingressClassName: traefik
+$(if [[ -n "$HOSTNAME_OVERRIDE" ]]; then printf '  hostnameOverride: %s\n' "$(yaml_quote "$HOSTNAME_OVERRIDE")"; fi)
+server:
+  defaultBuildMode: railpack
 image:
   dflow:
     tag: $(yaml_quote "$image_tag")
@@ -796,7 +1216,10 @@ install_charts() {
 curl_code() {
   local url="$1"
   local resolve="${2:-}"
-  local -a args=(-k -sS --max-time 20 -o /tmp/dflow-curl-body -w '%{http_code}')
+  local -a args=(-sS --max-time 20 -o /tmp/dflow-curl-body -w '%{http_code}')
+  if [[ "${CURL_INSECURE:-1}" == "1" ]]; then
+    args+=(-k)
+  fi
   if [[ -n "$resolve" ]]; then
     args+=(--resolve "$resolve")
   fi
@@ -935,25 +1358,77 @@ curl_public_ok_once() {
   return 1
 }
 
+resolved_ipv4() {
+  python3 - "$1" <<'PY'
+import socket, sys
+try:
+    infos = socket.getaddrinfo(sys.argv[1], None, socket.AF_INET)
+except socket.gaierror:
+    sys.exit(0)
+if infos:
+    print(infos[0][4][0])
+PY
+}
+
+# sslip.io for an egress NAT address answers with an IP this host does not
+# own. Pin the name to Traefik so login and curl reach the local port.
+pin_host_to_traefik() {
+  local host="$1" current
+  [[ -n "$host" && -n "${TRAEFIK_HOST_IP:-}" ]] || return 0
+  current="$(resolved_ipv4 "$host")"
+  if [[ -n "$current" ]] && ip_is_local "$current"; then
+    return 0
+  fi
+  local tmp
+  tmp="$(mktemp)"
+  if [[ -f /etc/hosts ]]; then
+    awk -v host="$host" '{
+      skip = 0
+      for (i = 2; i <= NF; i++) if ($i == host) skip = 1
+      if (!skip) print
+    }' /etc/hosts > "$tmp"
+  fi
+  printf '%s %s\n' "$TRAEFIK_HOST_IP" "$host" >> "$tmp"
+  cat "$tmp" > /etc/hosts
+  rm -f "$tmp"
+  log "pinned ${host} to ${TRAEFIK_HOST_IP} (resolved ${current:-nowhere})"
+}
+
 self_test() {
+  if [[ -z "${API_HOST:-}" ]]; then
+    API_HOST="dflow.${DOMAIN}"
+  fi
+  if [[ -z "${APPS_BASE:-}" ]]; then
+    APPS_BASE="$DOMAIN"
+  fi
+  if [[ -z "${TLS_ISSUER:-}" ]]; then
+    TLS_ISSUER="dflow-ca"
+    CURL_INSECURE=1
+  fi
   if [[ -z "${PUBLIC_IP:-}" ]]; then
     detect_public_ip || true
   fi
   if [[ -z "${TRAEFIK_HOST_IP:-}" ]] && command -v kubectl >/dev/null 2>&1 && [[ -r "${KUBECONFIG_PATH:-}" ]]; then
     TRAEFIK_HOST_IP="$(kubectl -n kube-system get pod -l app.kubernetes.io/name=traefik -o jsonpath='{.items[0].status.hostIP}' 2>/dev/null || true)"
   fi
+  pin_host_to_traefik "$API_HOST"
+  pin_host_to_traefik "${SAMPLE_APP}.${APPS_BASE}"
   log "API health"
-  if ! curl_health_ok "https://dflow.${DOMAIN}/ready" "http://dflow.${DOMAIN}/ready"; then
+  if ! curl_health_ok "https://${API_HOST}/ready" "http://${API_HOST}/ready"; then
     kubectl -n dflow get ingress,certificate,pods >&2 || true
     kubectl -n kube-system get svc,pods -l app.kubernetes.io/name=traefik >&2 || true
-    die "API health check failed. https://dflow.${DOMAIN}/ready and http://dflow.${DOMAIN}/ready did not return 200."
+    die "API health check failed. https://${API_HOST}/ready and http://${API_HOST}/ready did not return 200."
   fi
 
   log "CLI self-test"
-  log "API https://dflow.${DOMAIN} user ${ADMIN_USER} password ${ADMIN_PASSWORD}"
+  log "API https://${API_HOST} user ${ADMIN_USER} password ${ADMIN_PASSWORD}"
   export PATH="/usr/local/bin:${PATH}"
-  if ! dflow login -u "$ADMIN_USER" -p "$ADMIN_PASSWORD" --trust-ca "https://dflow.${DOMAIN}" </dev/null; then
-    die "dflow login to https://dflow.${DOMAIN} failed. User ${ADMIN_USER}, password is the value printed below."
+  local -a login_args=(-u "$ADMIN_USER" -p "$ADMIN_PASSWORD")
+  if [[ "${CURL_INSECURE:-1}" == "1" ]]; then
+    login_args+=(--trust-ca)
+  fi
+  if ! dflow login "${login_args[@]}" "https://${API_HOST}" </dev/null; then
+    die "dflow login to https://${API_HOST} failed. User ${ADMIN_USER}, password is the value printed below."
   fi
 
   if ! dflow namespace show "$SAMPLE_NAMESPACE" >/dev/null 2>&1; then
@@ -971,16 +1446,16 @@ self_test() {
       || die "could not delete leftover app ${SAMPLE_APP}"
   fi
 
-  log "push ${SAMPLE_IMAGE} as ${SAMPLE_APP}"
-  if ! printf '\n' | dflow push -n "$SAMPLE_APP" --container-image-url "$SAMPLE_IMAGE"; then
+  log "push ${SAMPLE_IMAGE} as ${SAMPLE_APP} (${SAMPLE_ENV})"
+  if ! printf '\n' | dflow push -n "$SAMPLE_APP" --container-image-url "$SAMPLE_IMAGE" -e "$SAMPLE_ENV"; then
     kubectl -n "$SAMPLE_NAMESPACE" get pods,ingress >&2 || true
     dflow app logs --staging "$SAMPLE_APP" >&2 || true
     die "dflow push of ${SAMPLE_APP} failed"
   fi
 
-  if ! curl_public_ok "https://${SAMPLE_APP}.${DOMAIN}/"; then
+  if ! curl_public_ok "https://${SAMPLE_APP}.${APPS_BASE}/"; then
     kubectl -n "$SAMPLE_NAMESPACE" get pods,ingress >&2 || true
-    die "https://${SAMPLE_APP}.${DOMAIN}/ did not return HTTP 200"
+    die "https://${SAMPLE_APP}.${APPS_BASE}/ did not return HTTP 200"
   fi
 
   dflow app delete "$SAMPLE_APP" </dev/null \
@@ -1021,9 +1496,12 @@ self_test() {
 }
 
 print_next() {
-  local login_server login_mac api
-  api="https://dflow.${DOMAIN}"
-  login_server="$(printf 'dflow login -u %q -p %q --trust-ca %q' "$ADMIN_USER" "$ADMIN_PASSWORD" "$api")"
+  local login_server login_mac api trust=""
+  api="https://${API_HOST}"
+  if [[ "${CURL_INSECURE:-1}" == "1" ]]; then
+    trust="--trust-ca "
+  fi
+  login_server="$(printf 'dflow login -u %q -p %q %s%q' "$ADMIN_USER" "$ADMIN_PASSWORD" "$trust" "$api")"
   login_mac="$login_server"
   cat <<EOF
 
@@ -1032,14 +1510,16 @@ dFlow is installed.
   API:       ${api}
   User:      ${ADMIN_USER}
   Password:  ${ADMIN_PASSWORD}
-  Domain:    ${DOMAIN}
+  Apps:      https://<app>.${APPS_BASE}
+  TLS:       ${TLS_ISSUER}
 
 The installer already logged in, pushed ${SAMPLE_IMAGE}, checked HTTP 200,
 deleted that app, and removed the ${SAMPLE_NAMESPACE} namespace.
 
 On this server, repeat the check with docs/TESTING.md:
 
-  export DOMAIN=${DOMAIN}
+  export API_HOST=${API_HOST}
+  export APPS_BASE=${APPS_BASE}
   ${login_server}
 
 On a Mac, from a checkout of this repository:
@@ -1060,7 +1540,14 @@ print_join_info() {
   [[ -r "$token_file" ]] || die "k3s node token ${token_file} is missing, so a worker cannot join"
   token="$(tr -d '[:space:]' < "$token_file")"
   [[ -n "$token" ]] || die "k3s node token ${token_file} is empty"
-  [[ -n "${PUBLIC_IP:-}" ]] || die "the server public IP is empty, so the join URL cannot be printed"
+  if [[ -z "${PUBLIC_IP:-}" ]]; then
+    cat <<EOF
+
+No public IPv4 was detected, so a worker join URL is not printed.
+Workers can join only if they can reach this node's Kubernetes API.
+EOF
+    return 0
+  fi
   server="https://${PUBLIC_IP}:6443"
   cat <<EOF
 
@@ -1075,6 +1562,99 @@ The token is also in ${token_file}. The server URL uses this machine's public IP
 EOF
 }
 
+name_resolves() {
+  local host="$1" expect="${2:-}"
+  python3 - "$host" "$expect" <<'PY'
+import socket, sys
+host, expect = sys.argv[1], sys.argv[2]
+try:
+    infos = socket.getaddrinfo(host, None, socket.AF_INET)
+except socket.gaierror:
+    sys.exit(1)
+ips = {item[4][0] for item in infos}
+if not ips:
+    sys.exit(1)
+if expect and expect not in ips:
+    sys.exit(1)
+sys.exit(0)
+PY
+}
+
+print_dns_instructions() {
+  if [[ "$USE_TUNNEL" -eq 1 ]]; then
+    cat <<EOF
+
+No public A records. In the Cloudflare tunnel, route these hostnames to http://localhost:80:
+
+  ${API_HOST}
+  *.${APPS_BASE}
+
+The installer waits until both names resolve before it requests certificates.
+EOF
+    return 0
+  fi
+  if [[ "$APPS_BASE" == *.sslip.io ]]; then
+    log "sslip.io publishes ${API_HOST} and *.${APPS_BASE} without DNS records"
+    return 0
+  fi
+  cat <<EOF
+
+Create these DNS records. The installer waits until they resolve before requesting certificates.
+
+  A    ${API_HOST}        ${PUBLIC_IP}
+  A    *.${APPS_BASE}     ${PUBLIC_IP}
+
+EOF
+}
+
+wait_for_dns() {
+  if [[ "$APPS_BASE" == *.sslip.io && "$USE_TUNNEL" -eq 0 ]]; then
+    return 0
+  fi
+  local expect="" probe="dns-check.${APPS_BASE}"
+  if [[ "$USE_TUNNEL" -eq 0 ]]; then
+    expect="$PUBLIC_IP"
+  fi
+  log "waiting for DNS: ${API_HOST} and ${probe}"
+  local attempt
+  for attempt in $(seq 1 60); do
+    if name_resolves "$API_HOST" "$expect" && name_resolves "$probe" "$expect"; then
+      log "DNS is in place for ${API_HOST} and *.${APPS_BASE}"
+      return 0
+    fi
+    if [[ "$attempt" -eq 60 ]]; then
+      if [[ "$USE_TUNNEL" -eq 1 ]]; then
+        die "timed out waiting for ${API_HOST} and ${probe} to resolve. Route them on the Cloudflare tunnel to http://localhost:80."
+      fi
+      die "timed out waiting for ${API_HOST} and ${probe} to resolve to ${PUBLIC_IP}"
+    fi
+    sleep 5
+  done
+}
+
+install_cloudflared() {
+  [[ "$USE_TUNNEL" -eq 1 ]] || return 0
+  [[ -n "$TUNNEL_TOKEN" ]] || die "Cloudflare tunnel token is empty"
+  if ! command -v cloudflared >/dev/null 2>&1; then
+    log "install cloudflared"
+    curl -fsSL -o /tmp/cloudflared "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${GOARCH_NAME}" \
+      || die "could not download cloudflared"
+    install -m 0755 /tmp/cloudflared /usr/local/bin/cloudflared
+  fi
+  if systemctl is-active --quiet cloudflared; then
+    log "cloudflared is already running"
+    return 0
+  fi
+  cloudflared service uninstall >/dev/null 2>&1 || true
+  cloudflared service install "$TUNNEL_TOKEN" \
+    || die "cloudflared service install failed"
+  systemctl enable --now cloudflared \
+    || die "cloudflared did not start"
+  systemctl is-active --quiet cloudflared \
+    || die "cloudflared is not active. Check 'systemctl status cloudflared'."
+  log "cloudflared is running"
+}
+
 main() {
   parse_args "$@"
   require_root
@@ -1082,11 +1662,14 @@ main() {
   require_ubuntu
   detect_arch
   resolve_domain
+  print_dns_instructions
   install_packages
   install_helm
   install_k3s
   apply_traefik
   verify_traefik
+  install_cloudflared
+  wait_for_dns
   import_or_build_image
   install_cli
   install_charts

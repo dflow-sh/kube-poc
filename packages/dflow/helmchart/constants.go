@@ -15,11 +15,12 @@ import "github.com/spf13/viper"
 
 const (
 	S3ConnectionDetailsSecretName = "dflow-s3-connection-details" // nolint:gosec // Not credentials
-	DFlowCertificateName         = "dflow"
-	DFlowStageDownload           = "download"
-	DFlowStageUnpack             = "unpack"
-	DFlowStageBuild              = "build"
-	DFlowStageDockerfileBuild    = "dockerfile-build"
+	DFlowCertificateName          = "dflow"
+	DFlowStageDownload            = "download"
+	DFlowStageUnpack              = "unpack"
+	DFlowStageBuild               = "build"
+	DFlowStageDockerfileBuild     = "dockerfile-build"
+	DFlowStageRailpackBuild       = "railpack-build"
 )
 
 func Namespace() string {

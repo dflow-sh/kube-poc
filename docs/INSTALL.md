@@ -11,38 +11,75 @@ The server is Ubuntu 22.04 or 24.04, with at least 8 GB RAM, a public IPv4 addre
 HTTPS with a personal access token that can read this repository:
 
 ```bash
-git clone --branch cursor/m1-image-deploy-ccca \
-  "https://x-access-token:${GITHUB_TOKEN}@github.com/dflow-sh/kube-poc.git"
+git clone "https://x-access-token:${GITHUB_TOKEN}@github.com/dflow-sh/kube-poc.git"
 cd kube-poc
 sudo --preserve-env=GITHUB_TOKEN ./scripts/install.sh --domain auto
 ```
 
 `GITHUB_TOKEN` needs permission to read this private repository (`repo` on a classic token, or contents read on a fine-grained token). `sudo` drops the variable unless `--preserve-env=GITHUB_TOKEN` is set. `GH_TOKEN` is accepted as well. If neither is set, a `gh auth login` session for the user who invoked sudo is used. With no token and no `gh` login, the script builds the CLI and server image from the checkout.
 
-To pull `ghcr.io/dflow-sh/dflow-server` from a release, the same token also needs `read:packages`. Set `GHCR_USER` to the GitHub login that owns the token. The script uses `GHCR_USER`, then `GITHUB_ACTOR`, then the login from `gh api user`.
+To pull `ghcr.io/dflow-sh/dflow-server` from a release, the token also needs `read:packages`. Set `GHCR_USER` to the GitHub login that owns the token, or set `GHCR_TOKEN` to a token that already has `read:packages`. The script uses `GHCR_TOKEN` first, then `GITHUB_TOKEN` or `GH_TOKEN`. The username is `GHCR_USER`, then `GITHUB_ACTOR`, then the login from `gh api user`.
+
+If the package is private and the pull returns 403, the script says so and builds from the checkout. To stop that fallback, make the package public: GitHub → Packages → `dflow-server` → Package settings → Change visibility → Public.
 
 Deploy key (read access is enough):
 
 ```bash
 GIT_SSH_COMMAND='ssh -i ~/.ssh/dflow_deploy_key -o IdentitiesOnly=yes' \
-  git clone --branch cursor/m1-image-deploy-ccca git@github.com:dflow-sh/kube-poc.git
+  git clone git@github.com:dflow-sh/kube-poc.git
 cd kube-poc
 sudo --preserve-env=GITHUB_TOKEN ./scripts/install.sh --domain auto
 ```
 
 A deploy key can clone. It cannot download GitHub Release assets. Export `GITHUB_TOKEN` as well when a release should be used.
 
-`--domain auto` uses `<public-ipv4>.sslip.io`. To use DNS you control:
+### Domains and certificates
+
+On a terminal, with no domain flags, the script asks for an API host (example `paas.dflow.sh`), an apps wildcard base (example `apps.dflow.sh`, so an app is `hello.apps.dflow.sh`), and a Let's Encrypt email. Press Enter on each line to keep `<public-ipv4>.sslip.io` and a self-signed certificate.
+
+The same answers are flags or environment variables:
 
 ```bash
-sudo ./scripts/install.sh --domain apps.example.com
+sudo ./scripts/install.sh \
+  --api-domain paas.dflow.sh \
+  --apps-domain apps.dflow.sh \
+  --email ops@dflow.sh
 ```
 
-`apps.example.com` and `*.apps.example.com` must point at the server. The API is `https://dflow.<domain>`. An app named `hello` is `https://hello.<domain>`.
+`DFLOW_API_DOMAIN`, `DFLOW_APPS_DOMAIN`, and `DFLOW_EMAIL` (or `LETSENCRYPT_EMAIL`) match those flags. `--domain apps.example.com` is the older form: the API is `https://dflow.apps.example.com` and apps are `https://<app>.apps.example.com`. `--domain auto` uses `<public-ipv4>.sslip.io`.
 
-The script is safe to run again. It installs k3s when k3s is missing, turns off ServiceLB, puts Traefik on the host network so it binds the host address on ports 80 and 443, checks that Traefik's host IP is a node address, installs cert-manager, installs the dFlow chart, and installs the `dflow` CLI.
+A custom domain requires an email. The chart then uses the `letsencrypt-production` ClusterIssuer (HTTP-01 through Traefik) for the API and for every app route. Login and curl do not need `--trust-ca` or `-k`. `--letsencrypt-staging` uses `letsencrypt-staging` instead; those certificates are still untrusted, so login keeps `--trust-ca`. `*.sslip.io` stays on the internal `dflow-ca` issuer unless you pass `--letsencrypt-staging` and `--email`.
 
-When a GitHub Release exists, the script downloads the `dflow` CLI, the Helm chart package (`dflow-*.tgz`), and the server image `ghcr.io/dflow-sh/dflow-server:<tag>` from that release. The CLI download is checked against `checksums.txt` when that file is in the release. No release has been published yet, so today the script builds those from the checkout and tags the server image `dev-<git sha>`. If the release download fails and the checkout build also fails, the script exits non-zero and names both failures. CI on this branch also uploads CLI binaries and a server image archive as workflow artifacts. That is not a production deploy.
+Before certificates are requested, the script prints the records and waits until they resolve to the public IPv4:
+
+```text
+A    paas.dflow.sh        <public-ipv4>
+A    *.apps.dflow.sh      <public-ipv4>
+```
+
+`*.sslip.io` does not wait. A second run with no domain flags, or with `--domain auto` again, reuses `/var/lib/dflow/install.env`, including the saved password unless you pass `--admin-password`. That keeps the same sslip.io name when the public-IP lookup would otherwise return a different egress address.
+
+### No public IPv4
+
+If no public IPv4 is detected, an interactive run asks whether to use a Cloudflare Tunnel. Non-interactive:
+
+```bash
+sudo ./scripts/install.sh \
+  --api-domain paas.dflow.sh \
+  --apps-domain apps.dflow.sh \
+  --email ops@dflow.sh \
+  --tunnel-token "$CLOUDFLARE_TUNNEL_TOKEN"
+```
+
+`DFLOW_TUNNEL_TOKEN` is the same token. The script installs `cloudflared` and runs `cloudflared service install`. It does not install the service again when `cloudflared` is already active. In the Cloudflare tunnel, route the API host and `*.<apps domain>` to `http://localhost:80`. There are no public A records. The script waits until those names resolve before it requests certificates. A worker join URL is not printed when there is no public IPv4; that does not fail the install.
+
+### What the script changes
+
+The script is safe to run again. It installs k3s when k3s is missing, turns off ServiceLB, and puts Traefik on the host network so it binds ports 80 and 443. The Traefik deployment uses a Recreate strategy, because a rolling update starts the new pod before the old one releases those host ports and the rollout never finishes. HTTP is not redirected to HTTPS, so cert-manager HTTP-01 can use port 80. The manifest is applied with server-side apply. When the file is unchanged and Traefik is already on the host network with Recreate, the script does not restart Traefik. It checks that Traefik's host IP is a node address, installs cert-manager, installs the dFlow chart, and installs the `dflow` CLI. A later run skips the server image build when k3s already has `dev-<git sha>`, and skips the CLI rebuild when that same checkout is already installed.
+
+When a GitHub Release exists, the script downloads the `dflow` CLI, the Helm chart package (`dflow-*.tgz`), and the server image `ghcr.io/dflow-sh/dflow-server:<tag>` from that release. The CLI download is checked against `checksums.txt` when that file is in the release. A checksum match and a binary that does not run are reported as separate lines. No release has been published yet, so today the script builds those from the checkout and tags the server image `dev-<git sha>`. If the release download fails and the checkout build also fails, the script exits non-zero and names both failures. CI on this branch also uploads CLI binaries and a server image archive as workflow artifacts. That is not a production deploy.
+
+The chart sets `server.defaultBuildMode` to `railpack`. A `dflow push` that omits `--build-mode` builds with Railpack (BuildKit in the staging job, image pushed to the in-cluster registry). `--build-mode buildpack` and `--build-mode dockerfile` stay explicit. `dflow app logs --staging` prints the staging pod name once, then left-aligned log lines. `--verbose` restores the pod and container prefix on every line.
 
 When the script finishes it prints the API URL, the `admin` password, and the login command. It has already logged in, pushed `traefik/whoami`, required HTTP 200 from the app URL, deleted the app, and deleted the `sample` namespace. If any of those steps fail, the script exits non-zero and prints the step that failed.
 
@@ -60,7 +97,7 @@ On the first server, `scripts/install.sh` prints the URL and token when it finis
 sudo cat /var/lib/rancher/k3s/server/node-token
 ```
 
-`node-external-ip` in `/etc/rancher/k3s/config.yaml` is that same public IPv4.
+`node-external-ip` in `/etc/rancher/k3s/config.yaml` is that public IPv4 when the address is configured on this host. When the detected address is only an egress NAT address, the field stays the IPv4 on the default route so the in-cluster API service still reaches this node. The join URL printed at the end still uses the public IPv4.
 
 On the worker, from the checkout:
 
@@ -115,20 +152,20 @@ dflow version
 dflow login -u admin -p 'password' --trust-ca "https://dflow.<domain>"
 ```
 
-`<domain>` and the password are what `scripts/install.sh` printed. `password` is the default.
+`<domain>` and the password are what `scripts/install.sh` printed. `password` is the default. Drop `--trust-ca` when the installer used Let's Encrypt production (`letsencrypt-production`). Keep it for `dflow-ca` and for `letsencrypt-staging`.
 
-The same push as the server self-test:
+The same push as the server self-test. `traefik/whoami` listens on `WHOAMI_PORT_NUMBER`, which defaults to 80. The app chart routes to port 8080, so the push sets that variable:
 
 ```bash
 dflow namespace create sample
 dflow target sample
-dflow push -n hello --container-image-url traefik/whoami
+dflow push -n hello --container-image-url traefik/whoami -e WHOAMI_PORT_NUMBER=8080
 curl -k -sS -D - "https://hello.<domain>/" -o /tmp/whoami-body | head -n 1
 dflow app delete hello
 dflow namespace delete sample -f
 ```
 
-Expected: login prints `Login successful`, push prints `App is online.` and `https://hello.<domain>`, curl prints `HTTP/2 200` or `HTTP/1.1 200 OK`, delete prints `Applications Removed.`
+Drop `-k` when the certificate is Let's Encrypt production. Expected: login prints `Login successful`, push prints `App is online.` and `https://hello.<domain>`, curl prints `HTTP/2 200` or `HTTP/1.1 200 OK`, delete prints `Applications Removed.` A source push with no `--build-mode` uses railpack. Pass `--build-mode buildpack` or `--build-mode dockerfile` to select those builders.
 
 `make dflow-darwin` writes both `dist/dflow-darwin-arm64` and `dist/dflow-darwin-amd64`. Use the one that matches the Mac:
 
@@ -146,7 +183,7 @@ sudo install -m 0755 dist/dflow /usr/local/bin/dflow
 CI on this branch uploads `dflow-darwin-arm64` and `dflow-darwin-amd64` as workflow artifacts. With access to the private repository:
 
 ```bash
-gh run list --repo dflow-sh/kube-poc --branch cursor/m1-image-deploy-ccca --workflow ci --limit 1
+gh run list --repo dflow-sh/kube-poc --branch main --workflow ci --limit 1
 gh run download --repo dflow-sh/kube-poc <run-id> -n dflow-darwin-arm64
 sudo install -m 0755 dflow-darwin-arm64 /usr/local/bin/dflow
 ```
@@ -214,23 +251,32 @@ One virtual machine:
 
 - Ubuntu 22.04 or 24.04
 - at least 4 vCPU, 8 GB RAM, and 80 GB disk
-- a public IPv4 address
+- a public IPv4 address, or a Cloudflare Tunnel token when the host has none
 - root SSH
-- a DNS name for the API and for apps
+- a DNS name for the API and for apps, unless you use sslip.io
 
-DNS is either a wildcard you control, or [sslip.io](https://sslip.io).
+DNS is either names you control, or [sslip.io](https://sslip.io).
 
-Wildcard example, public IP `203.0.113.10`, domain `apps.example.com`:
+Split names, public IP `203.0.113.10`:
+
+- `A` `paas.example.com` → `203.0.113.10`
+- `A` `*.apps.example.com` → `203.0.113.10`
+- the API is `https://paas.example.com`
+- an app named `hello` is `https://hello.apps.example.com` (`dflow target` selects the namespace; the hostname does not include it)
+- pass `--api-domain paas.example.com --apps-domain apps.example.com --email you@example.com`
+
+One wildcard, same IP, `--domain apps.example.com`:
 
 - `apps.example.com` and `*.apps.example.com` both point at `203.0.113.10`
 - the API is `https://dflow.apps.example.com`
-- an app named `hello` is `https://hello.apps.example.com` (`dflow target` selects the namespace; the hostname does not include it)
+- an app named `hello` is `https://hello.apps.example.com`
 
-sslip.io needs no DNS account. With the same IP:
+sslip.io needs no DNS account. With the same IP and `--domain auto`:
 
 - domain `203.0.113.10.sslip.io`
 - API `https://dflow.203.0.113.10.sslip.io`
 - apps `https://<app>.203.0.113.10.sslip.io`
+- the certificate is the internal dFlow CA
 
 `sslip.io` answers for that name and for `*.203.0.113.10.sslip.io`.
 
@@ -283,7 +329,8 @@ The chart installs, when you turn the switches on:
 - cert-manager (the bundled chart, installed first so its CRDs exist)
 - the container registry (`containerregistry.enabled`, default true)
 - S3-compatible storage via SeaweedFS (`seaweedfs.enabled`, default true)
-- the Paketo builder image reference (`image.builder`, `paketobuildpacks/builder-jammy-full`)
+- the Paketo builder image reference (`image.builder`, `paketobuildpacks/builder-jammy-full`), used when `--build-mode buildpack`
+- the Railpack BuildKit image (`image.railpack`, `moby/buildkit`), used when a push omits `--build-mode` (`server.defaultBuildMode: railpack`)
 
 s3gw is the other S3-compatible option and is off by default. MinIO is not installed by the chart. To use MinIO, set `seaweedfs.enabled=false`, `s3gw.enabled=false`, and set `s3.endpoint`, `s3.accessKeyID`, `s3.secretAccessKey`, and `s3.bucket`.
 
@@ -332,8 +379,8 @@ dflow login -u admin -p 'replace-this-password' \
 dflow namespace create sample
 dflow target sample
 
-# container image: no Paketo build
-dflow push -n hello --container-image-url traefik/whoami
+# container image: no builder. whoami must listen on 8080.
+dflow push -n hello --container-image-url traefik/whoami -e WHOAMI_PORT_NUMBER=8080
 
 dflow app list
 dflow app logs hello
@@ -342,11 +389,15 @@ dflow app delete hello
 
 `dflow app logs` without `--follow` prints the current logs and returns. Add `--follow` to stream.
 
-Source push, which does use the builder, is the same command with a directory:
+A source push with no `--build-mode` uses railpack. The server default is `server.defaultBuildMode` (`railpack` in the chart). Pass a mode to override it:
 
 ```bash
 dflow push -n hello -p assets/sample-app
+dflow push -n hello -p assets/sample-app --build-mode buildpack
+dflow push -n hello -p assets/sample-app --build-mode dockerfile
 ```
+
+`dflow app logs --staging hello` prints the staging pod once, then the log text. Add `--verbose` on `push` or `app logs` to put the pod and container name on every line.
 
 ## Existing cluster
 

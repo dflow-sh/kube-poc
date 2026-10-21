@@ -81,5 +81,5 @@ kubectl -n cert-manager get deploy cert-manager-webhook >/dev/null 2>&1 \
   || die "cert-manager is not installed. Run scripts/install.sh."
 apply_dflow_release
 self_test
-log "upgrade finished for https://dflow.${DOMAIN} (image ${IMAGE})"
+log "upgrade finished for https://${API_HOST:-dflow.${DOMAIN}} (image ${IMAGE})"
 trap - ERR

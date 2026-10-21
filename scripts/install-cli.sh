@@ -15,6 +15,7 @@ usage() {
   cat <<'EOF'
 Usage:
   ./scripts/install-cli.sh --api https://dflow.<domain> --user admin --password 'password'
+  ./scripts/install-cli.sh --api https://paas.dflow.sh --apps-domain apps.dflow.sh
   GITHUB_TOKEN=... ./scripts/install-cli.sh --api https://dflow.<domain>
   ./scripts/install-cli.sh --version v1.0.0 --api https://dflow.<domain>
 
@@ -38,6 +39,15 @@ while [[ $# -gt 0 ]]; do
       ;;
     --api=*)
       API="${1#--api=}"
+      shift
+      ;;
+    --apps-domain)
+      [[ $# -ge 2 ]] || die "--apps-domain needs a hostname such as apps.dflow.sh"
+      APPS_DOMAIN="$2"
+      shift 2
+      ;;
+    --apps-domain=*)
+      APPS_DOMAIN="${1#--apps-domain=}"
       shift
       ;;
     --user)
@@ -109,8 +119,15 @@ fi
 host="${API#https://}"
 host="${host#http://}"
 host="${host%%/*}"
-DOMAIN="${host#dflow.}"
-[[ -n "$DOMAIN" && "$DOMAIN" != "$host" ]] || die "--api must look like https://dflow.<domain>"
+API_HOST="$host"
+if [[ -n "${APPS_DOMAIN:-}" ]]; then
+  APPS_BASE="$APPS_DOMAIN"
+elif [[ "$host" == dflow.* ]]; then
+  APPS_BASE="${host#dflow.}"
+else
+  die "pass --apps-domain when the API host is not dflow.<apps-domain>"
+fi
+DOMAIN="$APPS_BASE"
 export PATH="/usr/local/bin:${PATH}"
 self_test
 log "CLI installed at /usr/local/bin/dflow and the sample push against ${API} passed"

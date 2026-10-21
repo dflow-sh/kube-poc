@@ -192,14 +192,26 @@ configuration:
 })
 
 var _ = Describe("ValidateBuildMode", func() {
-	It("defaults empty to buildpack", func() {
+	It("defaults empty to railpack", func() {
+		mode, err := models.ValidateBuildMode("")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(mode).To(Equal(models.BuildModeRailpack))
+	})
+
+	It("honors DEFAULT_BUILD_MODE when the request is empty", func() {
+		t := GinkgoT()
+		t.Setenv("DEFAULT_BUILD_MODE", "buildpack")
 		mode, err := models.ValidateBuildMode("")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(mode).To(Equal(models.BuildModeBuildpack))
 	})
 
-	It("accepts buildpack and dockerfile case-insensitively", func() {
-		mode, err := models.ValidateBuildMode("BuildPack")
+	It("accepts railpack, buildpack, and dockerfile case-insensitively", func() {
+		mode, err := models.ValidateBuildMode("RailPack")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(mode).To(Equal(models.BuildModeRailpack))
+
+		mode, err = models.ValidateBuildMode("BuildPack")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(mode).To(Equal(models.BuildModeBuildpack))
 
@@ -208,11 +220,12 @@ var _ = Describe("ValidateBuildMode", func() {
 		Expect(mode).To(Equal(models.BuildModeDockerfile))
 	})
 
-	It("rejects typos instead of mapping them to buildpack", func() {
+	It("rejects typos instead of mapping them to a default", func() {
 		mode, err := models.ValidateBuildMode("dockerfle")
 		Expect(err).To(HaveOccurred())
 		Expect(mode).To(Equal(""))
 		Expect(err.Error()).To(ContainSubstring("invalid build mode"))
+		Expect(models.NormalizeBuildMode("dockerfle")).ToNot(Equal(models.BuildModeRailpack))
 		Expect(models.NormalizeBuildMode("dockerfle")).ToNot(Equal(models.BuildModeBuildpack))
 	})
 })

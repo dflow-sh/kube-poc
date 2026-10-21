@@ -22,6 +22,7 @@ import (
 	"github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/models"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 //counterfeiter:generate -header ../../../LICENSE_HEADER . ApplicationsService
@@ -298,6 +299,13 @@ func NewAppListCmd(client ApplicationsService, rootCfg *RootConfig) *cobra.Comma
 type AppLogsConfig struct {
 	follow  bool
 	staging bool
+	verbose bool
+}
+
+// verboseStagingLogOptions is built here so the client package is not hidden
+// by the ApplicationsService parameter named client.
+func verboseStagingLogOptions() *client.LogOptions {
+	return &client.LogOptions{Verbose: true}
 }
 
 // NewAppLogsCmd returns a new `dflow apps logs` command
@@ -320,7 +328,13 @@ func NewAppLogsCmd(client ApplicationsService) *cobra.Command {
 				stageID = stageIDHere
 			}
 
-			err := client.AppLogs(args[0], stageID, cfg.follow, nil)
+			var logOptions = verboseStagingLogOptions()
+			if cfg.verbose {
+				viper.Set("staging-log-verbose", true)
+			} else {
+				logOptions = nil
+			}
+			err := client.AppLogs(args[0], stageID, cfg.follow, logOptions)
 			// Note: errors.Wrap (nil, "...") == nil
 			return errors.Wrap(err, "error streaming application logs")
 		},
@@ -328,6 +342,7 @@ func NewAppLogsCmd(client ApplicationsService) *cobra.Command {
 
 	cmd.Flags().BoolVar(&cfg.follow, "follow", false, "follow the logs of the application")
 	cmd.Flags().BoolVar(&cfg.staging, "staging", false, "show the staging logs of the application")
+	cmd.Flags().BoolVar(&cfg.verbose, "verbose", false, "prefix each staging log line with the pod and container name")
 
 	return cmd
 }
@@ -394,6 +409,11 @@ func NewAppPushCmd(client ApplicationsService) *cobra.Command {
 		Args:  cobra.RangeArgs(0, 1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
+			verbose, flagErr := cmd.Flags().GetBool("verbose")
+			if flagErr != nil {
+				return errors.Wrap(flagErr, "reading --verbose")
+			}
+			viper.Set("staging-log-verbose", verbose)
 
 			// Syntax:
 			//   - push [flags] [PATH-TO-MANIFEST-FILE]
@@ -475,7 +495,8 @@ func NewAppPushCmd(client ApplicationsService) *cobra.Command {
 	cmd.Flags().StringP("name", "n", "", "Application name. (mandatory if no manifest is provided)")
 	cmd.Flags().StringP("path", "p", "", "Path to application sources.")
 	cmd.Flags().String("builder-image", "", "Paketo builder image to use for staging")
-	cmd.Flags().String("build-mode", "", "Staging build mode: buildpack (default) or dockerfile")
+	cmd.Flags().String("build-mode", "", "Staging build mode: railpack (default), buildpack, or dockerfile")
+	cmd.Flags().Bool("verbose", false, "prefix each staging log line with the pod and container name")
 	cmd.Flags().String("dockerfile-path", "", "Path to Dockerfile within the application sources (default: Dockerfile)")
 
 	gitConfigOption(cmd, client)
@@ -571,7 +592,7 @@ func NewAppUpdateCmd(client ApplicationsService) *cobra.Command {
 
 	// It scales the named app
 	var noRestart bool
-	
+
 	cmd := &cobra.Command{
 		Use:               "update NAME",
 		Short:             "Update the named application",
@@ -610,7 +631,7 @@ func NewAppUpdateCmd(client ApplicationsService) *cobra.Command {
 				AppChart:       manifestConfig.AppChart,
 				Settings:       manifestConfig.Settings,
 			}
-			
+
 			// Set restart flag based on --no-restart option
 			restart := !noRestart
 			updateRequest.Restart = &restart
@@ -633,7 +654,7 @@ func NewAppUpdateCmd(client ApplicationsService) *cobra.Command {
 	cmd.Flags().String("app-chart", "", "App chart to use for deployment")
 	bindFlag(cmd, "app-chart")
 	bindFlagCompletionFunc(cmd, "app-chart", NewAppChartMatcherValueFunc(client))
-	
+
 	cmd.Flags().BoolVar(&noRestart, "no-restart", false, "Prevent restarting the application after update")
 
 	return cmd

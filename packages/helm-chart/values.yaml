@@ -58,6 +58,13 @@ image:
     registry: ghcr.io/
     repository: epinio/kaniko
     tag: v1.25.19-debug
+  # Railpack is the default staging mode. The staging job runs this BuildKit
+  # image, downloads the railpack CLI, and pushes the image with buildctl.
+  railpack:
+    repository: moby/buildkit
+    tag: v0.23.2
+    cliVersion: v0.43.0
+    frontend: ghcr.io/railwayapp/railpack-frontend:v0.43.0
 # Runtime charts that deploy an application workload. They are packed into
 # the server image (see images/Dockerfile) and derived from the upstream
 # Apache-2.0 application charts.
@@ -76,6 +83,9 @@ server:
   # The ingressClassName is used to select the ingress controller for apps.
   # If empty ingress.ingressClassName (see below) is used
   ingressClassName: ""
+  # Build mode used when a push does not pass --build-mode.
+  # railpack, buildpack, or dockerfile. The chart default is railpack.
+  defaultBuildMode: railpack
 
   # Configure staging jobs performing builds and deployment
   stagingWorkloads:
@@ -544,8 +554,12 @@ helmController:
 global:
   dex:
     enabled: true
-  # The domain that will be used to access the dflow API server and the registry
+  # The domain that will be used to access the dflow API server and the registry.
+  # Application routes use appsDomain when it is set, otherwise <app>.<domain>.
   domain: ""
+  # Wildcard base for application routes (<app>.<appsDomain>).
+  # Leave empty to keep <app>.<domain> (the sslip.io layout).
+  appsDomain: ""
   # Connection details for the container registry.
   # Skip if containerregistry.enabled is true
   registryURL: ""

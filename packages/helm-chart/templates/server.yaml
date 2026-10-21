@@ -319,6 +319,12 @@ spec:
               value: "{{ .Chart.Version }}"
             - name: DEFAULT_BUILDER_IMAGE
               value: "{{ default .Values.image.builder.registry (include "registry-url" .) }}{{ .Values.image.builder.repository}}:{{ .Values.image.builder.tag }}"
+            - name: DEFAULT_BUILD_MODE
+              value: {{ .Values.server.defaultBuildMode | default "railpack" | quote }}
+            {{- if .Values.global.appsDomain }}
+            - name: APPS_DOMAIN
+              value: {{ .Values.global.appsDomain | quote }}
+            {{- end }}
             {{- $imageSkopeo := .Values.image.skopeo -}}
             {{- if $imageSkopeo }}
             - name: APP_IMAGE_EXPORTER
