@@ -16,11 +16,9 @@ cd kube-poc
 sudo --preserve-env=GITHUB_TOKEN ./scripts/install.sh --domain auto
 ```
 
-`GITHUB_TOKEN` needs permission to read this private repository (`repo` on a classic token, or contents read on a fine-grained token). `sudo` drops the variable unless `--preserve-env=GITHUB_TOKEN` is set. `GH_TOKEN` is accepted as well. If neither is set, a `gh auth login` session for the user who invoked sudo is used. With no token and no `gh` login, the script builds the CLI and server image from the checkout.
+`GITHUB_TOKEN` needs permission to read this private repository (`repo` on a classic token, or contents read on a fine-grained token). `sudo` drops the variable unless `--preserve-env=GITHUB_TOKEN` is set. `GH_TOKEN` is accepted as well. If neither is set, a `gh auth login` session for the user who invoked sudo is used. With no token and no `gh` login, the private release metadata cannot be read and the script exits. Pass `--from-checkout` to build the CLI and server image from this checkout.
 
-To pull `ghcr.io/dflow-sh/dflow-server` from a release, the token also needs `read:packages`. Set `GHCR_USER` to the GitHub login that owns the token, or set `GHCR_TOKEN` to a token that already has `read:packages`. The script uses `GHCR_TOKEN` first, then `GITHUB_TOKEN` or `GH_TOKEN`. The username is `GHCR_USER`, then `GITHUB_ACTOR`, then the login from `gh api user`.
-
-If the package is private and the pull returns 403, the script says so and builds from the checkout. To stop that fallback, make the package public: GitHub → Packages → `dflow-server` → Package settings → Change visibility → Public.
+`ghcr.io/dflow-sh/dflow-server` is pulled without a registry login. A pull that fails is an error: the script prints the registry output and exits. It does not reuse a checkout image and it does not build one. `--from-checkout` is the only checkout build. `GHCR_TOKEN` (and `GHCR_USER`) is used only after an anonymous pull is denied, for a registry that still requires a login.
 
 Deploy key (read access is enough):
 
@@ -75,11 +73,11 @@ sudo ./scripts/install.sh \
 
 ### What the script changes
 
-The script is safe to run again after the first run on this checkout. It installs k3s when k3s is missing, turns off ServiceLB, and puts Traefik on the host network so it binds ports 80 and 443 on every node (a DaemonSet). The DaemonSet rolls one node at a time with `maxUnavailable: 1`, so the old pod releases host ports 80 and 443 before the new one binds them. HTTP is not redirected to HTTPS, so cert-manager HTTP-01 can use port 80. The manifest is applied with server-side apply. When the file is unchanged and Traefik is already that DaemonSet, the script does not restart Traefik. It checks that Traefik's host IP is a node address, installs cert-manager, installs the dFlow chart, and installs the `dflow` CLI. A later run skips the server image build when k3s already has `dev-<git sha>`, and skips the CLI rebuild when that same checkout is already installed.
+The script is safe to run again after the first run on this checkout. It installs k3s when k3s is missing, turns off ServiceLB, and puts Traefik on the host network so it binds ports 80 and 443 on every node (a DaemonSet). The DaemonSet rolls one node at a time with `maxUnavailable: 1`, so the old pod releases host ports 80 and 443 before the new one binds them. HTTP is not redirected to HTTPS, so cert-manager HTTP-01 can use port 80. The manifest is applied with server-side apply. When the file is unchanged and Traefik is already that DaemonSet, the script does not restart Traefik. It checks that Traefik's host IP is a node address, installs cert-manager, installs the dFlow chart, and installs the `dflow` CLI. After the k3s API answers, it waits until a node object exists and that node is Ready before it waits on Traefik, cert-manager, or dflow-server. An empty node list is not treated as ready. With `--from-checkout`, a later run skips the server image build when k3s already has `dev-<git sha>`, and skips the CLI rebuild when that same checkout is already installed.
 
 k3s is started with `cluster-init: true` (embedded etcd). A server that was installed earlier with SQLite restarts k3s once on the next run so the datastore can migrate. After that config is in place, a re-run does not restart k3s. See [Grow from one server to three](#grow-from-one-server-to-three).
 
-When a GitHub Release exists, the script downloads the `dflow` CLI, the Helm chart package (`dflow-*.tgz`), and the server image `ghcr.io/dflow-sh/dflow-server:<tag>` from that release. The CLI download is checked against `checksums.txt` when that file is in the release. A checksum match and a binary that does not run are reported as separate lines. If the release cannot be downloaded, the script builds from the checkout and tags the server image `dev-<git sha>`. That build reports `v0.0.0-dev`. If the release download fails and the checkout build also fails, the script exits non-zero and names both failures. CI also uploads CLI binaries and a server image archive as workflow artifacts. That is not a production deploy.
+When a GitHub Release exists, the script downloads the `dflow` CLI and the Helm chart package (`dflow-*.tgz`) from that release, and pulls the server image `ghcr.io/dflow-sh/dflow-server:<tag>`. The CLI download is checked against `checksums.txt` when that file is in the release. A checksum mismatch, a binary that does not run, or a server image that cannot be pulled exits non-zero. The script does not build this checkout in those cases. `--version v0.0.3` selects that release instead of the latest one. `--from-checkout` builds the CLI and tags the server image `dev-<git sha>`. That build reports `v0.0.0-dev`. CI also uploads CLI binaries and a server image archive as workflow artifacts. That is not a production deploy.
 
 The chart sets `server.defaultBuildMode` to `railpack`. A `dflow push` that omits `--build-mode` builds with Railpack (BuildKit in the staging job, image pushed to the in-cluster registry). `--build-mode buildpack` and `--build-mode dockerfile` stay explicit. `dflow app logs --staging` prints the staging pod name once, then left-aligned log lines. `--verbose` restores the pod and container prefix on every line.
 
@@ -282,7 +280,7 @@ export GITHUB_TOKEN=...   # or: gh auth login
   --password 'password'
 ```
 
-`<domain>` and the password are what `scripts/install.sh` printed on the server. The script downloads `dflow-darwin-arm64` or `dflow-darwin-amd64` from the latest GitHub Release and checks `checksums.txt` when that file is in the release. With no release asset, it runs `go build` from the checkout (Go 1.26). If both fail, it exits non-zero.
+`<domain>` and the password are what `scripts/install.sh` printed on the server. The script downloads `dflow-darwin-arm64` or `dflow-darwin-amd64` from the latest GitHub Release and checks `checksums.txt` when that file is in the release. If that asset cannot be downloaded, the script exits non-zero. `--from-checkout` runs `go build` from the checkout (Go 1.26).
 
 Without `--api` the binary is still installed and the script prints the login and push commands instead of running them.
 
@@ -302,7 +300,7 @@ A specific release:
 sudo --preserve-env=GITHUB_TOKEN ./scripts/update.sh v1.0.0
 ```
 
-If that tag does not exist, the script stops. It does not build a different commit and label it with the missing tag. If no latest release exists, it builds from the checkout, tags the image `dev-<git sha>`, upgrades with that image, and still runs the self-test. `GITHUB_TOKEN` (or `GH_TOKEN`) needs repository read for the release, and `read:packages` plus `GHCR_USER` when the server image is pulled from ghcr.io.
+If that tag does not exist, the script stops. It does not build a different commit and label it with the missing tag. If the server image for that release cannot be pulled, the script stops. It does not reuse an image already imported from this checkout. If no latest release exists, the script stops unless you pass `--from-checkout`. That flag builds from the checkout, tags the image `dev-<git sha>`, upgrades with that image, and still runs the self-test. `GITHUB_TOKEN` (or `GH_TOKEN`) needs repository read for the private release assets. The server image pull does not need a token.
 
 A Mac installs or replaces the CLI with `scripts/install-cli.sh`, not with `scripts/update.sh`.
 
@@ -324,6 +322,16 @@ The workflow then:
 - packages the Helm chart, sets its version and the server image tag to the git tag, and uploads `dflow-<version>.tgz` on the same release
 
 Actions uses the workflow `GITHUB_TOKEN` (`contents: write` and `packages: write`). No extra secret is required for this repository. This is not a production deploy of a cluster.
+
+`ghcr.io/dflow-sh/dflow-server` is a public package. CLI binaries, `checksums.txt`, and the Helm chart package are still assets on this private repository's GitHub Releases, so downloading them needs a token that can read this repository. There is no public repository for those binaries yet, and these scripts do not download them from a public URL.
+
+The intended public URL, once that repository exists and a release is published there, is:
+
+```text
+https://github.com/dflow-sh/dflow-releases/releases/download/<tag>/dflow-<os>-<arch>
+```
+
+For `<tag>` `v0.0.4` the linux/amd64 asset would be `dflow-linux-amd64`. `checksums.txt` is the sibling file. That URL needs no token. This checkout does not call it.
 
 ## What you provide
 
@@ -370,7 +378,7 @@ sudo apt-get install -y curl ca-certificates
 curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 ```
 
-Go 1.26 is required only to build the server image. Unreleased builds use `ghcr.io/dflow-sh/dflow-server:v0.0.0-dev`. A release tag replaces that tag in the packaged chart. Build the image on the machine (next section) or use the image from the release.
+Go 1.26 is required only to build the server image. Unreleased builds use `ghcr.io/dflow-sh/dflow-server:v0.0.0-dev`. A release tag replaces that tag in the packaged chart. `scripts/install.sh --from-checkout` builds that image. The manual steps in the next sections do the same build without the script. A release install pulls `ghcr.io/dflow-sh/dflow-server:<tag>` instead.
 
 ## 1. Install k3s
 
