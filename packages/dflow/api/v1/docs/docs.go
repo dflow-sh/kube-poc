@@ -16,7 +16,7 @@
 //     Schemes: http, https
 //     Host:
 //     BasePath: /api/v1
-//     Version: 1.0.0
+//     Version: v0.0.0-dev
 //
 //     SecurityDefinitions:
 //     basicAuth:

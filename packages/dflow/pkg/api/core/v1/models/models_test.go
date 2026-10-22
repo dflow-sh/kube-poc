@@ -191,6 +191,23 @@ configuration:
 	})
 })
 
+var _ = Describe("ResolveDefaultBuilderImage", func() {
+	It("defaults an empty configuration to railpack", func() {
+		Expect(models.ResolveDefaultBuilderImage("", "")).To(Equal(models.DefaultBuilderImage))
+		Expect(models.ResolveDefaultBuilderImage("  ", "  ")).To(Equal("railpack"))
+	})
+
+	It("uses a configured builder when no custom resource is the default", func() {
+		Expect(models.ResolveDefaultBuilderImage("", "paketobuildpacks/builder-jammy-full:0.3.495")).To(
+			Equal("paketobuildpacks/builder-jammy-full:0.3.495"),
+		)
+	})
+
+	It("lets the default custom resource win over the configured value", func() {
+		Expect(models.ResolveDefaultBuilderImage("custom/builder:1", "railpack")).To(Equal("custom/builder:1"))
+	})
+})
+
 var _ = Describe("ValidateBuildMode", func() {
 	It("defaults empty to railpack", func() {
 		mode, err := models.ValidateBuildMode("")

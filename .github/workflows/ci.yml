@@ -5,6 +5,12 @@ on:
   pull_request:
 
 jobs:
+  version-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/check-version.sh
+
   build-test:
     runs-on: ubuntu-latest
     env:
@@ -73,8 +79,8 @@ jobs:
         run: |
           mkdir -p apps/cli/dist
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o apps/cli/dist/dflow ./apps/cli
-          docker build -f images/Dockerfile -t ghcr.io/dflow-sh/dflow-server:v1.14.3 .
-          docker save ghcr.io/dflow-sh/dflow-server:v1.14.3 | gzip > dflow-server-linux-amd64.tar.gz
+          docker build -f images/Dockerfile -t ghcr.io/dflow-sh/dflow-server:v0.0.0-dev .
+          docker save ghcr.io/dflow-sh/dflow-server:v0.0.0-dev | gzip > dflow-server-linux-amd64.tar.gz
       - uses: actions/upload-artifact@v4
         with:
           name: dflow-server-linux-amd64

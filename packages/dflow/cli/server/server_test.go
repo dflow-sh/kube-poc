@@ -26,12 +26,35 @@ import (
 
 	apiv1 "github.com/dflow-sh/kube-poc/packages/dflow/api/v1"
 	"github.com/dflow-sh/kube-poc/packages/dflow/tracing"
+	"github.com/dflow-sh/kube-poc/packages/dflow/version"
 )
 
 func TestServer(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "Server Suite")
 }
+
+var _ = Describe("setSwaggerVersion", func() {
+	It("replaces OpenAPI info.version with the product version", func() {
+		spec := map[string]interface{}{
+			"info": map[string]interface{}{
+				"title":   "dFlow API",
+				"version": "1.0.0",
+			},
+		}
+		setSwaggerVersion(spec, version.Version)
+		info := spec["info"].(map[string]interface{})
+		Expect(info["version"]).To(Equal(version.Version))
+		Expect(info["title"]).To(Equal("dFlow API"))
+	})
+
+	It("creates info when the document has none", func() {
+		spec := map[string]interface{}{}
+		setSwaggerVersion(spec, "v9.9.9")
+		info := spec["info"].(map[string]interface{})
+		Expect(info["version"]).To(Equal("v9.9.9"))
+	})
+})
 
 var _ = Describe("tracedPath", func() {
 	It("excludes websocket routes", func() {

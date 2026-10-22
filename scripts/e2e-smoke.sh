@@ -6,7 +6,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CLUSTER="${CLUSTER:-dflow}"
 DOMAIN="${DOMAIN:-127.0.0.1.sslip.io}"
-IMAGE="${IMAGE:-ghcr.io/dflow-sh/dflow-server:v1.14.3}"
+IMAGE="${IMAGE:-ghcr.io/dflow-sh/dflow-server:v0.0.0-dev}"
 PASSWORD="${PASSWORD:-password}"
 NS="${NS:-sample}"
 APP="${APP:-hello}"

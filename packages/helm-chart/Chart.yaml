@@ -2,7 +2,7 @@ annotations:
   artifacthub.io/license: Apache-2.0
   artifacthub.io/prerelease: "false"
 apiVersion: v2
-appVersion: v1.14.3
+appVersion: v0.0.0-dev
 dependencies:
 - condition: global.dex.enabled
   name: dex
@@ -49,4 +49,4 @@ maintainers:
 name: dflow
 sources:
 - https://github.com/dflow-sh/kube-poc/packages/dflow
-version: 1.14.3
+version: 0.0.0-dev

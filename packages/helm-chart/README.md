@@ -70,10 +70,14 @@ These settings can be adjusted in the `ingress` section of your `values.yaml` fi
 #### Default Builder Image
 
 The chart creates a `standard` `BuilderImage` custom resource and marks it as
-the cluster default. dFlow uses this resource when staging an application that
-does not explicitly select a builder image. The `DEFAULT_BUILDER_IMAGE`
-environment variable on the server is retained as a compatibility fallback and
-is used only when no `BuilderImage` resource has `spec.default: true`.
+the cluster default. Its image is `server.defaultBuilderImage` (`railpack`).
+`GET /info` reports that value as `default_builder_image`. The same value is
+the server `DEFAULT_BUILDER_IMAGE` fallback when no `BuilderImage` resource
+has `spec.default: true`.
+
+`railpack` is not a container image. A `--build-mode buildpack` push has to
+name a builder image. `image.builder` remains the Paketo jammy full builder
+for that mode.
 
 ### Cert Manager
 

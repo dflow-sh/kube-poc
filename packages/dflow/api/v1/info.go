@@ -14,11 +14,11 @@ package v1
 import (
 	"os"
 
-	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
 	"github.com/dflow-sh/kube-poc/packages/dflow/api/v1/response"
 	"github.com/dflow-sh/kube-poc/packages/dflow/builderimage"
-	"github.com/dflow-sh/kube-poc/packages/dflow/version"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
 	"github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/models"
+	"github.com/dflow-sh/kube-poc/packages/dflow/version"
 	"github.com/spf13/viper"
 
 	"github.com/gin-gonic/gin"
@@ -58,10 +58,14 @@ func Info(c *gin.Context) APIErrors {
 		return InternalError(err)
 	}
 
-	defaultBuilderImage := viper.GetString("default-builder-image")
+	fromCustomResource := ""
 	if defaultBuilder != nil {
-		defaultBuilderImage = defaultBuilder.Image
+		fromCustomResource = defaultBuilder.Image
 	}
+	defaultBuilderImage := models.ResolveDefaultBuilderImage(
+		fromCustomResource,
+		viper.GetString("default-builder-image"),
+	)
 
 	_, dexError := os.Stat(DexPEMPath)
 

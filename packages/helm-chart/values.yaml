@@ -23,11 +23,11 @@ image:
   dflow:
     registry: ghcr.io/
     repository: dflow-sh/dflow-server
-    tag: v1.14.3
+    tag: v0.0.0-dev
   dflow-ui:
     registry: ghcr.io/
     repository: dflow-sh/dflow-ui
-    tag: v1.14.3
+    tag: v0.0.0-dev
   # Published upstream unpacker. This repo does not build that image.
   bash:
     registry: ghcr.io/
@@ -43,6 +43,9 @@ image:
   kubectl:
     repository: rancher/kubectl
     tag: v1.22.6
+  # Paketo builder used when a push selects --build-mode buildpack and
+  # passes a builder image. /info does not report this image. The default
+  # builder is server.defaultBuilderImage (railpack).
   builder:
     repository: paketobuildpacks/builder-jammy-full
     tag: 0.3.495
@@ -86,6 +89,9 @@ server:
   # Build mode used when a push does not pass --build-mode.
   # railpack, buildpack, or dockerfile. The chart default is railpack.
   defaultBuildMode: railpack
+  # Reported by /info as default_builder_image. Also the fallback when no
+  # BuilderImage resource is marked default. railpack is not a container image.
+  defaultBuilderImage: railpack
 
   # Configure staging jobs performing builds and deployment
   stagingWorkloads:

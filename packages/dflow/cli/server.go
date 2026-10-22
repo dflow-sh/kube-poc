@@ -25,6 +25,7 @@ import (
 
 	"github.com/dflow-sh/kube-poc/packages/dflow/cli/server"
 	"github.com/dflow-sh/kube-poc/packages/dflow/helpers"
+	"github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/models"
 	"github.com/dflow-sh/kube-poc/packages/dflow/tracing"
 	"github.com/dflow-sh/kube-poc/packages/dflow/version"
 	"github.com/gin-gonic/gin"
@@ -92,7 +93,7 @@ func init() {
 	err = viper.BindEnv("app-image-exporter", "APP_IMAGE_EXPORTER")
 	checkErr(err)
 
-	flags.String("default-builder-image", "", "(DEFAULT_BUILDER_IMAGE) Name of the container image used to build images from staged sources.")
+	flags.String("default-builder-image", models.DefaultBuilderImage, "(DEFAULT_BUILDER_IMAGE) Builder reported by /info. The default, railpack, is not a container image. Buildpack mode needs a builder image.")
 	err = viper.BindPFlag("default-builder-image", flags.Lookup("default-builder-image"))
 	checkErr(err)
 	err = viper.BindEnv("default-builder-image", "DEFAULT_BUILDER_IMAGE")
@@ -134,10 +135,7 @@ func init() {
 	err = viper.BindEnv("otel-exporter-otlp-protocol", "OTEL_EXPORTER_OTLP_PROTOCOL")
 	checkErr(err)
 
-	version.ChartVersion = os.Getenv("CHART_VERSION")
-	if !strings.HasPrefix(version.ChartVersion, "v") {
-		version.ChartVersion = "v" + version.ChartVersion
-	}
+	version.ChartVersion = version.ChartVersionFromEnv(os.Getenv("CHART_VERSION"))
 }
 
 // CmdServer implements the command: dflow server

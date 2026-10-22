@@ -20,6 +20,7 @@ import (
 	"github.com/dflow-sh/kube-poc/packages/dflow/cli/usercmd"
 	"github.com/dflow-sh/kube-poc/packages/dflow/cli/usercmd/usercmdfakes"
 	"github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/models"
+	"github.com/dflow-sh/kube-poc/packages/dflow/version"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/pkg/errors"
@@ -66,7 +67,7 @@ var _ = Describe("Command 'dflow info'", func() {
 			Expect(lines[1]).To(Equal("Platform: k8s-platform"))
 			Expect(lines[2]).To(Equal("Kubernetes Version: v1.22.33"))
 			Expect(lines[3]).To(Equal("dFlow Server Version: v1.2.3"))
-			Expect(lines[4]).To(Equal("dFlow Client Version: v0.0.0-dev"))
+			Expect(lines[4]).To(Equal("dFlow Client Version: " + version.Version))
 			Expect(lines[5]).To(Equal("OIDC enabled: false"))
 		})
 	})
