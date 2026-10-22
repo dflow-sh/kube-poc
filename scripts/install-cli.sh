@@ -18,11 +18,12 @@ Usage:
   ./scripts/install-cli.sh --api https://paas.dflow.sh --apps-domain apps.dflow.sh
   GITHUB_TOKEN=... ./scripts/install-cli.sh --api https://dflow.<domain>
   ./scripts/install-cli.sh --version v1.0.0 --api https://dflow.<domain>
+  ./scripts/install-cli.sh --from-checkout
 
 Installs the darwin or linux CLI for this CPU to /usr/local/bin/dflow.
 A GitHub Release asset is used when GITHUB_TOKEN, GH_TOKEN, or gh auth login
-can read the private repository. Otherwise the script builds from this
-checkout with go build. If both fail, it exits non-zero.
+can read the private repository. If that asset cannot be downloaded, the
+script exits non-zero. --from-checkout builds from this checkout with go build.
 
 When --api is set, the script logs in, pushes traefik/whoami, checks HTTP 200,
 deletes the app, and deletes the sample namespace. Without --api it prints
@@ -77,6 +78,10 @@ while [[ $# -gt 0 ]]; do
       REQUESTED="${1#--version=}"
       shift
       ;;
+    --from-checkout)
+      FROM_CHECKOUT=1
+      shift
+      ;;
     -h|--help)
       usage
       trap - ERR
@@ -90,9 +95,14 @@ done
 
 require_checkout
 detect_arch
-if [[ -n "$REQUESTED" ]]; then
+if [[ "$FROM_CHECKOUT" -eq 1 && -n "$REQUESTED" ]]; then
+  die "--from-checkout cannot be combined with --version"
+fi
+if [[ "$FROM_CHECKOUT" -eq 1 ]]; then
+  log "CLI will be built from this checkout (--from-checkout)"
+elif [[ -n "$REQUESTED" ]]; then
   load_release_json "$REQUESTED" \
-    || die "GitHub release ${REQUESTED} was not found. Set GITHUB_TOKEN or GH_TOKEN, or run gh auth login."
+    || die "GitHub release ${REQUESTED} was not found. Set GITHUB_TOKEN or GH_TOKEN, or run gh auth login. Refusing to build the checkout CLI."
 else
   RELEASE_TAG_REQUEST=latest
 fi

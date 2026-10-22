@@ -10,10 +10,10 @@
 #   sudo ./scripts/install.sh --domain auto --admin-password 'replace-this'
 #
 # The latest GitHub Release is tried first (CLI binary, ghcr.io server image,
-# and Helm chart package). The repository is private, so that download needs
-# GITHUB_TOKEN, GH_TOKEN, or an authenticated gh session. If no release asset
-# is available, the script builds from this checkout. If both fail, it exits
-# non-zero.
+# and Helm chart package). The repository is private, so the CLI and chart
+# download needs GITHUB_TOKEN, GH_TOKEN, or an authenticated gh session.
+# The server image is pulled from ghcr.io. If that pull fails, the script
+# exits non-zero. It does not build this checkout unless --from-checkout is set.
 
 set -euo pipefail
 
@@ -61,6 +61,8 @@ GOARCH_NAME=""
 CONFIG_CHANGED=0
 NEED_K3S_INSTALL=0
 FLANNEL_BACKEND=""
+FROM_CHECKOUT=0
+REQUESTED_VERSION=""
 
 die() {
   trap - ERR
@@ -86,6 +88,8 @@ Usage: sudo ./scripts/install.sh [options]
   --letsencrypt-staging     use the Let's Encrypt staging issuer
   --tunnel-token TOKEN      Cloudflare Tunnel token when this host has no public IPv4
   --admin-password PASS     API password for user admin (default: password)
+  --version TAG             install this release, for example v0.0.3
+  --from-checkout           build the CLI and server image from this checkout
 
 With no domain flags on a terminal, the script asks for the API host, the apps
 domain, and an email. Press Enter to keep <public-ipv4>.sslip.io.
@@ -93,10 +97,11 @@ domain, and an email. Press Enter to keep <public-ipv4>.sslip.io.
 A second run with no domain flags, or with --domain auto again, keeps the
 domains saved in /var/lib/dflow/install.env.
 
-GITHUB_TOKEN, GH_TOKEN, or GHCR_TOKEN (read:packages) can pull
-ghcr.io/dflow-sh/dflow-server. If that package is private and no token works,
-the script builds from this checkout. sudo drops those variables unless you
-pass --preserve-env.
+The server image is pulled from ghcr.io/dflow-sh/dflow-server. A pull that
+fails is an error. The script does not reuse or build a checkout image unless
+you pass --from-checkout. sudo drops GITHUB_TOKEN, GH_TOKEN, and GHCR_TOKEN
+unless you pass --preserve-env. Those variables are for the private release
+assets and for a registry that still requires a login.
 EOF
 }
 
@@ -171,6 +176,19 @@ parse_args() {
       --admin-password=*)
         ADMIN_PASSWORD="${1#--admin-password=}"
         PASSWORD_SET=1
+        shift
+        ;;
+      --version)
+        [[ $# -ge 2 ]] || die "--version needs a value such as v0.0.3"
+        REQUESTED_VERSION="$2"
+        shift 2
+        ;;
+      --version=*)
+        REQUESTED_VERSION="${1#--version=}"
+        shift
+        ;;
+      --from-checkout)
+        FROM_CHECKOUT=1
         shift
         ;;
       -h|--help)
@@ -636,8 +654,39 @@ install_k3s() {
     fi
     sleep 5
   done
-  kubectl wait --for=condition=Ready node --all --timeout=10m \
-    || die "k3s node did not become Ready"
+  # kubectl get nodes exits 0 while the list is still empty. kubectl wait
+  # --all then returns immediately with "no matching resources found" and
+  # the script would stop before any workload exists. Wait until a node
+  # object is present, then wait for Ready, and only then wait on workloads.
+  wait_for_ready_node
+}
+
+wait_for_ready_node() {
+  local attempt count wait_out
+  log "waiting for a Ready node"
+  for attempt in $(seq 1 120); do
+    count="$(kubectl get nodes --no-headers 2>/dev/null | awk 'NF { n++ } END { print n+0 }' || true)"
+    if [[ "${count:-0}" -ge 1 ]]; then
+      if wait_out="$(kubectl wait --for=condition=Ready node --all --timeout=10m 2>&1)"; then
+        [[ -n "$wait_out" ]] && printf '%s\n' "$wait_out"
+        return 0
+      fi
+      if grep -q 'no matching resources found' <<<"$wait_out"; then
+        log "node list is empty; waiting for a node to register before workload checks"
+      else
+        printf '%s\n' "$wait_out" >&2
+        kubectl get nodes -o wide >&2 || true
+        die "k3s node did not become Ready"
+      fi
+    elif [[ "$attempt" -eq 1 || $((attempt % 6)) -eq 0 ]]; then
+      log "node list is empty; waiting for a node to register before workload checks"
+    fi
+    if [[ "$attempt" -eq 120 ]]; then
+      kubectl get nodes -o wide >&2 || true
+      die "timed out waiting for a Ready node. The node list stayed empty, so workloads were not waited on."
+    fi
+    sleep 5
+  done
 }
 
 kubectl() {
@@ -996,57 +1045,67 @@ ghcr_pull_token() {
   release_token
 }
 
+pull_log_is_auth() {
+  local pull_log="$1"
+  grep -Eqi '401|403|denied|unauthorized|insufficient_scope|authentication required' "$pull_log"
+}
+
+docker_pull_to_log() {
+  local image="$1" pull_log="$2"
+  docker pull "$image" >"$pull_log" 2>&1
+}
+
+import_pulled_release_image() {
+  local image="$1" pull_log="$2"
+  rm -f "$pull_log"
+  docker save "$image" | k3s ctr images import - \
+    || die "docker pulled ${image}, but k3s could not import it"
+  IMAGE="$image"
+  IMAGE_FROM_RELEASE=1
+}
+
 pull_release_image() {
-  local token image tar user pull_log
+  local image pull_log token user
   image="ghcr.io/dflow-sh/dflow-server:${RELEASE_TAG}"
-  token="$(ghcr_pull_token || true)"
-  if [[ -n "$token" ]]; then
-    user="$(ghcr_user)"
-    echo "$token" | docker login ghcr.io -u "$user" --password-stdin >/dev/null \
-      || log "could not log in to ghcr.io"
-  fi
   pull_log="$(mktemp)"
-  if docker pull "$image" >"$pull_log" 2>&1; then
-    rm -f "$pull_log"
-    docker save "$image" | k3s ctr images import - \
-      || die "docker pulled ${image}, but k3s could not import it"
-    IMAGE="$image"
-    IMAGE_FROM_RELEASE=1
+  # Pull before any registry login. A token without package read makes
+  # ghcr.io deny a public image that an anonymous pull accepts.
+  if docker_pull_to_log "$image" "$pull_log"; then
+    import_pulled_release_image "$image" "$pull_log"
     return 0
   fi
-  if grep -Eqi '403|denied|unauthorized|insufficient_scope' "$pull_log"; then
-    log "pulling ${image} was denied. The GHCR package is private. Make it public (GitHub → Packages → dflow-server → Package settings → Change visibility → Public), or set GHCR_TOKEN with read:packages and GHCR_USER. Building from the checkout."
+  if pull_log_is_auth "$pull_log"; then
+    docker logout ghcr.io >/dev/null 2>&1 || true
+    if docker_pull_to_log "$image" "$pull_log"; then
+      import_pulled_release_image "$image" "$pull_log"
+      return 0
+    fi
+    token="$(ghcr_pull_token || true)"
+    if [[ -n "$token" ]]; then
+      user="$(ghcr_user)"
+      local login_log
+      login_log="$(mktemp)"
+      if echo "$token" | docker login ghcr.io -u "$user" --password-stdin >"$login_log" 2>&1 \
+        && docker_pull_to_log "$image" "$pull_log"; then
+        rm -f "$login_log"
+        import_pulled_release_image "$image" "$pull_log"
+        return 0
+      fi
+      rm -f "$login_log"
+      docker logout ghcr.io >/dev/null 2>&1 || true
+    fi
+  fi
+  if pull_log_is_auth "$pull_log"; then
+    log "pulling ${image} was denied"
   else
     log "could not pull ${image}"
   fi
   cat "$pull_log" >&2 || true
   rm -f "$pull_log"
-  tar="/tmp/dflow-server-linux-${GOARCH_NAME}.tar.gz"
-  if download_release_asset "dflow-server-linux-${GOARCH_NAME}.tar.gz" "$tar"; then
-    gunzip -c "$tar" | k3s ctr images import - \
-      || die "the release image archive was downloaded, but k3s could not import it"
-    IMAGE="$image"
-    IMAGE_FROM_RELEASE=1
-    return 0
-  fi
   return 1
 }
 
-import_or_build_image() {
-  local release_note="no GitHub release could be downloaded"
-  if [[ -z "$RELEASE_JSON" ]]; then
-    load_release_json "${RELEASE_TAG_REQUEST:-latest}" || true
-  fi
-  if [[ -n "$RELEASE_JSON" ]]; then
-    release_note="release ${RELEASE_TAG} had no server image for linux/${GOARCH_NAME}"
-    if pull_release_image; then
-      log "imported ${IMAGE} from the GitHub release"
-      return 0
-    fi
-    log "$release_note"
-  else
-    log "${release_note}. Set GITHUB_TOKEN or GH_TOKEN, or run gh auth login. Building from the checkout."
-  fi
+build_checkout_image() {
   if maybe_reuse_local_image; then
     return 0
   fi
@@ -1054,11 +1113,28 @@ import_or_build_image() {
   IMAGE_FROM_RELEASE=0
   log "building ${IMAGE} from ${ROOT}"
   build_cli_binary \
-    || die "server image install failed. ${release_note}. Building the CLI from the checkout also failed."
+    || die "building the CLI from the checkout failed"
   docker build -f "${ROOT}/images/Dockerfile" -t "$IMAGE" "$ROOT" \
-    || die "server image install failed. ${release_note}. docker build of the checkout also failed."
+    || die "docker build of the checkout failed"
   docker save "$IMAGE" | k3s ctr images import - \
-    || die "server image install failed. ${release_note}. Importing the locally built image into k3s also failed."
+    || die "k3s could not import the checkout image"
+}
+
+import_or_build_image() {
+  if [[ "$FROM_CHECKOUT" -eq 1 ]]; then
+    log "server image will be built from this checkout (--from-checkout)"
+    build_checkout_image
+    return 0
+  fi
+  local requested="${RELEASE_TAG_REQUEST:-latest}"
+  if [[ -z "$RELEASE_JSON" ]]; then
+    load_release_json "$requested" \
+      || die "GitHub release ${requested} for ${RELEASE_REPO} was not found. Refusing to build this checkout. Pass --from-checkout to build it."
+  fi
+  if ! pull_release_image; then
+    die "could not pull ghcr.io/dflow-sh/dflow-server:${RELEASE_TAG}. Refusing to build or reuse a checkout image. Pass --from-checkout to build this checkout instead."
+  fi
+  log "imported ${IMAGE} from the GitHub release"
 }
 
 checkout_sha() {
@@ -1086,14 +1162,12 @@ maybe_reuse_local_image() {
 install_cli_release_or_build() {
   local goos asset dest sha
   sha="$(checkout_sha)"
-  # The checkout image and the CLI are one build. A release binary can be
-  # older than the chart templates baked into that image.
-  if [[ "$IMAGE_FROM_RELEASE" -eq 0 ]]; then
+  if [[ "$FROM_CHECKOUT" -eq 1 ]]; then
     if [[ -n "$sha" && "${CLI_FROM_CHECKOUT:-}" == "1" && "${CHECKOUT_SHA:-}" == "$sha" && -x /usr/local/bin/dflow ]] && /usr/local/bin/dflow version >/dev/null 2>&1; then
       log "CLI already installed for this checkout"
       return 0
     fi
-    log "server image is from the checkout; installing the checkout CLI"
+    log "installing the checkout CLI (--from-checkout)"
     dest="/tmp/dflow-checkout"
     if ! build_host_cli "$dest"; then
       die "CLI install failed while building from the checkout."
@@ -1103,38 +1177,26 @@ install_cli_release_or_build() {
     log "installed a CLI built from the checkout to /usr/local/bin/dflow"
     return 0
   fi
-  if [[ -n "$sha" && "${CHECKOUT_SHA:-}" == "$sha" && -x /usr/local/bin/dflow ]] && /usr/local/bin/dflow version >/dev/null 2>&1; then
-    log "CLI already installed for this checkout"
-    return 0
-  fi
   goos="$(host_goos)"
   asset="dflow-${goos}-${GOARCH_NAME}"
   dest="/tmp/${asset}"
   if [[ -z "$RELEASE_JSON" ]]; then
-    load_release_json "${RELEASE_TAG_REQUEST:-latest}" || true
+    load_release_json "${RELEASE_TAG_REQUEST:-latest}" \
+      || die "GitHub release ${RELEASE_TAG_REQUEST:-latest} for ${RELEASE_REPO} was not found. Refusing to build the checkout CLI. Pass --from-checkout to build it."
   fi
-  if [[ -n "$RELEASE_JSON" ]] && download_release_asset "$asset" "$dest"; then
-    chmod 0755 "$dest" || true
-    if ! verify_checksum "$dest" "$asset"; then
-      log "release asset ${asset} failed its checksum; building from the checkout"
-      rm -f "$dest"
-    elif ! "$dest" version >/dev/null 2>&1; then
-      log "release asset ${asset} downloaded but did not run; building from the checkout"
-      rm -f "$dest"
-    else
-      place_cli "$dest"
-      log "installed ${asset} from release ${RELEASE_TAG} to /usr/local/bin/dflow"
-      return 0
-    fi
-  else
-    log "release asset ${asset} is not available"
+  if ! download_release_asset "$asset" "$dest"; then
+    die "release asset ${asset} for ${RELEASE_TAG} could not be downloaded from ${RELEASE_REPO}. Refusing to build the checkout CLI. Pass --from-checkout to build it."
   fi
-  log "building the ${goos}/${GOARCH_NAME} CLI from ${ROOT}"
-  if ! build_host_cli "$dest"; then
-    die "CLI install failed. No usable release asset ${asset} from ${RELEASE_REPO} (set GITHUB_TOKEN or GH_TOKEN, or gh auth login), and building from the checkout failed."
+  chmod 0755 "$dest" || true
+  if ! verify_checksum "$dest" "$asset"; then
+    die "release asset ${asset} failed its checksum. Refusing to install it or build the checkout CLI."
+  fi
+  if ! "$dest" version >/dev/null 2>&1; then
+    die "release asset ${asset} was downloaded but did not run."
   fi
   place_cli "$dest"
-  log "installed a CLI built from the checkout to /usr/local/bin/dflow"
+  CLI_FROM_CHECKOUT=0
+  log "installed ${asset} from release ${RELEASE_TAG} to /usr/local/bin/dflow"
 }
 
 install_cli() {
@@ -1701,6 +1763,12 @@ install_cloudflared() {
 
 main() {
   parse_args "$@"
+  if [[ "$FROM_CHECKOUT" -eq 1 && -n "$REQUESTED_VERSION" ]]; then
+    die "--from-checkout cannot be combined with --version"
+  fi
+  if [[ -n "$REQUESTED_VERSION" ]]; then
+    RELEASE_TAG_REQUEST="$REQUESTED_VERSION"
+  fi
   require_root
   require_checkout
   require_ubuntu
