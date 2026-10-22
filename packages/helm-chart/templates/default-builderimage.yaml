@@ -22,6 +22,6 @@ metadata:
     app.kubernetes.io/version: {{ default .Chart.AppVersion .Values.image.dflow.tag }}
 spec:
   default: true
-  shortDescription: dFlow standard builder image
-  description: dFlow standard builder image using the Paketo jammy full builder
-  image: "{{ .Values.image.builder.repository }}:{{ .Values.image.builder.tag }}"
+  shortDescription: Railpack
+  description: Default builder. Source builds use railpack unless a push selects buildpack or dockerfile.
+  image: {{ .Values.server.defaultBuilderImage | default "railpack" | quote }}

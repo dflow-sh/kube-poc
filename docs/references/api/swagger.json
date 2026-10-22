@@ -7,7 +7,7 @@
   "info": {
     "description": "This is the API specification of the dFlow API",
     "title": "dFlow API",
-    "version": "1.0.0"
+    "version": "v0.0.0-dev"
   },
   "basePath": "/api/v1",
   "paths": {

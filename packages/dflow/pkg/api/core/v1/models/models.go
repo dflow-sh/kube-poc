@@ -141,7 +141,24 @@ const (
 	BuildModeRailpack   = "railpack"
 	BuildModeBuildpack  = "buildpack"
 	BuildModeDockerfile = "dockerfile"
+	// DefaultBuilderImage is the /info default_builder_image value when no
+	// BuilderImage resource is the cluster default and DEFAULT_BUILDER_IMAGE
+	// is unset. It names the railpack builder, not a container image.
+	DefaultBuilderImage = BuildModeRailpack
 )
+
+// ResolveDefaultBuilderImage returns the builder /info should report.
+// A default BuilderImage resource wins. Otherwise the configured
+// DEFAULT_BUILDER_IMAGE value is used. An empty configuration is railpack.
+func ResolveDefaultBuilderImage(fromCustomResource, configured string) string {
+	if image := strings.TrimSpace(fromCustomResource); image != "" {
+		return image
+	}
+	if image := strings.TrimSpace(configured); image != "" {
+		return image
+	}
+	return DefaultBuilderImage
+}
 
 // DefaultBuildMode is the staging mode used when a request does not name one.
 // DEFAULT_BUILD_MODE selects buildpack or dockerfile. An empty value is railpack.

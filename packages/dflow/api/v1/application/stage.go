@@ -97,11 +97,15 @@ func resolveDefaultBuilderImage(
 	if err != nil {
 		return "", err
 	}
+	fromCustomResource := ""
 	if defaultBuilder != nil {
-		return defaultBuilder.Image, nil
+		fromCustomResource = defaultBuilder.Image
 	}
 
-	return viper.GetString("default-builder-image"), nil
+	return models.ResolveDefaultBuilderImage(
+		fromCustomResource,
+		viper.GetString("default-builder-image"),
+	), nil
 }
 
 type HelmValuesMap struct {
@@ -1700,7 +1704,8 @@ func stagingImagesAndConfig(
 			}
 			builderImage = resolved
 		}
-		if builderImage == "" {
+		// "railpack" is the default builder name, not a pack builder image.
+		if builderImage == "" || builderImage == models.DefaultBuilderImage {
 			return "", nil, apierror.NewBadRequestError("no builder image specified and no default configured")
 		}
 		config, err := DetermineStagingScripts(ctx, cluster, helmchart.Namespace(), builderImage)

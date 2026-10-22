@@ -9,14 +9,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package version contains the variable holding the client's version number.
+// Package version contains the product version string.
 package version
 
-// Version contains the client's version number. The string found in
-// the code is just a placeholder for the actual value inserted when
-// building the client. See ldflags in .goreleaser.yaml.
+import "strings"
+
+// Version is the product version. Unreleased builds keep this value.
+// A release tag replaces it at link time (-X, see .goreleaser.yaml).
 var Version = "v0.0.0-dev"
 
-// ChartVersion contains the version of the Helm Chart used to release dFlow.
-// It's the Product Release version, and it matches the dFlow Github Release.
+// ChartVersion is the Helm chart version the server reports.
+// The chart sets CHART_VERSION from its own version, which a release tag
+// rewrites. Unreleased builds match Version.
 var ChartVersion = "v0.0.0-dev"
+
+// ChartVersionFromEnv returns Version when the chart did not set
+// CHART_VERSION. A chart version without a leading v gets one, so 0.0.4
+// from a release tag matches the stamped Version v0.0.4.
+func ChartVersionFromEnv(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return Version
+	}
+	if !strings.HasPrefix(raw, "v") {
+		return "v" + raw
+	}
+	return raw
+}

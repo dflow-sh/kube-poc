@@ -19,15 +19,16 @@ import (
 	"os"
 	"strings"
 
-	"github.com/dflow-sh/kube-poc/packages/dflow/helpers"
-	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
 	apiv1 "github.com/dflow-sh/kube-poc/packages/dflow/api/v1"
 	"github.com/dflow-sh/kube-poc/packages/dflow/api/v1/middleware"
 	"github.com/dflow-sh/kube-poc/packages/dflow/api/v1/response"
 	"github.com/dflow-sh/kube-poc/packages/dflow/auth"
 	"github.com/dflow-sh/kube-poc/packages/dflow/domain"
-	"github.com/dflow-sh/kube-poc/packages/dflow/tracing"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
 	apierrors "github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/errors"
+	"github.com/dflow-sh/kube-poc/packages/dflow/tracing"
+	"github.com/dflow-sh/kube-poc/packages/dflow/version"
 	"github.com/pkg/errors"
 
 	"github.com/gin-gonic/gin"
@@ -197,6 +198,7 @@ func swaggerHandler(c *gin.Context) {
 		c.Abort()
 		return
 	}
+	defer swaggerFile.Close()
 
 	var swaggerMap map[string]interface{}
 	err = json.NewDecoder(swaggerFile).Decode(&swaggerMap)
@@ -205,6 +207,7 @@ func swaggerHandler(c *gin.Context) {
 		c.Abort()
 		return
 	}
+	setSwaggerVersion(swaggerMap, version.Version)
 
 	mainDomain, err := domain.MainDomain(c.Request.Context())
 	if err != nil {
@@ -215,4 +218,14 @@ func swaggerHandler(c *gin.Context) {
 	swaggerMap["host"] = "dflow." + mainDomain
 
 	c.JSON(http.StatusOK, swaggerMap)
+}
+
+// setSwaggerVersion reports the stamped product version in OpenAPI info.version.
+func setSwaggerVersion(swaggerMap map[string]interface{}, productVersion string) {
+	info, _ := swaggerMap["info"].(map[string]interface{})
+	if info == nil {
+		info = map[string]interface{}{}
+		swaggerMap["info"] = info
+	}
+	info["version"] = productVersion
 }

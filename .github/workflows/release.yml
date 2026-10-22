@@ -54,16 +54,29 @@ jobs:
           chart.write_text("".join(text2))
           values = root / "values.yaml"
           raw = values.read_text()
-          needle = (
-              "  dflow:\n"
-              "    registry: ghcr.io/\n"
-              "    repository: dflow-sh/dflow-server\n"
-              "    tag: v1.14.3\n"
-          )
-          replacement = needle.replace("tag: v1.14.3", f"tag: {tag}")
-          if needle not in raw:
-              raise SystemExit("server image tag block was not found in values.yaml")
-          values.write_text(raw.replace(needle, replacement, 1))
+          needles = [
+              (
+                  "  dflow:\n"
+                  "    registry: ghcr.io/\n"
+                  "    repository: dflow-sh/dflow-server\n"
+                  "    tag: v0.0.0-dev\n"
+              ),
+              (
+                  "  dflow-ui:\n"
+                  "    registry: ghcr.io/\n"
+                  "    repository: dflow-sh/dflow-ui\n"
+                  "    tag: v0.0.0-dev\n"
+              ),
+          ]
+          for needle in needles:
+              if needle not in raw:
+                  raise SystemExit("image tag block was not found in values.yaml")
+              raw = raw.replace(
+                  needle,
+                  needle.replace("tag: v0.0.0-dev", f"tag: {tag}"),
+                  1,
+              )
+          values.write_text(raw)
           PY
           mkdir -p chart-package
           helm package "$work/helm-chart" --destination chart-package

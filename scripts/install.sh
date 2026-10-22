@@ -20,7 +20,7 @@ set -euo pipefail
 SCRIPT_NAME="${SCRIPT_NAME:-install.sh}"
 RELEASE_REPO="${RELEASE_REPO:-dflow-sh/kube-poc}"
 
-DFLOW_VERSION="${DFLOW_VERSION:-v1.14.3}"
+DFLOW_VERSION="${DFLOW_VERSION:-v0.0.0-dev}"
 IMAGE="${IMAGE:-ghcr.io/dflow-sh/dflow-server:${DFLOW_VERSION}}"
 ADMIN_USER="${ADMIN_USER:-admin}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-password}"

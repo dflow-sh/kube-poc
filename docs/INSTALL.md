@@ -79,7 +79,7 @@ The script is safe to run again after the first run on this checkout. It install
 
 k3s is started with `cluster-init: true` (embedded etcd). A server that was installed earlier with SQLite restarts k3s once on the next run so the datastore can migrate. After that config is in place, a re-run does not restart k3s. See [Grow from one server to three](#grow-from-one-server-to-three).
 
-When a GitHub Release exists, the script downloads the `dflow` CLI, the Helm chart package (`dflow-*.tgz`), and the server image `ghcr.io/dflow-sh/dflow-server:<tag>` from that release. The CLI download is checked against `checksums.txt` when that file is in the release. A checksum match and a binary that does not run are reported as separate lines. No release has been published yet, so today the script builds those from the checkout and tags the server image `dev-<git sha>`. If the release download fails and the checkout build also fails, the script exits non-zero and names both failures. CI on this branch also uploads CLI binaries and a server image archive as workflow artifacts. That is not a production deploy.
+When a GitHub Release exists, the script downloads the `dflow` CLI, the Helm chart package (`dflow-*.tgz`), and the server image `ghcr.io/dflow-sh/dflow-server:<tag>` from that release. The CLI download is checked against `checksums.txt` when that file is in the release. A checksum match and a binary that does not run are reported as separate lines. If the release cannot be downloaded, the script builds from the checkout and tags the server image `dev-<git sha>`. That build reports `v0.0.0-dev`. If the release download fails and the checkout build also fails, the script exits non-zero and names both failures. CI also uploads CLI binaries and a server image archive as workflow artifacts. That is not a production deploy.
 
 The chart sets `server.defaultBuildMode` to `railpack`. A `dflow push` that omits `--build-mode` builds with Railpack (BuildKit in the staging job, image pushed to the in-cluster registry). `--build-mode buildpack` and `--build-mode dockerfile` stay explicit. `dflow app logs --staging` prints the staging pod name once, then left-aligned log lines. `--verbose` restores the pod and container prefix on every line.
 
@@ -370,7 +370,7 @@ sudo apt-get install -y curl ca-certificates
 curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 ```
 
-Go 1.26 is required only to build the server image. The published chart value `ghcr.io/dflow-sh/dflow-server:v1.14.3` is not on the registry yet, so build it on the machine (next section) or push that tag from CI and skip the build.
+Go 1.26 is required only to build the server image. Unreleased builds use `ghcr.io/dflow-sh/dflow-server:v0.0.0-dev`. A release tag replaces that tag in the packaged chart. Build the image on the machine (next section) or use the image from the release.
 
 ## 1. Install k3s
 
@@ -394,8 +394,8 @@ On the machine, from a checkout of this repository:
 # https://go.dev/dl/go1.26.0.linux-amd64.tar.gz
 export PATH=/usr/local/go/bin:$PATH
 CGO_ENABLED=0 go build -o apps/cli/dist/dflow ./apps/cli
-docker build -f images/Dockerfile -t ghcr.io/dflow-sh/dflow-server:v1.14.3 .
-docker save ghcr.io/dflow-sh/dflow-server:v1.14.3 | sudo k3s ctr images import -
+docker build -f images/Dockerfile -t ghcr.io/dflow-sh/dflow-server:v0.0.0-dev .
+docker save ghcr.io/dflow-sh/dflow-server:v0.0.0-dev | sudo k3s ctr images import -
 ```
 
 If Docker is not installed, `sudo apt-get install -y docker.io` and start the daemon. k3s uses containerd, so the image has to be imported with `k3s ctr`. Pulling from a registry you pushed the same tag to also works. The chart sets `image.pullPolicy` to `IfNotPresent`, so a node that already has the image does not try the registry.
@@ -409,7 +409,8 @@ The chart installs, when you turn the switches on:
 - cert-manager (the bundled chart, installed first so its CRDs exist)
 - the container registry (`containerregistry.enabled`, default true)
 - S3-compatible storage via SeaweedFS (`seaweedfs.enabled`, default true)
-- the Paketo builder image reference (`image.builder`, `paketobuildpacks/builder-jammy-full`), used when `--build-mode buildpack`
+- railpack as the default builder (`server.defaultBuilderImage`, reported by `/info` as `default_builder_image`)
+- the Paketo builder image reference (`image.builder`, `paketobuildpacks/builder-jammy-full`), used when `--build-mode buildpack` passes a builder image
 - the Railpack BuildKit image (`image.railpack`, `moby/buildkit`), used when a push omits `--build-mode` (`server.defaultBuildMode: railpack`)
 
 s3gw is the other S3-compatible option and is off by default. MinIO is not installed by the chart. To use MinIO, set `seaweedfs.enabled=false`, `s3gw.enabled=false`, and set `s3.endpoint`, `s3.accessKeyID`, `s3.secretAccessKey`, and `s3.bucket`.
