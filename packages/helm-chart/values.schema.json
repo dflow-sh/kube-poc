@@ -251,7 +251,11 @@
       "type": "object",
       "properties": {
         "adminPassword": {
-          "description": "Cleartext password for the admin user. Empty generates one in Secret dflow-generated-passwords.",
+          "description": "Cleartext password for the admin user. Empty generates one in Secret dflow-generated-passwords. The values password and changeme are replaced.",
+          "type": "string"
+        },
+        "adminPasswordBcrypt": {
+          "description": "Bcrypt hash of adminPassword. Empty lets the chart hash the password. scripts/install.sh sets this so the Dex checksum matches the hash Dex stores.",
           "type": "string"
         },
         "dflowPassword": {

@@ -1338,6 +1338,30 @@ ensure_admin_password() {
   log "generated a random admin password; Secret dflow-generated-passwords stores it"
 }
 
+# ADMIN_PASSWORD_BCRYPT is the hash Dex stores. The pod annotation is the
+# sha256 of this hash, not of the plaintext password.
+ensure_admin_password_bcrypt() {
+  local stored="" bcrypt=""
+  stored="$(read_generated_secret_key adminPassword)"
+  bcrypt="$(read_generated_secret_key adminPasswordBcrypt)"
+  if [[ -n "$bcrypt" && "$stored" == "$ADMIN_PASSWORD" ]] && ! is_known_default_secret "$ADMIN_PASSWORD"; then
+    ADMIN_PASSWORD_BCRYPT="$bcrypt"
+    return 0
+  fi
+  if ! command -v htpasswd >/dev/null 2>&1; then
+    log "installing apache2-utils to hash the admin password"
+    apt-get install -y apache2-utils \
+      || die "could not install apache2-utils to hash the admin password"
+  fi
+  bcrypt="$(printf '%s' "$ADMIN_PASSWORD" | htpasswd -niBC 10 admin | cut -d: -f2)"
+  [[ -n "$bcrypt" ]] || die "could not hash the admin password"
+  ADMIN_PASSWORD_BCRYPT="$bcrypt"
+}
+
+admin_bcrypt_checksum() {
+  printf '%s' "$ADMIN_PASSWORD_BCRYPT" | sha256sum | awk '{print $1}'
+}
+
 ensure_registry_password() {
   local had_value=0
   if [[ -n "${REGISTRY_PASSWORD:-}" ]]; then
@@ -1369,12 +1393,13 @@ ensure_registry_password() {
 
 apply_dflow_release() {
   ensure_admin_password
+  ensure_admin_password_bcrypt
   ensure_registry_password
   resolve_chart
   mkdir -p "$STATE_DIR"
   local image_tag="${IMAGE##*:}"
   local password_checksum
-  password_checksum="$(printf '%s' "$ADMIN_PASSWORD" | sha256sum | awk '{print $1}')"
+  password_checksum="$(admin_bcrypt_checksum)"
   umask 077
   cat > "${STATE_DIR}/values.yaml" <<EOF
 global:
@@ -1393,6 +1418,7 @@ dex:
     checksum/generated-passwords: $(yaml_quote "$password_checksum")
 api:
   adminPassword: $(yaml_quote "$ADMIN_PASSWORD")
+  adminPasswordBcrypt: $(yaml_quote "$ADMIN_PASSWORD_BCRYPT")
 ingress:
   ingressClassName: traefik
 $(if [[ -n "$HOSTNAME_OVERRIDE" ]]; then printf '  hostnameOverride: %s\n' "$(yaml_quote "$HOSTNAME_OVERRIDE")"; fi)

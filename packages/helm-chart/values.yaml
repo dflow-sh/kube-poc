@@ -395,8 +395,8 @@ dex:
   # dflow@dflow.sh the dflow password from Secret dflow-generated-passwords.
   # [] removes the static users and the admin@dflow.sh API user. A list replaces them.
   # scripts/install.sh sets podAnnotations.checksum/generated-passwords to the
-  # sha256 of the admin password so this Deployment rolls when that password
-  # changes. Dex reads its config only at startup.
+  # sha256 of the admin password's bcrypt hash so this Deployment rolls when
+  # that hash changes. Dex reads its config only at startup.
   staticPasswords: null
   podAnnotations: {}
   # -- Static clients added after dFlow's own (dflow-api, dflow-cli,
