@@ -1,5 +1,19 @@
-{{- if not (.Capabilities.APIVersions.Has "helm.cattle.io/v1") -}}
+{{/*
+  Install helm-controller only when this release owns it.
 
+  A cluster that already serves helm.cattle.io/v1 keeps the controller it
+  already runs. This chart does not start a second Deployment and does not
+  take ownership of those CRDs.
+
+  A cluster without that API gets helm-controller v0.17.9 and the CRDs from
+  that release. A later upgrade still renders them when the Deployment is
+  already part of this release. Both CRDs stay on helm.cattle.io/v1, so
+  storedVersions does not change. The HelmChart CRD gains a status subresource.
+*/}}
+{{- $hasAPI := .Capabilities.APIVersions.Has "helm.cattle.io/v1" -}}
+{{- $owned := lookup "apps/v1" "Deployment" .Release.Namespace "helm-controller" -}}
+{{- if or (not $hasAPI) $owned }}
+{{ .Files.Get "files/helm-controller-crds.yaml" }}
 # RBAC - ServiceAccount
 ---
 apiVersion: v1
@@ -48,6 +62,13 @@ spec:
         - name: helm-controller
           image: {{ include "dflow.imageRef" .Values.helmController.image | quote }}
           command: ["helm-controller"]
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: DEFAULT_JOB_IMAGE
+              value: {{ include "dflow.imageRef" .Values.helmController.jobImage | quote }}
       {{- if .Values.helmController }}
           {{- with .Values.helmController.resources }}
           resources:
@@ -66,134 +87,4 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       {{- end }}
-
-
-# HelmChart CRD
----
-apiVersion: apiextensions.k8s.io/v1
-kind: CustomResourceDefinition
-metadata:
-  name: helmcharts.helm.cattle.io
-spec:
-  group: helm.cattle.io
-  names:
-    kind: HelmChart
-    listKind: HelmChartList
-    plural: helmcharts
-    singular: helmchart
-  scope: Namespaced
-  versions:
-  - name: v1
-    schema:
-      openAPIV3Schema:
-        properties:
-          apiVersion:
-            description: 'APIVersion defines the versioned schema of this representation
-              of an object. Servers should convert recognized schemas to the latest
-              internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
-            type: string
-          kind:
-            description: 'Kind is a string value representing the REST resource this
-              object represents. Servers may infer this from the endpoint the client
-              submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
-            type: string
-          metadata:
-            type: object
-          spec:
-            properties:
-              bootstrap:
-                type: boolean
-              chart:
-                type: string
-              chartContent:
-                type: string
-              failurePolicy:
-                type: string
-              helmVersion:
-                type: string
-              jobImage:
-                type: string
-              repo:
-                type: string
-              repoCA:
-                type: string
-              set:
-                additionalProperties:
-                  anyOf:
-                  - type: integer
-                  - type: string
-                  x-kubernetes-int-or-string: true
-                type: object
-              targetNamespace:
-                type: string
-              timeout:
-                type: string
-              valuesContent:
-                type: string
-              version:
-                type: string
-            type: object
-          status:
-            properties:
-              jobName:
-                type: string
-            type: object
-        type: object
-    served: true
-    storage: true
-status:
-  acceptedNames:
-    kind: ""
-    plural: ""
-  conditions: []
-  storedVersions: []
-
-# HelmChartConfig CRD
----
-apiVersion: apiextensions.k8s.io/v1
-kind: CustomResourceDefinition
-metadata:
-  name: helmchartconfigs.helm.cattle.io
-spec:
-  group: helm.cattle.io
-  names:
-    kind: HelmChartConfig
-    listKind: HelmChartConfigList
-    plural: helmchartconfigs
-    singular: helmchartconfig
-  scope: Namespaced
-  versions:
-  - name: v1
-    schema:
-      openAPIV3Schema:
-        properties:
-          apiVersion:
-            description: 'APIVersion defines the versioned schema of this representation
-              of an object. Servers should convert recognized schemas to the latest
-              internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
-            type: string
-          kind:
-            description: 'Kind is a string value representing the REST resource this
-              object represents. Servers may infer this from the endpoint the client
-              submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
-            type: string
-          metadata:
-            type: object
-          spec:
-            properties:
-              failurePolicy:
-                type: string
-              valuesContent:
-                type: string
-            type: object
-        type: object
-    served: true
-    storage: true
-status:
-  acceptedNames:
-    kind: ""
-    plural: ""
-  conditions: []
-  storedVersions: []
-
-{{- end -}}
+{{- end }}

@@ -555,8 +555,14 @@ serviceCatalog:
 helmController:
   image:
     repository: docker.io/rancher/helm-controller
-    tag: v0.12.1
-    digest: sha256:30341f17079a7baa48da098cfbf0d481525d92440dc5bdfd8f977d927adfa4db
+    tag: v0.17.9
+    digest: sha256:25a4fcbbf9fa8396ded332165e4497eb45e08a8f6677158c0f861a2d15982afc
+  # Used when a HelmChart does not set spec.jobImage. The v0.17.9 deploy
+  # manifest pins this tag. An empty value makes the controller use a latest tag.
+  jobImage:
+    repository: ghcr.io/k3s-io/klipper-helm
+    tag: v0.9.10-build20251111
+    digest: sha256:251a6a3983934f1026c34f4337fc5a87e093a142438c7d16f7b31c179162176e
   resources: {}
   # requests:
   #   cpu: "200m"
