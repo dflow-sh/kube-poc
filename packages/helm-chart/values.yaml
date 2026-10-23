@@ -28,46 +28,51 @@ image:
     registry: ghcr.io/
     repository: dflow-sh/dflow-ui
     tag: v0.0.0-dev
-  # Published upstream unpacker. This repo does not build that image.
+  # Mirrored and digest-pinned. This repo does not build this image.
   bash:
-    registry: ghcr.io/
-    repository: epinio/epinio-unpacker
+    repository: ghcr.io/dflow-sh/mirror/unpacker
     tag: v1.14.3-rc1
+    digest: sha256:96b02837619d9763f82555ce3743a69d22e251250668e94ae9fb20012330b0d5
   awscli:
-    repository: amazon/aws-cli
+    repository: ghcr.io/dflow-sh/mirror/aws-cli
     tag: 2.13.26
+    digest: sha256:0e825970dda39b096f4f487061b8dd1d8bbf556cc195e9f238693ea5b13e9178
   skopeo:
-    registry: quay.io/
-    repository: skopeo/stable
+    repository: ghcr.io/dflow-sh/mirror/skopeo
     tag: v1.13.2
+    digest: sha256:5590c7d14c3511627300ede0bdef354d099bcfcf675abc2c0cbe5439a8d99a5b
   kubectl:
-    repository: rancher/kubectl
+    repository: ghcr.io/dflow-sh/mirror/kubectl
     tag: v1.22.6
+    digest: sha256:ce6dae6d6c2ef1869fe0d83fbf1fa2428d5f7e7d663c11bc7258b469a39e5a32
   # Paketo builder used when a push selects --build-mode buildpack and
   # passes a builder image. /info does not report this image. The default
   # builder is server.defaultBuilderImage (railpack).
   builder:
-    repository: paketobuildpacks/builder-jammy-full
+    repository: ghcr.io/dflow-sh/mirror/builder-jammy-full
     tag: 0.3.495
+    digest: sha256:d3839cff948b0beb1713ef58d1aecf0df2a5dac6f949205cb15d5ccb8fc920cc
     # The user/group combination to use when running
     # the builder image (and in supporting scripts).
     userid: 1001
     groupid: 1000
   dockerfileBuilder:
-    # Built from dflow/kaniko (fork of chainguard-forks/kaniko), like Dex.
-    # Keep the -debug tag: the dockerfile-build stage script needs a shell.
-    # Track version bumps with Dex during release dependency updates.
-    # Published upstream kaniko image. This repo does not build that image.
-    registry: ghcr.io/
-    repository: epinio/kaniko
+    # The dockerfile-build stage script needs a shell, so keep the debug image.
+    # Mirrored and digest-pinned. This repo does not build this image.
+    repository: ghcr.io/dflow-sh/mirror/kaniko
     tag: v1.25.19-debug
+    digest: sha256:cf47131f98c3ee424ac82de7c963e55e8ea0619dc9a87016d3e97397ecfc9842
   # Railpack is the default staging mode. The staging job runs this BuildKit
   # image, downloads the railpack CLI, and pushes the image with buildctl.
   railpack:
-    repository: moby/buildkit
+    repository: ghcr.io/dflow-sh/mirror/buildkit
     tag: v0.23.2
+    digest: sha256:ddd1ca44b21eda906e81ab14a3d467fa6c39cd73b9a39df1196210edcb8db59e
     cliVersion: v0.43.0
-    frontend: ghcr.io/railwayapp/railpack-frontend:v0.43.0
+    frontend:
+      repository: ghcr.io/dflow-sh/mirror/railpack-frontend
+      tag: v0.43.0
+      digest: sha256:355ef61fae6f2551103cd8b10c710cb07167dd353d561f15c69b8d7ac1c676cc
 # Runtime charts that deploy an application workload. They are packed into
 # the server image (see images/Dockerfile) and derived from the upstream
 # Apache-2.0 application charts.
@@ -319,11 +324,12 @@ api:
         - workspace
 # Dex subchart values -- None for now, and sub chart disabled
 dex:
-  # Target fork that supports pkce for oidc providers
-  # Published upstream Dex image with PKCE. This repo does not build Dex.
+  # PKCE-capable Dex image. Mirrored and digest-pinned. This repo does not build Dex.
+  # The Dex chart joins repository and tag with a colon, so the repository
+  # ends in @sha256 and the tag is the digest hex.
   image:
-    repository: ghcr.io/epinio/dex
-    tag: v2.45.1-epinio-pkce
+    repository: ghcr.io/dflow-sh/mirror/dex@sha256
+    tag: ca1cab96ead8d0779e1a75095b0a60f4ffc81c3aefc49027b288adee6f01133f
     pullPolicy: IfNotPresent
   # hardcode this, to avoid problems with release name
   fullnameOverride: "dex"
@@ -425,8 +431,15 @@ seaweedfs:
   fullnameOverride: seaweedfs
   existingSecret: seaweedfs-creds
   global:
+    # The chart joins registry, repository, imageName, and tag with a colon
+    # after imageName, so imageName ends in @sha256 and image.tag is the hex.
+    registry: ghcr.io
+    repository: dflow-sh/mirror
+    imageName: seaweedfs@sha256
     # Set to true to enable SeaweedFS internal TLS. When enabled, also set `seaweedfs.tls.enabled=true`.
     enableSecurity: false
+  image:
+    tag: d7f3fdf6fb9c9375551e95bc985abae74a157789d868341e9e84a999ed8ea21c
   s3:
     enabled: true
     port: 8333
@@ -460,9 +473,11 @@ dflowUI:
 reflector:
   enabled: true
   fullnameOverride: reflector
+  # The reflector chart joins repository and tag with a colon, so the
+  # repository ends in @sha256 and the tag is the digest hex.
   image:
-    repository: emberstack/kubernetes-reflector
-    tag: ""
+    repository: ghcr.io/dflow-sh/mirror/kubernetes-reflector@sha256
+    tag: ead1e4914eab271e4d9fbb4e655a68f72a885a8269c4ac4746902651ea88f488
     pullPolicy: IfNotPresent
   rbac:
     enabled: true
@@ -493,11 +508,13 @@ containerregistry:
   enabled: true
   image:
     registry:
-      repository: registry
+      repository: ghcr.io/dflow-sh/mirror/registry
       tag: "3"
+      digest: sha256:01cd312e67026f06f5d89c3e133a4a9adc7cb9eeb9b1194e0b2954dfd770efd2
     nginx:
-      repository: nginx
+      repository: ghcr.io/dflow-sh/mirror/nginx
       tag: 1.27-alpine
+      digest: sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
   imagePullPolicy: IfNotPresent
   # The ingressClassName is used to select the ingress controller. If
   # empty no class will be added to the ingresses.
@@ -548,6 +565,10 @@ serviceCatalog:
   enableDevServices: true
 # Scheduling configurations for the Helm Controller
 helmController:
+  image:
+    repository: ghcr.io/dflow-sh/mirror/helm-controller
+    tag: v0.12.1
+    digest: sha256:30341f17079a7baa48da098cfbf0d481525d92440dc5bdfd8f977d927adfa4db
   resources: {}
   # requests:
   #   cpu: "200m"

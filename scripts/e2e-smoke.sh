@@ -59,6 +59,7 @@ echo "== cert-manager =="
 # Helm release that first installs the cert-manager CRDs.
 helm upgrade --install cert-manager "${ROOT}/packages/helm-chart/charts/cert-manager-v1.19.3.tgz" \
   --namespace cert-manager --create-namespace \
+  --values "${ROOT}/packages/helm-chart/cert-manager-images.yaml" \
   --set crds.enabled=true \
   --timeout 10m
 kubectl -n cert-manager rollout status deploy/cert-manager --timeout=10m

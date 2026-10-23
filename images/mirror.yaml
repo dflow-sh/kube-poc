@@ -1,0 +1,73 @@
+# regsync config. Copy third-party images into ghcr.io/dflow-sh/mirror.
+# regsync once -c images/mirror.yaml
+version: 1
+creds:
+  - registry: ghcr.io
+    user: '{{ env "REGISTRY_USER" }}'
+    pass: '{{ env "REGISTRY_TOKEN" }}'
+defaults:
+  parallel: 2
+  type: image
+sync:
+  - source: docker.io/library/nginx:1.27-alpine
+    target: ghcr.io/dflow-sh/mirror/nginx:1.27-alpine
+    type: image
+  - source: docker.io/library/registry:3
+    target: ghcr.io/dflow-sh/mirror/registry:3
+    type: image
+  - source: docker.io/amazon/aws-cli:2.13.26
+    target: ghcr.io/dflow-sh/mirror/aws-cli:2.13.26
+    type: image
+  - source: docker.io/moby/buildkit:v0.23.2
+    target: ghcr.io/dflow-sh/mirror/buildkit:v0.23.2
+    type: image
+  - source: docker.io/rancher/kubectl:v1.22.6
+    target: ghcr.io/dflow-sh/mirror/kubectl:v1.22.6
+    type: image
+  - source: docker.io/rancher/helm-controller:v0.12.1
+    target: ghcr.io/dflow-sh/mirror/helm-controller:v0.12.1
+    type: image
+  - source: docker.io/chrislusf/seaweedfs:4.12
+    target: ghcr.io/dflow-sh/mirror/seaweedfs:4.12
+    type: image
+  - source: docker.io/emberstack/kubernetes-reflector:10.0.58
+    target: ghcr.io/dflow-sh/mirror/kubernetes-reflector:10.0.58
+    type: image
+  - source: docker.io/paketobuildpacks/builder-jammy-full:0.3.495
+    target: ghcr.io/dflow-sh/mirror/builder-jammy-full:0.3.495
+    type: image
+  - source: quay.io/skopeo/stable:v1.13.2
+    target: ghcr.io/dflow-sh/mirror/skopeo:v1.13.2
+    type: image
+  - source: quay.io/jetstack/cert-manager-controller:v1.19.3
+    target: ghcr.io/dflow-sh/mirror/cert-manager-controller:v1.19.3
+    type: image
+  - source: quay.io/jetstack/cert-manager-webhook:v1.19.3
+    target: ghcr.io/dflow-sh/mirror/cert-manager-webhook:v1.19.3
+    type: image
+  - source: quay.io/jetstack/cert-manager-cainjector:v1.19.3
+    target: ghcr.io/dflow-sh/mirror/cert-manager-cainjector:v1.19.3
+    type: image
+  - source: quay.io/jetstack/cert-manager-acmesolver:v1.19.3
+    target: ghcr.io/dflow-sh/mirror/cert-manager-acmesolver:v1.19.3
+    type: image
+  - source: quay.io/jetstack/cert-manager-startupapicheck:v1.19.3
+    target: ghcr.io/dflow-sh/mirror/cert-manager-startupapicheck:v1.19.3
+    type: image
+  - source: ghcr.io/railwayapp/railpack-frontend:v0.43.0
+    target: ghcr.io/dflow-sh/mirror/railpack-frontend:v0.43.0
+    type: image
+  - source: docker.io/traefik/whoami:latest
+    target: ghcr.io/dflow-sh/mirror/whoami:latest
+    type: image
+  # Old upstream namespace. The source reference is a repository variable
+  # so that namespace is not stored in git.
+  - source: '{{ env "MIRROR_DEX_SOURCE" }}'
+    target: ghcr.io/dflow-sh/mirror/dex:v2.45.1-pkce
+    type: image
+  - source: '{{ env "MIRROR_UNPACKER_SOURCE" }}'
+    target: ghcr.io/dflow-sh/mirror/unpacker:v1.14.3-rc1
+    type: image
+  - source: '{{ env "MIRROR_KANIKO_SOURCE" }}'
+    target: ghcr.io/dflow-sh/mirror/kaniko:v1.25.19-debug
+    type: image

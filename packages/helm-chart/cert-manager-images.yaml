@@ -1,0 +1,22 @@
+# Digest pins for the bundled cert-manager chart.
+# install.sh and the image inventory render pass this file.
+# The chart prints repository@digest when digest is set.
+image:
+  repository: ghcr.io/dflow-sh/mirror/cert-manager-controller
+  digest: sha256:a07125af5e83ecaa3f48317e79c8fae08f0a36654cec45bf0a3404f651b00387
+webhook:
+  image:
+    repository: ghcr.io/dflow-sh/mirror/cert-manager-webhook
+    digest: sha256:2625754083d5e2d682a4582fd3fab41a0aa79e7c732c90491373c4f3be5e65b7
+cainjector:
+  image:
+    repository: ghcr.io/dflow-sh/mirror/cert-manager-cainjector
+    digest: sha256:eb1df56668b6e61bd902febe816568e7e47f47276121bc0e1222890871c61e50
+acmesolver:
+  image:
+    repository: ghcr.io/dflow-sh/mirror/cert-manager-acmesolver
+    digest: sha256:1b98c49764718e09e54f3752daef616874c177445f0a2b5a07975883c47eda25
+startupapicheck:
+  image:
+    repository: ghcr.io/dflow-sh/mirror/cert-manager-startupapicheck
+    digest: sha256:e51a062513381070f43be0a435b029f5d116d6a3e1340deeb8eace5ca7a8a08f

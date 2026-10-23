@@ -31,7 +31,7 @@ TUNNEL_TOKEN="${DFLOW_TUNNEL_TOKEN:-${CLOUDFLARE_TUNNEL_TOKEN:-${TUNNEL_TOKEN:-}
 LE_STAGING="${DFLOW_LETSENCRYPT_STAGING:-0}"
 SAMPLE_NAMESPACE="${SAMPLE_NAMESPACE:-sample}"
 SAMPLE_APP="${SAMPLE_APP:-hello}"
-SAMPLE_IMAGE="${SAMPLE_IMAGE:-traefik/whoami}"
+SAMPLE_IMAGE="${SAMPLE_IMAGE:-ghcr.io/dflow-sh/mirror/whoami@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44}"
 SAMPLE_ENV="${SAMPLE_ENV:-WHOAMI_PORT_NUMBER=8080}"
 GO_VERSION="${GO_VERSION:-1.26.0}"
 HELM_VERSION="${HELM_VERSION:-v3.17.3}"
@@ -1285,6 +1285,7 @@ install_charts() {
   log "cert-manager"
   helm upgrade --install cert-manager "${ROOT}/packages/helm-chart/charts/cert-manager-v1.19.3.tgz" \
     --namespace cert-manager --create-namespace \
+    --values "${ROOT}/packages/helm-chart/cert-manager-images.yaml" \
     --set crds.enabled=true \
     --timeout 10m \
     || die "cert-manager install failed. Certificate CRDs have to exist before the dFlow chart."

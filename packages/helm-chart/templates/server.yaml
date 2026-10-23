@@ -328,7 +328,7 @@ spec:
             {{- $imageSkopeo := .Values.image.skopeo -}}
             {{- if $imageSkopeo }}
             - name: APP_IMAGE_EXPORTER
-              value: "{{ default $imageSkopeo.registry (include "registry-url" .) }}{{ $imageSkopeo.repository}}:{{ $imageSkopeo.tag }}"
+              value: {{ include "dflow.imageRef" $imageSkopeo | quote }}
             {{- end }}
             {{- if and .Values.seaweedfs.enabled .Values.seaweedfs.tls.enabled .Values.seaweedfs.global.enableSecurity }}
             - name: S3_CERTIFICATE_SECRET

@@ -116,14 +116,14 @@ spec:
       # before the main manifest (and its seed CRs) is applied.
       initContainers:
         - name: apply
-          image: "{{ include "registry-url" . }}{{ .Values.image.kubectl.repository }}:{{ .Values.image.kubectl.tag }}"
+          image: {{ include "dflow.imageRef" .Values.image.kubectl | quote }}
           command: ["kubectl", "apply", "-f", "/crds/"]
           volumeMounts:
             - name: crds
               mountPath: /crds
       containers:
         - name: wait-established
-          image: "{{ include "registry-url" . }}{{ .Values.image.kubectl.repository }}:{{ .Values.image.kubectl.tag }}"
+          image: {{ include "dflow.imageRef" .Values.image.kubectl | quote }}
           command: ["kubectl", "wait", "--for=condition=established", "--timeout=90s", "-f", "/crds/"]
           volumeMounts:
             - name: crds
