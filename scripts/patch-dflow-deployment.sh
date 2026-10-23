@@ -105,7 +105,7 @@ spec:
         claimName: dflow-binary
   containers:
     - name: copier
-      image: busybox:stable
+      image: busybox:1.38.0@sha256:fd7dc98638c8e305f4dc34e979f1c0fdfdcaeb0fbf8fcff77ae834b6da3d7e6e
       command: ["/bin/sh", "-ec", "trap : TERM INT; sleep infinity & wait"]
       volumeMounts:
         - mountPath: "/dflow"
@@ -141,7 +141,7 @@ DFLOW_BINARY_HASH=($(${SHASUM:=shasum} ${DFLOW_BINARY_PATH}))
 
 helper=""
 if [ -n "$GOCOVERDIR" ]; then
-  helper=',{"name": "tools", "image": "alpine", "command": ["/bin/sh", "-ec", "trap : TERM INT; sleep infinity & wait"], "volumeMounts": [{"mountPath": "/tmp", "name": "tmp-volume"}]}'
+  helper=',{"name": "tools", "image": "alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a", "command": ["/bin/sh", "-ec", "trap : TERM INT; sleep infinity & wait"], "volumeMounts": [{"mountPath": "/tmp", "name": "tmp-volume"}]}'
 fi
 
 # Due to PV Multi-Attach Error on AKS the RollingUpdate strategy is needed.
@@ -166,7 +166,7 @@ PATCH=$(cat <<EOF
         }],
         "containers": [{
           "name": "dflow-server",
-          "image": "ghcr.io/dflow-sh/dflow-server:latest",
+          "image": "ghcr.io/dflow-sh/dflow-server:v0.0.4@sha256:6bd9a740ceb0e56d014de9c94578c89daf943aadd7ee26101e71bf0ff976d8b8",
           "command": [
             "/dflow-binary/dflow",
             "server"
