@@ -237,6 +237,15 @@ seaweedfs:
 
 `001` keeps one extra copy on another server. Master data in the upstream chart defaults to a hostPath. Give each master its own disk before raising the replica count. Do this only when three nodes can schedule the anti-affinity rule.
 
+### Pod Security
+
+Platform containers set resource requests and limits, `seccompProfile: RuntimeDefault`, and `capabilities.drop: [ALL]`. Dex, reflector, the registry (nginx and registry), helm-controller, dflow-server, the CRD upgrade Job, and dflow-ui (when enabled) also set `runAsNonRoot`, `allowPrivilegeEscalation: false`, and `readOnlyRootFilesystem: true`.
+
+Two exceptions stay in `packages/helm-chart/values.yaml`:
+
+- SeaweedFS master, volume, filer, and S3 keep hostPath volumes. hostPath fails PodSecurity baseline, so those pods are not baseline and not restricted. `runAsNonRoot` is omitted because the host directories are root-owned. `readOnlyRootFilesystem` is omitted because weed writes that data and those logs.
+- Staging builds are not platform containers. Railpack runs privileged because BuildKit's OCI worker needs nested containers. Buildpack runs as the application uid and gid. Dockerfile mode sets no security context. A restricted context on those jobs would break builds.
+
 ## macOS CLI
 
 Go 1.26 is required. From a checkout on the Mac:

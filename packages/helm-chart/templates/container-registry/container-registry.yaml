@@ -96,6 +96,15 @@ spec:
           runAsNonRoot: true
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+              - ALL
+          seccompProfile:
+            type: RuntimeDefault
+        {{- with .Values.containerregistry.nginxResources }}
+        resources:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
         livenessProbe:
           tcpSocket:
             port: 5000
@@ -142,6 +151,11 @@ spec:
           runAsNonRoot: true
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+              - ALL
+          seccompProfile:
+            type: RuntimeDefault
         livenessProbe:
           httpGet:
             port: 5000
