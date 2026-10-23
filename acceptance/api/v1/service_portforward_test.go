@@ -12,8 +12,8 @@
 package v1_test
 
 import (
-	"crypto/tls"
 	"bufio"
+	"crypto/tls"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -71,7 +71,7 @@ var _ = Describe("ServicePortForward Endpoint", LService, func() {
 			BeforeEach(func() {
 				serviceName = catalog.NewServiceName()
 
-				out, err := env.dFlow("", "service", "create",
+				out, err := env.DFlow("", "service", "create",
 					catalogService.Meta.Name, serviceName,
 					"--chart-value", "ingress.enabled=true",
 					"--chart-value", "ingress.hostname="+catalogServiceHostname)
@@ -81,10 +81,10 @@ var _ = Describe("ServicePortForward Endpoint", LService, func() {
 				//TODO: Create/reuse function to parse hostnames when port and http/https is set, also use env var for port
 				Eventually(func() int {
 					tr := &http.Transport{
-						TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, 
+						TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 					}
 					noTlsClient := &http.Client{Transport: tr}
-					
+
 					resp, err := noTlsClient.Get(catalogServiceURL)
 					if err != nil {
 						return 0

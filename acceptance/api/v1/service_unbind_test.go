@@ -68,9 +68,9 @@ var _ = Describe("ServiceUnbind Endpoint", LService, func() {
 		catalog.CreateService(serviceName, namespace, catalogService)
 
 		// Bind the service to the app
-		out, err := env.dFlow("", "service", "bind", serviceName, app)
+		out, err := env.DFlow("", "service", "bind", serviceName, app)
 		Expect(err).ToNot(HaveOccurred(), out)
-		out, err = env.dFlow("", "app", "show", app)
+		out, err = env.DFlow("", "app", "show", app)
 		Expect(err).ToNot(HaveOccurred(), out)
 		matchString := fmt.Sprintf("Bound Configurations.*%s", chartName)
 		Expect(out).To(MatchRegexp(matchString))
@@ -92,7 +92,7 @@ var _ = Describe("ServiceUnbind Endpoint", LService, func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(response).ToNot(BeNil())
 
-		appShowOut, err := env.dFlow("", "app", "show", app)
+		appShowOut, err := env.DFlow("", "app", "show", app)
 		Expect(err).ToNot(HaveOccurred())
 		matchString := fmt.Sprintf("Bound Configurations.*%s", chartName)
 		Expect(appShowOut).ToNot(MatchRegexp(matchString))
@@ -100,7 +100,7 @@ var _ = Describe("ServiceUnbind Endpoint", LService, func() {
 
 	It("Unbinds service with multiple configurations in one operation (batching optimization)", func() {
 		By("verifying the service is bound")
-		out, err := env.dFlow("", "app", "show", app)
+		out, err := env.DFlow("", "app", "show", app)
 		Expect(err).ToNot(HaveOccurred(), out)
 		matchString := fmt.Sprintf("Bound Configurations.*%s", chartName)
 		Expect(out).To(MatchRegexp(matchString))
@@ -125,7 +125,7 @@ var _ = Describe("ServiceUnbind Endpoint", LService, func() {
 
 		By("verifying the service is unbound")
 		Eventually(func() string {
-			appShowOut, err := env.dFlow("", "app", "show", app)
+			appShowOut, err := env.DFlow("", "app", "show", app)
 			Expect(err).ToNot(HaveOccurred())
 			return appShowOut
 		}, "30s").ShouldNot(MatchRegexp(matchString))
@@ -140,7 +140,7 @@ var _ = Describe("ServiceUnbind Endpoint", LService, func() {
 		By("verifying app is healthy after unbind")
 		var lastAppShowOut string
 		Eventually(func() string {
-			out, err := env.dFlow("", "app", "show", app)
+			out, err := env.DFlow("", "app", "show", app)
 			Expect(err).ToNot(HaveOccurred())
 			lastAppShowOut = out
 			return out

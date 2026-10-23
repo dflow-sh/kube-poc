@@ -70,7 +70,37 @@ https://github.com/dflow-sh/kube-poc/releases/download/<tag>/dflow-<os>-<arch>
 https://github.com/dflow-sh/kube-poc/releases/download/<tag>/checksums.txt
 ```
 
-Published names are `install.sh`, `dflow-linux-amd64`, `dflow-linux-arm64`, `dflow-darwin-amd64`, `dflow-darwin-arm64`, and `checksums.txt`. Tag `v0.0.4` publishes `dflow-0.0.4.tgz` and the four CLI binaries. It does not publish `install.sh`.
+Published names are `install.sh`, `dflow-linux-amd64`, `dflow-linux-arm64`, `dflow-darwin-amd64`, `dflow-darwin-arm64`, `checksums.txt`, an SPDX SBOM for each CLI binary (`dflow-<os>-<arch>.spdx.json`), and the chart `dflow-<version>.tgz`. `checksums.txt` lists the CLI binaries, the chart tarball, and `install.sh`. Keyless Sigstore bundles (`<name>.sigstore.json`) are published for the signed blobs, including `checksums.txt`. The chart and `install.sh` do not have their own `.sigstore.json`; check them with the checksum file. The server image is signed in the registry. Tag `v0.0.4` publishes `dflow-0.0.4.tgz` and the four CLI binaries. It does not publish `install.sh`, SBOMs, or signatures.
+
+Verify a release with cosign 3. Replace the tag. The identity is the GitHub Actions workflow that ran for that tag, and the issuer is GitHub's OIDC token endpoint. No signing key is stored in the repository.
+
+```bash
+tag=v0.1.0
+base="https://github.com/dflow-sh/kube-poc/releases/download/${tag}"
+curl -fsSL -o checksums.txt "${base}/checksums.txt"
+curl -fsSL -o checksums.txt.sigstore.json "${base}/checksums.txt.sigstore.json"
+cosign verify-blob \
+  --bundle checksums.txt.sigstore.json \
+  --certificate-identity "https://github.com/dflow-sh/kube-poc/.github/workflows/release.yml@refs/tags/${tag}" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  checksums.txt
+```
+
+That verifies `checksums.txt`. Then check the chart tarball and `install.sh` against the signed checksum file. There is no `dflow-0.1.0.tgz.sigstore.json`. Use `sha256sum` on Linux or `shasum` on macOS:
+
+```bash
+sha256sum -c checksums.txt --ignore-missing
+shasum -a 256 -c checksums.txt --ignore-missing
+```
+
+Verify the server image with the same identity. Image signing is proven when `v0.1.0` is published, not from a local snapshot, because keyless `cosign sign` runs in the tag workflow.
+
+```bash
+cosign verify \
+  --certificate-identity "https://github.com/dflow-sh/kube-poc/.github/workflows/release.yml@refs/tags/${tag}" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  "ghcr.io/dflow-sh/dflow-server:${tag}"
+```
 
 Install the CLI with the command in [Install the CLI](#install-the-cli). From a checkout, `./scripts/install-cli.sh` installs `dflow` to `/usr/local/bin` and can log in and run the sample push. `sudo dflow upgrade` replaces that binary and then helm-upgrades the server to the same tag. `sudo dflow upgrade --cli-only` replaces only the CLI. `sudo ./scripts/update.sh` upgrades and then runs the install self-test. `make dflow` writes `dist/dflow`.
 

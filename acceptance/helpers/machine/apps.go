@@ -32,14 +32,14 @@ func (m *Machine) MakeApp(appName string, instances int, deployFromCurrentDir bo
 func (m *Machine) MakeContainerImageApp(appName string, instances int, containerImageURL string) string {
 	By("making a container app: " + appName)
 
-	pushOutput, err := m.dFlow("", "apps", "push",
+	pushOutput, err := m.DFlow("", "apps", "push",
 		"--name", appName,
 		"--container-image-url", containerImageURL,
 		"--instances", strconv.Itoa(instances))
 	ExpectWithOffset(1, err).ToNot(HaveOccurred(), pushOutput)
 
 	EventuallyWithOffset(1, func() string {
-		out, err := m.dFlow("", "app", "list")
+		out, err := m.DFlow("", "app", "list")
 		Expect(err).ToNot(HaveOccurred(), out)
 		return out
 	}, "8m", "10s").Should(MatchRegexp(fmt.Sprintf(`%s.*\|.*%d\/%d.*\|.*`, appName, instances, instances)))
@@ -50,7 +50,7 @@ func (m *Machine) MakeContainerImageApp(appName string, instances int, container
 func (m *Machine) MakeRoutedContainerImageApp(appName string, instances int, containerImageURL, route string, more ...string) string {
 	By("making a routed container app: " + appName)
 
-	pushOutput, err := m.dFlow("", "apps", append([]string{
+	pushOutput, err := m.DFlow("", "apps", append([]string{
 		"push",
 		"--name", appName,
 		"--route", route,
@@ -60,7 +60,7 @@ func (m *Machine) MakeRoutedContainerImageApp(appName string, instances int, con
 	ExpectWithOffset(1, err).ToNot(HaveOccurred(), pushOutput)
 
 	EventuallyWithOffset(1, func() string {
-		out, err := m.dFlow("", "app", "list")
+		out, err := m.DFlow("", "app", "list")
 		Expect(err).ToNot(HaveOccurred(), out)
 		return out
 	}, "8m", "10s").Should(MatchRegexp(fmt.Sprintf(`%s.*\|.*%d\/%d.*\|.*`, appName, instances, instances)))
@@ -106,7 +106,7 @@ func (m *Machine) MakeAppWithDir(appName string, instances int, deployFromCurren
 	// Check presence if necessary, i.e. expected to be present
 	if instances > 0 {
 		Eventually(func() string {
-			out, err := m.dFlow("", "app", "list")
+			out, err := m.DFlow("", "app", "list")
 			Expect(err).ToNot(HaveOccurred(), out)
 			return out
 		}, "8m", "10s").Should(MatchRegexp(fmt.Sprintf(`%s.*\|.*%d\/%d.*\|.*`, appName, instances, instances)))
@@ -133,7 +133,7 @@ func (m *Machine) MakeAppWithDirSimple(appName string, deployFromCurrentDir bool
 
 	// And check presence
 	EventuallyWithOffset(1, func() string {
-		out, err := m.dFlow("", "app", "list")
+		out, err := m.DFlow("", "app", "list")
 		Expect(err).ToNot(HaveOccurred(), out)
 		return out
 	}, "8m", "10s").Should(MatchRegexp(fmt.Sprintf(`%s.*\|.*\/.*\|.*`, appName)))
@@ -144,18 +144,18 @@ func (m *Machine) MakeAppWithDirSimple(appName string, deployFromCurrentDir bool
 func (m *Machine) DeleteApp(appName string) {
 	By("deleting app " + appName)
 
-	out, err := m.dFlow("", "app", "delete", appName)
+	out, err := m.DFlow("", "app", "delete", appName)
 	ExpectWithOffset(1, err).ToNot(HaveOccurred(), out)
 
 	EventuallyWithOffset(1, func() string {
-		out, err := m.dFlow("", "app", "list")
+		out, err := m.DFlow("", "app", "list")
 		Expect(err).ToNot(HaveOccurred(), out)
 		return out
 	}, "1m").ShouldNot(MatchRegexp(`.*%s.*`, appName))
 }
 
 func (m *Machine) CleanupApp(appName string) {
-	out, err := m.dFlow("", "app", "delete", appName)
+	out, err := m.DFlow("", "app", "delete", appName)
 	if err != nil {
 		fmt.Printf("deleting app failed : %s\n%s", err.Error(), out)
 	}

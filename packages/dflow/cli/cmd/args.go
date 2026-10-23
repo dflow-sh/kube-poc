@@ -13,7 +13,6 @@ package cmd
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/dflow-sh/kube-poc/packages/dflow/api/v1/application"
@@ -472,8 +471,7 @@ func routeOption(cmd *cobra.Command) {
 // bindOption initializes the --bind/-b option for the provided command
 func bindOption(cmd *cobra.Command, client ApplicationsService) {
 	cmd.Flags().StringSliceP("bind", "b", []string{}, "configurations to bind immediately")
-	// nolint:errcheck // Unable to handle error in init block this will be called from
-	regFlagCompError := cmd.RegisterFlagCompletionFunc("bind",
+	bindFlagCompletionFunc(cmd, "bind",
 		func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 			// `cmd`, `args` are ignored.  `toComplete` is the option value entered so far.
 			//
@@ -504,8 +502,6 @@ func bindOption(cmd *cobra.Command, client ApplicationsService) {
 
 			return matches, cobra.ShellCompDirectiveDefault
 		})
-
-	fmt.Sprintf("Error occurred regisering flag completion function %s", regFlagCompError)
 }
 
 // envOption initializes the --env/-e option for the provided command

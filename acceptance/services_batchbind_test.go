@@ -57,7 +57,7 @@ var _ = Describe("Service Batch Binding (CLI)", LService, func() {
 
 		It("binds a single service using old format: SERVICE APP", func() {
 			// Old format: dflow service bind SERVICE APP
-			out, err := env.dFlow("", "service", "bind", service1, appName)
+			out, err := env.DFlow("", "service", "bind", service1, appName)
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			// Verify service is bound
@@ -96,7 +96,7 @@ var _ = Describe("Service Batch Binding (CLI)", LService, func() {
 
 		It("binds multiple services using new batch format: APP SERVICE1 SERVICE2 SERVICE3", func() {
 			// New batch format: dflow service bind APP SERVICE1 SERVICE2 SERVICE3
-			out, err := env.dFlow("", "service", "bind", appName, service1, service2, service3)
+			out, err := env.DFlow("", "service", "bind", appName, service1, service2, service3)
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			// Verify all services are bound
@@ -106,7 +106,7 @@ var _ = Describe("Service Batch Binding (CLI)", LService, func() {
 
 		It("binds two services in batch", func() {
 			// New batch format with 2 services
-			out, err := env.dFlow("", "service", "bind", appName, service1, service2)
+			out, err := env.DFlow("", "service", "bind", appName, service1, service2)
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			// Verify both services are bound
@@ -116,7 +116,7 @@ var _ = Describe("Service Batch Binding (CLI)", LService, func() {
 
 		It("binds services from different catalogs", func() {
 			// Mix nginx and redis services
-			out, err := env.dFlow("", "service", "bind", appName, service1, service3)
+			out, err := env.DFlow("", "service", "bind", appName, service1, service3)
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			// Verify both services are bound
@@ -126,7 +126,7 @@ var _ = Describe("Service Batch Binding (CLI)", LService, func() {
 
 		It("returns error when application doesn't exist", func() {
 			nonExistentApp := "nonexistent-app"
-			out, err := env.dFlow("", "service", "bind", nonExistentApp, service1, service2)
+			out, err := env.DFlow("", "service", "bind", nonExistentApp, service1, service2)
 			Expect(err).To(HaveOccurred())
 			// The API returns e.g. "application '<name>' does not exist" (404).
 			// Accept both legacy and current wording.
@@ -138,7 +138,7 @@ var _ = Describe("Service Batch Binding (CLI)", LService, func() {
 
 		It("returns error when a service doesn't exist", func() {
 			nonExistentService := "nonexistent-service"
-			out, err := env.dFlow("", "service", "bind", appName, service1, nonExistentService)
+			out, err := env.DFlow("", "service", "bind", appName, service1, nonExistentService)
 			Expect(err).To(HaveOccurred())
 			// The API returns: "service '<name>' does not exist" (404).
 			// Keep a loose match to avoid brittleness across server/CLI versions.
@@ -171,7 +171,7 @@ var _ = Describe("Service Batch Binding (CLI)", LService, func() {
 
 		It("old format still works with 2 args (SERVICE APP)", func() {
 			// Old format: SERVICE APP
-			out, err := env.dFlow("", "service", "bind", service1, appName)
+			out, err := env.DFlow("", "service", "bind", service1, appName)
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			appInfo := env.ShowApp(appName, namespace)
@@ -180,7 +180,7 @@ var _ = Describe("Service Batch Binding (CLI)", LService, func() {
 
 		It("new format works with 3+ args (APP SERVICE1 SERVICE2...)", func() {
 			// New format: APP SERVICE1 SERVICE2
-			out, err := env.dFlow("", "service", "bind", appName, service1, service2)
+			out, err := env.DFlow("", "service", "bind", appName, service1, service2)
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			appInfo := env.ShowApp(appName, namespace)
@@ -189,13 +189,13 @@ var _ = Describe("Service Batch Binding (CLI)", LService, func() {
 
 		It("can bind additional services after initial binding", func() {
 			// First bind one service with old format
-			out, err := env.dFlow("", "service", "bind", service1, appName)
+			out, err := env.DFlow("", "service", "bind", service1, appName)
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			// Then bind another with new format.
 			// Note: `dflow service bind` treats exactly 2 args as the old format
 			// (SERVICE APP). Therefore use 3+ args here to force the batch mode.
-			out, err = env.dFlow("", "service", "bind", appName, service1, service2)
+			out, err = env.DFlow("", "service", "bind", appName, service1, service2)
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			// Verify both are bound

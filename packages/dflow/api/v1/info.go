@@ -23,7 +23,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	. "github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/errors"
+	apierror "github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/errors"
 )
 
 const VersionHeader = "dflow-version"
@@ -31,31 +31,31 @@ const DexPEMPath = "/etc/ssl/certs/dex-tls.pem"
 
 // Info handles the API endpoint /info.  It returns version
 // information for various dflow components.
-func Info(c *gin.Context) APIErrors {
+func Info(c *gin.Context) apierror.APIErrors {
 	ctx := c.Request.Context()
 
 	cluster, err := kubernetes.GetCluster(ctx)
 	if err != nil {
-		return InternalError(err)
+		return apierror.InternalError(err)
 	}
 
 	kubeVersion, err := cluster.GetVersion()
 	if err != nil {
-		return InternalError(err)
+		return apierror.InternalError(err)
 	}
 
 	platform := cluster.GetPlatform()
 
 	builderImageClient, err := cluster.ClientBuilderImage()
 	if err != nil {
-		return InternalError(err)
+		return apierror.InternalError(err)
 	}
 
 	// builderimage.Default returns nil (no error) when listing is forbidden,
 	// so we fall back to DEFAULT_BUILDER_IMAGE in that case as well.
 	defaultBuilder, err := builderimage.Default(ctx, builderImageClient)
 	if err != nil {
-		return InternalError(err)
+		return apierror.InternalError(err)
 	}
 
 	fromCustomResource := ""

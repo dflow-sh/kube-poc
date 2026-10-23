@@ -7,7 +7,10 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CLUSTER="${CLUSTER:-dflow}"
 DOMAIN="${DOMAIN:-127.0.0.1.sslip.io}"
 IMAGE="${IMAGE:-ghcr.io/dflow-sh/dflow-server:v0.0.0-dev}"
-PASSWORD="${PASSWORD:-password}"
+if [[ -z "${PASSWORD:-}" ]]; then
+  PASSWORD="$(openssl rand -hex 24)"
+  echo "generated admin password; Secret dflow-generated-passwords stores the same value"
+fi
 NS="${NS:-sample}"
 APP="${APP:-hello}"
 SAMPLE_IMAGE="${SAMPLE_IMAGE:-docker.io/traefik/whoami:v1.12.0@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44}"

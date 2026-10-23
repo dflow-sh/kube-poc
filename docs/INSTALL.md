@@ -237,6 +237,15 @@ seaweedfs:
 
 `001` keeps one extra copy on another server. Master data in the upstream chart defaults to a hostPath. Give each master its own disk before raising the replica count. Do this only when three nodes can schedule the anti-affinity rule.
 
+### Pod Security
+
+Platform containers set resource requests and limits, `seccompProfile: RuntimeDefault`, and `capabilities.drop: [ALL]`. Dex, reflector, the registry (nginx and registry), helm-controller, dflow-server, the CRD upgrade Job, and dflow-ui (when enabled) also set `runAsNonRoot`, `allowPrivilegeEscalation: false`, and `readOnlyRootFilesystem: true`.
+
+Two exceptions stay in `packages/helm-chart/values.yaml`:
+
+- SeaweedFS master, volume, filer, and S3 keep hostPath volumes. hostPath fails PodSecurity baseline, so those pods are not baseline and not restricted. `runAsNonRoot` is omitted because the host directories are root-owned. `readOnlyRootFilesystem` is omitted because weed writes that data and those logs.
+- Staging builds are not platform containers. Railpack runs privileged because BuildKit's OCI worker needs nested containers. Buildpack runs as the application uid and gid. Dockerfile mode sets no security context. A restricted context on those jobs would break builds.
+
 ## macOS CLI
 
 Go 1.26 is required. From a checkout on the Mac:
@@ -245,10 +254,10 @@ Go 1.26 is required. From a checkout on the Mac:
 make dflow
 sudo install -m 0755 dist/dflow /usr/local/bin/dflow
 dflow version
-dflow login -u admin -p 'password' --trust-ca "https://dflow.<domain>"
+dflow login -u admin -p '<admin-password>' --trust-ca "https://dflow.<domain>"
 ```
 
-`<domain>` and the password are what `scripts/install.sh` printed. `password` is the default. Drop `--trust-ca` when the installer used Let's Encrypt production (`letsencrypt-production`). Keep it for `dflow-ca` and for `letsencrypt-staging`.
+`<domain>` and the admin password are what `scripts/install.sh` printed. The password is random unless you passed `--admin-password`. Read it again with `kubectl -n dflow get secret dflow-generated-passwords -o jsonpath='{.data.adminPassword}' | base64 -d`. Drop `--trust-ca` when the installer used Let's Encrypt production (`letsencrypt-production`). Keep it for `dflow-ca` and for `letsencrypt-staging`.
 
 The same push as the server self-test. `traefik/whoami` listens on `WHOAMI_PORT_NUMBER`, which defaults to 80. The app chart routes to port 8080, so the push sets that variable:
 
@@ -294,10 +303,40 @@ From a Mac or Linux checkout, this installs the matching binary to `/usr/local/b
 ./scripts/install-cli.sh \
   --api "https://dflow.<domain>" \
   --user admin \
-  --password 'password'
+  --password '<admin-password>'
 ```
 
-`<domain>` and the password are what `scripts/install.sh` printed on the server. The script downloads `dflow-darwin-arm64`, `dflow-darwin-amd64`, `dflow-linux-arm64`, or `dflow-linux-amd64` from the public GitHub Release and requires a matching line in `checksums.txt`. If that asset cannot be downloaded, the script exits non-zero. `--from-checkout` runs `go build` from the checkout (Go 1.26). `--version vX.Y.Z` selects that tag instead of the latest release.
+`<domain>` and the admin password are what `scripts/install.sh` printed on the server. `--user` and `--password` are `dflow login -u` and `-p`. The script downloads `dflow-darwin-arm64`, `dflow-darwin-amd64`, `dflow-linux-arm64`, or `dflow-linux-amd64` from the public GitHub Release and requires a matching line in `checksums.txt`. If that asset cannot be downloaded, the script exits non-zero. `--from-checkout` runs `go build` from the checkout (Go 1.26). `--version vX.Y.Z` selects that tag instead of the latest release.
+
+To check a release, download `checksums.txt` and `checksums.txt.sigstore.json`. Verify that signature, then check the chart tarball, `install.sh`, and the CLI binaries against `checksums.txt`. Those files do not have their own `.sigstore.json`. cosign 3.1.4 `verify-blob` takes `--bundle`, `--certificate-identity`, and `--certificate-oidc-issuer` (there is no separate certificate flag). The identity is this repository's release workflow at the tag, and the issuer is GitHub Actions OIDC:
+
+```bash
+tag=v0.1.0
+base="https://github.com/dflow-sh/kube-poc/releases/download/${tag}"
+curl -fsSL -o checksums.txt "${base}/checksums.txt"
+curl -fsSL -o checksums.txt.sigstore.json "${base}/checksums.txt.sigstore.json"
+cosign verify-blob \
+  --bundle checksums.txt.sigstore.json \
+  --certificate-identity "https://github.com/dflow-sh/kube-poc/.github/workflows/release.yml@refs/tags/${tag}" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  checksums.txt
+```
+
+That checks the signature on `checksums.txt`. The chart tarball and `install.sh` are lines in that file. They do not have their own `.sigstore.json`. After the signature check, use `sha256sum` on Linux or `shasum` on macOS:
+
+```bash
+sha256sum -c checksums.txt --ignore-missing
+shasum -a 256 -c checksums.txt --ignore-missing
+```
+
+Verify the server image with `cosign verify` (not `verify-blob`) and the same identity. `cosign sign` in the release workflow uses `--yes` and `--oidc-provider=github-actions` and signs `${artifact}@${digest}`. That signature exists only after the `v*` workflow runs, so the image check is proven when `v0.1.0` is tagged.
+
+```bash
+cosign verify \
+  --certificate-identity "https://github.com/dflow-sh/kube-poc/.github/workflows/release.yml@refs/tags/${tag}" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  "ghcr.io/dflow-sh/dflow-server:${tag}"
+```
 
 Without `--api` the binary is still installed and the script prints the login and push commands instead of running them.
 
@@ -329,9 +368,9 @@ sudo dflow upgrade --dry-run
 
 `--dry-run` prints the asset URL and the helm command. `--cli-only` does not touch the cluster. `--server-only` does not replace the CLI.
 
-`dflow upgrade` does not install k3s, cert-manager, or Traefik, does not change the saved domain or admin password, and does not run the login and sample-push self-test. A machine that cannot read `/etc/rancher/k3s/k3s.yaml` (or `KUBECONFIG`) stops after the CLI step and tells you to run `sudo ./scripts/update.sh <tag>` on the server.
+`dflow upgrade` does not install k3s, cert-manager, or Traefik, and does not run the login and sample-push self-test. A saved admin password other than `password` or `changeme` is left unchanged. Those two old defaults are replaced. Dex is restarted, and the command prints the `kubectl` command that reads the new password from Secret `dflow-generated-passwords`. It does not print the password. When the Dex checksum annotation is missing, Dex is restarted so it loads the current password. A machine that cannot read `/etc/rancher/k3s/k3s.yaml` (or `KUBECONFIG`) stops after the CLI step and tells you to run `sudo ./scripts/update.sh <tag>` on the server.
 
-`scripts/update.sh` replaces `/usr/local/bin/dflow` from the same release, then runs the helm upgrade, waits until `dflow-server` is ready, and repeats the API health check and the CLI self-test (login, push `traefik/whoami` as `dflow-install-check`, curl expecting HTTP 200, delete, confirm that namespace is gone). An existing app on another name, including `hello.<domain>`, is left in place. If `dflow-install-check` or its route is already in use, the smoke push is skipped and that app is left in place.
+`scripts/update.sh` replaces `/usr/local/bin/dflow` from the same release, then runs the helm upgrade, waits until `dflow-server` is ready, and repeats the API health check and the CLI self-test (login, push `traefik/whoami` as `dflow-install-check`, curl expecting HTTP 200, delete, confirm that namespace is gone). A saved admin password of `password` or `changeme` is replaced. The script prints the `kubectl` command that reads the new password from Secret `dflow-generated-passwords` and does not print the password. An existing app on another name, including `hello.<domain>`, is left in place. If `dflow-install-check` or its route is already in use, the smoke push is skipped and that app is left in place.
 
 ```bash
 sudo ./scripts/update.sh v0.0.4
@@ -418,7 +457,7 @@ sslip.io needs no DNS account. With the same IP and `--domain auto`:
 
 `sslip.io` answers for that name and for `*.203.0.113.10.sslip.io`.
 
-Change the default admin password before the host is reachable on the internet. The chart default user is `admin` / `password`.
+The installer generates the admin password and stores it in Secret `dflow-generated-passwords`. A second run keeps that value. A saved `ADMIN_PASSWORD` of `password` or `changeme` is an old default: `scripts/install.sh` and `scripts/update.sh` replace it, print a warning, and the old password stops working. Pass `--admin-password` to set or rotate it. The installer sets a checksum annotation on Dex to the sha256 of the admin password's bcrypt hash, so the Deployment rolls when that hash changes. The `dflow` user is the `dflowPassword` key in the same Secret. Dex users `admin@dflow.sh` and `dflow@dflow.sh` use those two passwords. The registry password is the `registryPassword` key in the same Secret. `changeme` is not a registry password. NodePort 30500 uses the generated value. Pass `--registry-password` to set or rotate it. `helm uninstall` leaves Secret `dflow-generated-passwords` in place.
 
 ## Tools on the machine
 

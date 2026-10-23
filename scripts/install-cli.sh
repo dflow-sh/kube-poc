@@ -14,7 +14,7 @@ REQUESTED=""
 usage() {
   cat <<'EOF'
 Usage:
-  ./scripts/install-cli.sh --api https://dflow.<domain> --user admin --password 'password'
+  ./scripts/install-cli.sh --api https://dflow.<domain> --user admin --password '<admin-password>'
   ./scripts/install-cli.sh --api https://paas.dflow.sh --apps-domain apps.dflow.sh
   ./scripts/install-cli.sh --version v0.0.4 --api https://dflow.<domain>
   ./scripts/install-cli.sh --from-checkout
@@ -139,6 +139,9 @@ else
   die "pass --apps-domain when the API host is not dflow.<apps-domain>"
 fi
 DOMAIN="$APPS_BASE"
+if [[ -z "${ADMIN_PASSWORD:-}" ]]; then
+  die "--password is required with --api. Read it with: kubectl -n dflow get secret dflow-generated-passwords -o jsonpath='{.data.adminPassword}' | base64 -d"
+fi
 export PATH="/usr/local/bin:${PATH}"
 self_test
 log "CLI installed at /usr/local/bin/dflow and the sample push against ${API} passed"

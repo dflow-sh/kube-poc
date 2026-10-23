@@ -1,4 +1,6 @@
 {{- if .Values.global.dex.enabled -}}
+{{- include "dflow.ensureGeneratedCredentials" . -}}
+{{- $cred := index . "dflowGeneratedCredentials" -}}
 
 {{- if .Values.dex.manageConfigSecret -}}
 {{- $dexConfigSecretName := .Values.dex.configSecret.name | default "dex-config" -}}
@@ -62,12 +64,12 @@ stringData:
 {{- else }}
     staticPasswords:
     - email: "admin@dflow.sh"
-      # bcrypt hash of the string "password": $(echo password | htpasswd -BinC 10 admin | cut -d: -f2)
-      hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
+      hash: {{ index $cred "adminPasswordBcrypt" | quote }}
       username: "admin"
       userID: "08a8684b-db88-4b73-90a9-3cd1661f5466"
     - email: "dflow@dflow.sh"
-      hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
+      hash: {{ index $cred "dflowPasswordBcrypt" | quote }}
+      username: "dflow"
       userID: "08a8684b-db88-4b73-90a9-3cd1661f5467"
 {{- end }}
 
@@ -111,6 +113,8 @@ stringData:
 {{- toYaml . | nindent 4 }}
 {{- end }}
 {{- end }}
+{{- /* The admin@ API user exists only for the generated static passwords. A list, including [], replaces them. */}}
+{{- if not (kindIs "slice" .Values.dex.staticPasswords) }}
 ---
 apiVersion: v1
 kind: Secret
@@ -124,7 +128,8 @@ metadata:
     dflow.sh/roles: "admin"
 stringData:
   username: "admin@dflow.sh"
-  password: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
+  password: {{ index $cred "adminPasswordBcrypt" | quote }}
+{{- end }}
 
 ---
 # TODO (Future):  Remove this custom resource and leverage Dex Helm chart values instead

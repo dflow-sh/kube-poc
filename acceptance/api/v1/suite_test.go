@@ -61,9 +61,13 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 	globalSettings, err := settings.LoadFrom(testenv.DFlowYAML())
 	Expect(err).NotTo(HaveOccurred())
 
-	adminToken, err := auth.GetToken(globalSettings.API, "admin@dflow.sh", "password")
+	adminPassword, err := testenv.GeneratedCredential("adminPassword")
 	Expect(err).NotTo(HaveOccurred())
-	userToken, err := auth.GetToken(globalSettings.API, "dflow@dflow.sh", "password")
+	userPassword, err := testenv.GeneratedCredential("dflowPassword")
+	Expect(err).NotTo(HaveOccurred())
+	adminToken, err := auth.GetToken(globalSettings.API, "admin@dflow.sh", adminPassword)
+	Expect(err).NotTo(HaveOccurred())
+	userToken, err := auth.GetToken(globalSettings.API, "dflow@dflow.sh", userPassword)
 	Expect(err).NotTo(HaveOccurred())
 
 	msg, err := json.Marshal(BeforeSuiteMessage{
