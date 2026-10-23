@@ -1,9 +1,10 @@
-{{- $networkPolicy := .Values.seaweedfs.networkPolicy | default dict -}}
-{{- $networkPolicyEnabled := true -}}
-{{- if hasKey $networkPolicy "enabled" -}}
-{{- $networkPolicyEnabled = index $networkPolicy "enabled" -}}
+{{- /* Parent-only gate. seaweedfs.networkPolicy belongs to the subchart and must stay off. */ -}}
+{{- $ingressPolicy := .Values.seaweedfsIngressPolicy | default dict -}}
+{{- $ingressPolicyEnabled := true -}}
+{{- if hasKey $ingressPolicy "enabled" -}}
+{{- $ingressPolicyEnabled = index $ingressPolicy "enabled" -}}
 {{- end -}}
-{{- if and .Values.seaweedfs.enabled $networkPolicyEnabled }}
+{{- if and .Values.seaweedfs.enabled $ingressPolicyEnabled }}
 {{- $master := .Values.seaweedfs.master | default dict -}}
 {{- $volume := .Values.seaweedfs.volume | default dict -}}
 {{- $filer := .Values.seaweedfs.filer | default dict -}}
