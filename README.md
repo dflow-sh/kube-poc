@@ -75,7 +75,7 @@ Published names are `install.sh`, `dflow-linux-amd64`, `dflow-linux-arm64`, `dfl
 Verify a release with cosign 3. Replace the tag. The identity is the GitHub Actions workflow that ran for that tag, and the issuer is GitHub's OIDC token endpoint. No signing key is stored in the repository.
 
 ```bash
-tag=v0.0.5
+tag=v0.1.0
 base="https://github.com/dflow-sh/kube-poc/releases/download/${tag}"
 curl -fsSL -o checksums.txt "${base}/checksums.txt"
 curl -fsSL -o checksums.txt.sigstore.json "${base}/checksums.txt.sigstore.json"
@@ -86,7 +86,7 @@ cosign verify-blob \
   checksums.txt
 ```
 
-The same command verifies `dflow-linux-amd64` and `dflow-0.0.5.tgz`: download the file and its `.sigstore.json`, then pass the file as the last argument and the bundle to `--bundle`. `checksums.txt` includes the chart tarball. Signature verification needs the GitHub OIDC token from the tag workflow, so it is proven when `v0.0.5` is published, not from a local snapshot.
+The same command verifies `dflow-linux-amd64` and `dflow-0.1.0.tgz`: download the file and its `.sigstore.json`, then pass the file as the last argument and the bundle to `--bundle`. `checksums.txt` includes the chart tarball. Signature verification needs the GitHub OIDC token from the tag workflow, so it is proven when `v0.1.0` is published, not from a local snapshot.
 
 Install the CLI with the command in [Install the CLI](#install-the-cli). From a checkout, `./scripts/install-cli.sh` installs `dflow` to `/usr/local/bin` and can log in and run the sample push. `sudo dflow upgrade` replaces that binary and then helm-upgrades the server to the same tag. `sudo dflow upgrade --cli-only` replaces only the CLI. `sudo ./scripts/update.sh` upgrades and then runs the install self-test. `make dflow` writes `dist/dflow`.
 

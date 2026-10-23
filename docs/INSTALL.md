@@ -311,7 +311,7 @@ From a Mac or Linux checkout, this installs the matching binary to `/usr/local/b
 To check the signature on `checksums.txt`, a CLI binary, or the chart tarball, download that file and the matching `.sigstore.json`. cosign 3.1.4 `verify-blob` takes `--bundle`, `--certificate-identity`, and `--certificate-oidc-issuer` (there is no separate certificate flag). The identity is this repository's release workflow at the tag, and the issuer is GitHub Actions OIDC:
 
 ```bash
-tag=v0.0.5
+tag=v0.1.0
 base="https://github.com/dflow-sh/kube-poc/releases/download/${tag}"
 curl -fsSL -o checksums.txt "${base}/checksums.txt"
 curl -fsSL -o checksums.txt.sigstore.json "${base}/checksums.txt.sigstore.json"
@@ -322,7 +322,7 @@ cosign verify-blob \
   checksums.txt
 ```
 
-Use the same flags for `dflow-linux-amd64` or `dflow-0.0.5.tgz`. `checksums.txt` lists the chart tarball. The release workflow signs with keyless cosign (`sign-blob --bundle`, no `--key`) and publishes each bundle. That signature exists only after the `v*` workflow runs, so the check is proven when `v0.0.5` is tagged.
+Use the same flags for `dflow-linux-amd64` or `dflow-0.1.0.tgz`. `checksums.txt` lists the chart tarball. The release workflow signs with keyless cosign (`sign-blob --bundle`, no `--key`) and publishes each bundle. That signature exists only after the `v*` workflow runs, so the check is proven when `v0.1.0` is tagged.
 
 Without `--api` the binary is still installed and the script prints the login and push commands instead of running them.
 
