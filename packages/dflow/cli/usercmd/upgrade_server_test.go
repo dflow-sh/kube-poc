@@ -125,6 +125,30 @@ func TestServerUpgradeHelmCommand(t *testing.T) {
 			t.Fatalf("steady values restarted dex: %s", call)
 		}
 	}
+	info, err := os.Stat(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %o", info.Mode().Perm())
+	}
+	if err := restrictValuesFile(values); err != nil {
+		t.Fatal(err)
+	}
+	info, err = os.Stat(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("second mode = %o", info.Mode().Perm())
+	}
+	saved, err := os.ReadFile(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(saved), "kept-secret") {
+		t.Fatalf("steady password changed: %s", saved)
+	}
 }
 
 func TestUpgradeReplacesDefaultAndRollsDex(t *testing.T) {
@@ -211,7 +235,7 @@ func TestUpgradeReplacesDefaultAndRollsDex(t *testing.T) {
 
 func TestUpgradeDryRunWarnsWithoutHelm(t *testing.T) {
 	values := filepath.Join(t.TempDir(), "values.yaml")
-	if err := os.WriteFile(values, []byte("api:\n  adminPassword: password\n"), 0o600); err != nil {
+	if err := os.WriteFile(values, []byte("api:\n  adminPassword: password\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	var calls []string
@@ -246,6 +270,13 @@ func TestUpgradeDryRunWarnsWithoutHelm(t *testing.T) {
 	}
 	if string(saved) != "api:\n  adminPassword: password\n" {
 		t.Fatalf("dry-run edited values: %s", saved)
+	}
+	info, err := os.Stat(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		t.Fatalf("dry-run changed mode to %o", info.Mode().Perm())
 	}
 }
 

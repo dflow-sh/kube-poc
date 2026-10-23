@@ -1391,6 +1391,15 @@ ensure_registry_password() {
   fi
 }
 
+# values.yaml holds generated passwords. 0600 on every install and upgrade,
+# including when the file is already private.
+restrict_values_file() {
+  local path="${STATE_DIR}/values.yaml"
+  if [[ -f "$path" ]]; then
+    chmod 600 "$path"
+  fi
+}
+
 apply_dflow_release() {
   ensure_admin_password
   ensure_admin_password_bcrypt
@@ -1428,7 +1437,7 @@ image:
   dflow:
     tag: $(yaml_quote "$image_tag")
 EOF
-  chmod 600 "${STATE_DIR}/values.yaml"
+  restrict_values_file
 
   log "dFlow chart (${CHART_REF}, image tag ${image_tag})"
   helm upgrade --install dflow "$CHART_REF" \

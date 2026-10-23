@@ -74,6 +74,9 @@ export KUBECONFIG="$KUBECONFIG_PATH"
 [[ -f "${STATE_DIR}/install.env" ]] || die "${STATE_DIR}/install.env is missing. Run scripts/install.sh first."
 # shellcheck disable=SC1091
 source "${STATE_DIR}/install.env"
+# A v0.0.4 install leaves values.yaml world-readable. Tighten it before the
+# upgrade, and again after the chart values are rewritten.
+restrict_values_file
 # A v0.0.4 install.env stores ADMIN_PASSWORD=password. Drop that, and changeme,
 # before apply_dflow_release writes the chart values.
 replace_known_default_passwords
@@ -96,6 +99,7 @@ import_or_build_image
 kubectl -n cert-manager get deploy cert-manager-webhook >/dev/null 2>&1 \
   || die "cert-manager is not installed. Run scripts/install.sh."
 apply_dflow_release
+restrict_values_file
 self_test
 log "upgrade finished for https://${API_HOST:-dflow.${DOMAIN}} (image ${IMAGE})"
 trap - ERR

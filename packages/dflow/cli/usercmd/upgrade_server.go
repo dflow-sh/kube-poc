@@ -101,6 +101,9 @@ func (h HostServerUpgrader) Upgrade(version string, dryRun bool) error {
 	if kubeErr != nil {
 		return kubeErr
 	}
+	if err := restrictValuesFile(values); err != nil {
+		return err
+	}
 	if _, err := exec.LookPath("helm"); err != nil && h.Runner == nil {
 		return errors.Errorf("helm is not installed. On the server run: sudo ./scripts/update.sh %s", tag)
 	}
@@ -138,7 +141,7 @@ func (h HostServerUpgrader) Upgrade(version string, dryRun bool) error {
 			return errors.Wrap(err, "certificate/dflow did not become Ready")
 		}
 	}
-	return nil
+	return restrictValuesFile(values)
 }
 
 type hostValuesState struct {
@@ -220,10 +223,6 @@ func (h HostServerUpgrader) applyDexChecksum(ctx context.Context, kube, chartPat
 	if err != nil {
 		return false, errors.Wrapf(err, "reading %s", values)
 	}
-	info, err := os.Stat(values)
-	if err != nil {
-		return false, err
-	}
 	next := string(data)
 	if state.replacedDefault {
 		next = clearDefaultAdminPassword(next)
@@ -242,7 +241,7 @@ func (h HostServerUpgrader) applyDexChecksum(ctx context.Context, kube, chartPat
 	if err := h.run(ctx, kube, "helm", HelmUpgradeArgs(chartPath, tmp, tag)...); err != nil {
 		return false, errors.Wrap(err, "helm upgrade failed while rolling Dex")
 	}
-	if err := os.WriteFile(values, []byte(next), info.Mode().Perm()); err != nil {
+	if err := os.WriteFile(values, []byte(next), 0o600); err != nil {
 		return false, errors.Wrapf(err, "saving %s", values)
 	}
 	return true, nil
@@ -289,15 +288,31 @@ func clearSavedDefault(path string) error {
 	if err != nil {
 		return err
 	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return err
-	}
 	next := clearDefaultAdminPassword(string(data))
 	if next == string(data) {
+		return restrictValuesFile(path)
+	}
+	if err := os.WriteFile(path, []byte(next), 0o600); err != nil {
+		return err
+	}
+	return restrictValuesFile(path)
+}
+
+func restrictValuesFile(path string) error {
+	if path == "" {
 		return nil
 	}
-	return os.WriteFile(path, []byte(next), info.Mode().Perm())
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if info.IsDir() {
+		return errors.Errorf("%s is a directory", path)
+	}
+	return os.Chmod(path, 0o600)
 }
 
 func clearDefaultAdminPassword(data string) string {
