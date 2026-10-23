@@ -305,9 +305,8 @@ spec:
               value: /tmp/settings.yaml
             - name: NAMESPACE
               value: "{{ .Release.Namespace }}"
-            {{ $rancherUrl := .Values.global.cattle.url | default .Values.rancher.url }}
             - name: ACCESS_CONTROL_ALLOW_ORIGIN
-              value: "{{ $rancherUrl }}"
+              value: {{ include "dflow.accessControlAllowOrigin" . | quote }}
             - name: DFLOW_TIMEOUT_MULTIPLIER
               value: "{{ .Values.server.timeoutMultiplier }}"
             - name: TLS_ISSUER

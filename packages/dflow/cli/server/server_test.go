@@ -58,6 +58,24 @@ var _ = Describe("setSwaggerVersion", func() {
 	})
 })
 
+var _ = Describe("corsAllowOrigin", func() {
+	It("sends a single configured origin", func() {
+		request := httptest.NewRequest(http.MethodGet, "https://dflow.example.com/api/v1/info", nil)
+		Expect(corsAllowOrigin(request, []string{"https://dflow.example.com"})).To(Equal("https://dflow.example.com"))
+	})
+
+	It("echoes a listed origin and skips an unlisted one", func() {
+		allowed := []string{"https://dflow.example.com", "https://ui.example.com"}
+		listed := httptest.NewRequest(http.MethodGet, "https://dflow.example.com/wapi/v1/x", nil)
+		listed.Header.Set("Origin", "https://ui.example.com")
+		Expect(corsAllowOrigin(listed, allowed)).To(Equal("https://ui.example.com"))
+
+		unlisted := httptest.NewRequest(http.MethodGet, "https://dflow.example.com/wapi/v1/x", nil)
+		unlisted.Header.Set("Origin", "https://evil.example")
+		Expect(corsAllowOrigin(unlisted, allowed)).To(BeEmpty())
+	})
+})
+
 var _ = Describe("websocket middleware", func() {
 	It("includes namespace authorization after token auth", func() {
 		chain := websocketMiddleware()

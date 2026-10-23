@@ -16,17 +16,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
-	"github.com/dflow-sh/kube-poc/packages/dflow/cli/server/requestctx"
-	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes/tailer"
 	"github.com/dflow-sh/kube-poc/packages/dflow/api/v1/response"
 	"github.com/dflow-sh/kube-poc/packages/dflow/application"
+	"github.com/dflow-sh/kube-poc/packages/dflow/cli/server/requestctx"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes/tailer"
 	apierror "github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/errors"
 	"github.com/gin-gonic/gin"
 	"github.com/pkg/errors"
@@ -633,32 +634,65 @@ func startLogStreaming(
 // Regarding matching accessControlAllowOrigin and origin header:
 // https: //developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Access-Control-Allow-Origin
 func newUpgrader() websocket.Upgrader {
-	allowedOrigins := viper.GetStringSlice("access-control-allow-origin")
+	allowedOrigins := SplitAllowOrigins(viper.GetString("access-control-allow-origin"))
 	return websocket.Upgrader{
 		CheckOrigin: CheckOriginFunc(allowedOrigins),
 	}
 }
 
-func CheckOriginFunc(allowedOrigins []string) func(r *http.Request) bool {
-	return func(r *http.Request) bool {
-		originHeader := r.Header.Get("Origin")
+// SplitAllowOrigins parses the comma-separated access-control-allow-origin value.
+// An empty value is an empty list. CheckOriginFunc treats that as same-origin.
+func SplitAllowOrigins(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
 
+	parts := strings.Split(raw, ",")
+	origins := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		part = strings.TrimSuffix(part, "/")
+		if part == "" {
+			continue
+		}
+		origins = append(origins, part)
+	}
+	return origins
+}
+
+func CheckOriginFunc(allowedOrigins []string) func(r *http.Request) bool {
+	normalized := SplitAllowOrigins(strings.Join(allowedOrigins, ","))
+	return func(r *http.Request) bool {
+		originHeader := strings.TrimSpace(r.Header.Get("Origin"))
 		if originHeader == "" {
 			return true
 		}
 
-		if len(allowedOrigins) == 0 {
-			return true
+		trimmedHeader := strings.TrimSuffix(originHeader, "/")
+		if len(normalized) == 0 {
+			return sameOrigin(r, trimmedHeader)
 		}
 
-		for _, allowedOrigin := range allowedOrigins {
-			trimmedOrigin := strings.TrimSuffix(allowedOrigin, "/")
-			trimmedHeader := strings.TrimSuffix(originHeader, "/")
-			if trimmedOrigin == "*" || trimmedOrigin == trimmedHeader {
+		for _, allowedOrigin := range normalized {
+			if allowedOrigin == "*" || allowedOrigin == trimmedHeader {
 				return true
 			}
 		}
 
 		return false
 	}
+}
+
+func sameOrigin(r *http.Request, originHeader string) bool {
+	parsed, err := url.Parse(originHeader)
+	if err != nil || parsed.Host == "" {
+		return false
+	}
+
+	host := r.Host
+	if host == "" && r.URL != nil {
+		host = r.URL.Host
+	}
+	return strings.EqualFold(parsed.Host, host)
 }

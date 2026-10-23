@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	apiv1 "github.com/dflow-sh/kube-poc/packages/dflow/api/v1"
+	"github.com/dflow-sh/kube-poc/packages/dflow/api/v1/application"
 	"github.com/dflow-sh/kube-poc/packages/dflow/api/v1/middleware"
 	"github.com/dflow-sh/kube-poc/packages/dflow/api/v1/response"
 	"github.com/dflow-sh/kube-poc/packages/dflow/auth"
@@ -64,6 +65,29 @@ func websocketMiddleware() []gin.HandlerFunc {
 	}
 }
 
+// corsAllowOrigin chooses the Access-Control-Allow-Origin value.
+// A single configured origin is sent as-is. A list echoes the request Origin
+// when that origin is allowed. Credentials cannot be combined with "*".
+func corsAllowOrigin(r *http.Request, allowed []string) string {
+	if len(allowed) == 1 && allowed[0] != "*" {
+		return allowed[0]
+	}
+
+	origin := strings.TrimSuffix(strings.TrimSpace(r.Header.Get("Origin")), "/")
+	for _, allowedOrigin := range allowed {
+		if allowedOrigin == "*" {
+			if origin != "" {
+				return origin
+			}
+			return "*"
+		}
+		if origin != "" && allowedOrigin == origin {
+			return origin
+		}
+	}
+	return ""
+}
+
 // tracedPath reports whether a request should be traced by the otelgin
 // middleware. Websocket connections are long-running, so a span covering
 // their whole lifetime doesn't represent a meaningful unit of work and
@@ -98,15 +122,18 @@ func NewHandler() (*gin.Engine, error) {
 		response.Error(ctx, apierrors.NewNotFoundError("route", ctx.Request.URL.Path))
 	})
 
-	// Do not set header if nothing is specified.
-	accessControlAllowOrigin := strings.TrimSuffix(viper.GetString("access-control-allow-origin"), "/")
-	if accessControlAllowOrigin != "" {
+	// An empty allow-list sets no CORS header. Browser callers are then limited
+	// to same-origin, which matches the websocket CheckOrigin rule.
+	allowedOrigins := application.SplitAllowOrigins(viper.GetString("access-control-allow-origin"))
+	if len(allowedOrigins) > 0 {
 		router.Use(func(ctx *gin.Context) {
-			ctx.Header("Access-Control-Allow-Origin", accessControlAllowOrigin)
-			ctx.Header("Access-Control-Allow-Credentials", "true")
-			ctx.Header("Access-Control-Allow-Methods", "POST, PUT, PATCH, GET, OPTIONS, DELETE")          // This cannot be a wildcard when `Access-Control-Allow-Credentials` is true
-			ctx.Header("Access-Control-Allow-Headers", "Authorization,x-api-csrf,content-type,file-size") // This cannot be a wildcard when `Access-Control-Allow-Credentials` is true
-			ctx.Header("Vary", "Origin")                                                                  // Required when `Access-Control-Allow-Origin` is not a wildcard value
+			if header := corsAllowOrigin(ctx.Request, allowedOrigins); header != "" {
+				ctx.Header("Access-Control-Allow-Origin", header)
+				ctx.Header("Access-Control-Allow-Credentials", "true")
+				ctx.Header("Access-Control-Allow-Methods", "POST, PUT, PATCH, GET, OPTIONS, DELETE")          // This cannot be a wildcard when `Access-Control-Allow-Credentials` is true
+				ctx.Header("Access-Control-Allow-Headers", "Authorization,x-api-csrf,content-type,file-size") // This cannot be a wildcard when `Access-Control-Allow-Credentials` is true
+				ctx.Header("Vary", "Origin")                                                                  // Required when `Access-Control-Allow-Origin` is not a wildcard value
+			}
 
 			if ctx.Request.Method == "OPTIONS" {
 				// OPTIONS requests don't support `Authorization` headers, so return before we hit any checks

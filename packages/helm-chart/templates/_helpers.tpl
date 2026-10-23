@@ -334,3 +334,43 @@ gitconfig_read
 export_registries_read
 builderimage_read
 {{- end }}
+
+{{/*
+Comma-separated browser origins for ACCESS_CONTROL_ALLOW_ORIGIN.
+An empty server.accessControlAllowOrigin derives https://<api host> and, when
+different, the UI origin. A Rancher URL is appended when one is set.
+The value "same-origin" leaves the variable empty: the server then allows
+only same-origin browser requests. Clients that send no Origin header,
+including the CLI, stay allowed either way.
+*/}}
+{{- define "dflow.accessControlAllowOrigin" -}}
+{{- $explicit := trim (default "" .Values.server.accessControlAllowOrigin) -}}
+{{- if ne $explicit "same-origin" -}}
+{{- $origins := list -}}
+{{- if $explicit -}}
+{{- range splitList "," $explicit -}}
+{{- $item := trim . -}}
+{{- if $item -}}
+{{- $origins = append $origins $item -}}
+{{- end -}}
+{{- end -}}
+{{- else -}}
+{{- $apiOrigin := printf "https://%s" (include "dflow-hostname" .) -}}
+{{- $uiOrigin := $apiOrigin -}}
+{{- if .Values.dflowUI.allowedOrigins -}}
+{{- $uiOrigin = trim .Values.dflowUI.allowedOrigins -}}
+{{- else if .Values.dflowUI.uiURL -}}
+{{- $uiOrigin = trim .Values.dflowUI.uiURL -}}
+{{- end -}}
+{{- $origins = append $origins $apiOrigin -}}
+{{- if and $uiOrigin (ne $uiOrigin $apiOrigin) -}}
+{{- $origins = append $origins $uiOrigin -}}
+{{- end -}}
+{{- end -}}
+{{- $rancherUrl := trim (default "" (.Values.global.cattle.url | default .Values.rancher.url)) -}}
+{{- if and $rancherUrl (not (has $rancherUrl $origins)) -}}
+{{- $origins = append $origins $rancherUrl -}}
+{{- end -}}
+{{- join "," $origins -}}
+{{- end -}}
+{{- end }}
