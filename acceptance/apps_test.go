@@ -33,8 +33,8 @@ import (
 	"github.com/dflow-sh/kube-poc/acceptance/testenv"
 	"github.com/dflow-sh/kube-poc/packages/dflow/api/v1/application"
 	"github.com/dflow-sh/kube-poc/packages/dflow/names"
-	"github.com/dflow-sh/kube-poc/packages/dflow/routes"
 	"github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/models"
+	"github.com/dflow-sh/kube-poc/packages/dflow/routes"
 	"gopkg.in/yaml.v2"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -74,7 +74,7 @@ var _ = Describe("Apps", LApplication, func() {
 
 	Describe("application create failures", func() {
 		It("rejects names not fitting kubernetes requirements", func() {
-			out, err := env.dFlow("", "app", "create", "BOGUS")
+			out, err := env.DFlow("", "app", "create", "BOGUS")
 			Expect(err).To(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("name must consist of lower case alphanumeric"))
 		})
@@ -86,7 +86,7 @@ var _ = Describe("Apps", LApplication, func() {
 		})
 
 		It("creates the app", func() {
-			out, err := env.dFlow("", "app", "create", appName)
+			out, err := env.DFlow("", "app", "create", appName)
 			Expect(err).ToNot(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("Ok"))
 		})
@@ -105,7 +105,7 @@ var _ = Describe("Apps", LApplication, func() {
 			})
 
 			It("creates the app with instance count, configurations, and environment", func() {
-				out, err := env.dFlow("", "app", "create", appName,
+				out, err := env.DFlow("", "app", "create", appName,
 					"--app-chart", "standard",
 					"--bind", configurationName,
 					"--instances", "2",
@@ -117,7 +117,7 @@ var _ = Describe("Apps", LApplication, func() {
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring("Ok"))
 
-				out, err = env.dFlow("", "app", "show", appName)
+				out, err = env.DFlow("", "app", "show", appName)
 				Expect(err).ToNot(HaveOccurred(), out)
 
 				Expect(out).To(
@@ -151,7 +151,7 @@ var _ = Describe("Apps", LApplication, func() {
 				})
 
 				It("is possible to get a manifest", func() {
-					out, err := env.dFlow("", "app", "create", appName,
+					out, err := env.DFlow("", "app", "create", appName,
 						"--app-chart", "standard",
 						"--bind", configurationName,
 						"--instances", "2",
@@ -160,7 +160,7 @@ var _ = Describe("Apps", LApplication, func() {
 					Expect(err).ToNot(HaveOccurred(), out)
 					Expect(out).To(ContainSubstring("Ok"))
 
-					out, err = env.dFlow("", "app", "manifest", appName, destinationPath)
+					out, err = env.DFlow("", "app", "manifest", appName, destinationPath)
 					Expect(err).ToNot(HaveOccurred(), out)
 
 					manifest, err := os.ReadFile(destinationPath)
@@ -189,11 +189,11 @@ var _ = Describe("Apps", LApplication, func() {
 		})
 
 		It("creates the app with environment variables", func() {
-			out, err := env.dFlow("", "app", "create", appName, "--env", "MYVAR=myvalue")
+			out, err := env.DFlow("", "app", "create", appName, "--env", "MYVAR=myvalue")
 			Expect(err).ToNot(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("Ok"))
 
-			out, err = env.dFlow("", "apps", "env", "list", appName)
+			out, err = env.DFlow("", "apps", "env", "list", appName)
 			Expect(err).ToNot(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring(`MYVAR`))
 			Expect(out).To(ContainSubstring(`myvalue`))
@@ -201,7 +201,7 @@ var _ = Describe("Apps", LApplication, func() {
 
 		When("pushing a workload", func() {
 			BeforeEach(func() {
-				out, err := env.dFlow("", "app", "create", appName)
+				out, err := env.DFlow("", "app", "create", appName)
 				Expect(err).ToNot(HaveOccurred(), out)
 			})
 
@@ -221,7 +221,7 @@ var _ = Describe("Apps", LApplication, func() {
 
 	When("pushing an app", func() {
 		It("rejects mixed origins", func() {
-			out, err := env.dFlow("", "push",
+			out, err := env.DFlow("", "push",
 				"--name", appName,
 				"--git", wordpress,
 				"--container-image-url", containerImageURL)
@@ -232,7 +232,7 @@ var _ = Describe("Apps", LApplication, func() {
 
 	When("pushing an app from an external repository", func() {
 		It("rejects a bad specification", func() {
-			out, err := env.dFlow("", "push",
+			out, err := env.DFlow("", "push",
 				"--name", appName,
 				"--git", wordpress+",main,borken")
 			Expect(err).To(HaveOccurred(), out)
@@ -256,7 +256,7 @@ var _ = Describe("Apps", LApplication, func() {
 			var listOut string
 			Eventually(func() string {
 				var err error
-				listOut, err = env.dFlow("", "app", "list")
+				listOut, err = env.DFlow("", "app", "list")
 				Expect(err).ToNot(HaveOccurred(), listOut)
 				return listOut
 			}, "5m").Should(
@@ -282,7 +282,7 @@ var _ = Describe("Apps", LApplication, func() {
 			Expect(err).ToNot(HaveOccurred(), pushLog)
 
 			Eventually(func() string {
-				out, err := env.dFlow("", "app", "list")
+				out, err := env.DFlow("", "app", "list")
 				Expect(err).ToNot(HaveOccurred(), out)
 				return out
 			}, "5m").Should(
@@ -308,7 +308,7 @@ var _ = Describe("Apps", LApplication, func() {
 			Expect(err).ToNot(HaveOccurred(), pushLog)
 
 			Eventually(func() string {
-				out, err := env.dFlow("", "app", "list")
+				out, err := env.DFlow("", "app", "list")
 				Expect(err).ToNot(HaveOccurred(), out)
 				return out
 			}, "5m").Should(
@@ -325,7 +325,7 @@ var _ = Describe("Apps", LApplication, func() {
 		When("pushing an app from a private repository", func() {
 
 			It("rejects without a token", func() {
-				out, err := env.dFlow("", "push", "--name", appName, "--git", privateRepo)
+				out, err := env.DFlow("", "push", "--name", appName, "--git", privateRepo)
 				Expect(err).To(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring("authentication required"))
 			})
@@ -339,7 +339,7 @@ var _ = Describe("Apps", LApplication, func() {
 				gitconfigName := catalog.NewGitconfigName()
 				env.MakeGitconfig(gitconfigName)
 
-				out, err := env.dFlow("", "push", "--name", appName,
+				out, err := env.DFlow("", "push", "--name", appName,
 					"--git", privateRepo, "--git-config", gitconfigName)
 				Expect(err).ToNot(HaveOccurred(), out)
 			})
@@ -358,7 +358,7 @@ var _ = Describe("Apps", LApplication, func() {
 				Expect(err).ToNot(HaveOccurred(), pushLog)
 
 				Eventually(func() string {
-					out, err := env.dFlow("", "app", "list")
+					out, err := env.DFlow("", "app", "list")
 					Expect(err).ToNot(HaveOccurred(), out)
 					return out
 				}, "5m").Should(
@@ -369,7 +369,7 @@ var _ = Describe("Apps", LApplication, func() {
 				)
 
 				Eventually(func() string {
-					out, err := env.dFlow("", "app", "show", appName)
+					out, err := env.DFlow("", "app", "show", appName)
 					ExpectWithOffset(1, err).ToNot(HaveOccurred(), out)
 					return out
 				}, "1m").Should(
@@ -381,11 +381,11 @@ var _ = Describe("Apps", LApplication, func() {
 			})
 
 			It("respects the desired number of instances", func() {
-				out, err := env.dFlow("", "app", "update", appName, "-i", "3")
+				out, err := env.DFlow("", "app", "update", appName, "-i", "3")
 				Expect(err).ToNot(HaveOccurred(), out)
 
 				Eventually(func() string {
-					out, err := env.dFlow("", "app", "show", appName)
+					out, err := env.DFlow("", "app", "show", appName)
 					ExpectWithOffset(1, err).ToNot(HaveOccurred(), out)
 					return out
 				}, "1m").Should(
@@ -399,22 +399,22 @@ var _ = Describe("Apps", LApplication, func() {
 			It("respects route changes", func() {
 				route := "mycustomdomain.org/api"
 
-				out, err := env.dFlow("", "app", "update", appName, "-r", route)
+				out, err := env.DFlow("", "app", "update", appName, "-r", route)
 				Expect(err).ToNot(HaveOccurred(), out)
 
 				Eventually(func() string {
-					out, err := env.dFlow("", "app", "show", appName)
+					out, err := env.DFlow("", "app", "show", appName)
 					ExpectWithOffset(1, err).ToNot(HaveOccurred(), out)
 					return out
 				}, "1m").Should(HaveATable(WithRow(".*", route)))
 			})
 
 			It("respects complete route removal", func() {
-				out, err := env.dFlow("", "app", "update", appName, "--clear-routes")
+				out, err := env.DFlow("", "app", "update", appName, "--clear-routes")
 				Expect(err).ToNot(HaveOccurred(), out)
 
 				Eventually(func() string {
-					out, err := env.dFlow("", "app", "list")
+					out, err := env.DFlow("", "app", "list")
 					ExpectWithOffset(1, err).ToNot(HaveOccurred(), out)
 					return out
 				}, "1m").Should(HaveATable(
@@ -426,12 +426,12 @@ var _ = Describe("Apps", LApplication, func() {
 			It("ignores scheme prefixes in routes", func() {
 				route := "mycustomdomain.org/api"
 
-				out, err := env.dFlow("", "app", "update", appName,
+				out, err := env.DFlow("", "app", "update", appName,
 					"-r", "https://"+route)
 				Expect(err).ToNot(HaveOccurred(), out)
 
 				Eventually(func() string {
-					out, err := env.dFlow("", "app", "show", appName)
+					out, err := env.DFlow("", "app", "show", appName)
 					ExpectWithOffset(1, err).ToNot(HaveOccurred(), out)
 					return out
 				}, "1m").Should(HaveATable(WithRow(".*", route)))
@@ -480,13 +480,13 @@ var _ = Describe("Apps", LApplication, func() {
 					Expect(before.Version).ToNot(Equal("0.1.21"))
 
 					By("switching the running app onto a different helm chart package")
-					out, err := env.dFlow("", "app", "update", appName,
+					out, err := env.DFlow("", "app", "update", appName,
 						"--app-chart", chartName)
 					Expect(err).ToNot(HaveOccurred(), out)
 
 					By("waiting until the app CR reports the new chart")
 					Eventually(func() string {
-						out, err := env.dFlow("", "app", "show", appName)
+						out, err := env.DFlow("", "app", "show", appName)
 						ExpectWithOffset(1, err).ToNot(HaveOccurred(), out)
 
 						return out
@@ -499,7 +499,7 @@ var _ = Describe("Apps", LApplication, func() {
 
 					By("waiting until the workload is healthy again")
 					Eventually(func() string {
-						out, err := env.dFlow("", "app", "list")
+						out, err := env.DFlow("", "app", "list")
 						ExpectWithOffset(1, err).ToNot(HaveOccurred(), out)
 						return out
 					}, "5m").Should(
@@ -527,13 +527,13 @@ var _ = Describe("Apps", LApplication, func() {
 						ToNot(Equal("0.1.21"))
 
 					By("patching the app chart with --no-restart")
-					out, err := env.dFlow("", "app", "update", appName,
+					out, err := env.DFlow("", "app", "update", appName,
 						"--app-chart", chartName, "--no-restart")
 					Expect(err).ToNot(HaveOccurred(), out)
 
 					By("waiting until the app CR reports the new chart")
 					Eventually(func() string {
-						out, err := env.dFlow("", "app", "show", appName)
+						out, err := env.DFlow("", "app", "show", appName)
 						ExpectWithOffset(1, err).ToNot(HaveOccurred(), out)
 						return out
 					}, "2m").Should(
@@ -567,7 +567,7 @@ var _ = Describe("Apps", LApplication, func() {
 					releaseName := names.ReleaseName(appName)
 
 					appShow := func() string {
-						out, err := env.dFlow("", "app", "show", appName)
+						out, err := env.DFlow("", "app", "show", appName)
 						ExpectWithOffset(1, err).ToNot(HaveOccurred(), out)
 						return out
 					}
@@ -580,7 +580,7 @@ var _ = Describe("Apps", LApplication, func() {
 					}
 
 					By("switching onto the AppChart carrying staleValue")
-					out, err := env.dFlow("", "app", "update", appName,
+					out, err := env.DFlow("", "app", "update", appName,
 						"--app-chart", staleChart)
 					Expect(err).ToNot(HaveOccurred(), out)
 
@@ -595,7 +595,7 @@ var _ = Describe("Apps", LApplication, func() {
 					Eventually(releaseValues, "2m").Should(ContainSubstring("staleValue"))
 
 					By("switching onto the AppChart carrying freshValue instead")
-					out, err = env.dFlow("", "app", "update", appName,
+					out, err = env.DFlow("", "app", "update", appName,
 						"--app-chart", freshChart)
 					Expect(err).ToNot(HaveOccurred(), out)
 
@@ -608,7 +608,7 @@ var _ = Describe("Apps", LApplication, func() {
 
 					By("waiting until the workload is healthy again")
 					Eventually(func() string {
-						out, err := env.dFlow("", "app", "list")
+						out, err := env.DFlow("", "app", "list")
 						ExpectWithOffset(1, err).ToNot(HaveOccurred(), out)
 						return out
 					}, "5m").Should(
@@ -640,18 +640,18 @@ var _ = Describe("Apps", LApplication, func() {
 					defer env.DeleteAppchart(incompatibleFile)
 
 					By("setting a chart value that the target chart does not declare")
-					out, err := env.dFlow("", "app", "update", appName,
+					out, err := env.DFlow("", "app", "update", appName,
 						"--chart-value", "appListeningPort=8080")
 					Expect(err).ToNot(HaveOccurred(), out)
 
 					By("attempting to switch onto a chart that does not allow that setting")
-					out, err = env.dFlow("", "app", "update", appName,
+					out, err = env.DFlow("", "app", "update", appName,
 						"--app-chart", incompatibleChart)
 					Expect(err).To(HaveOccurred(), out)
 					Expect(out).To(ContainSubstring(`setting "appListeningPort": not known`))
 
 					By("keeping the original app chart when validation fails")
-					showOut, showErr := env.dFlow("", "app", "show", appName)
+					showOut, showErr := env.DFlow("", "app", "show", appName)
 					Expect(showErr).ToNot(HaveOccurred(), showOut)
 					Expect(showOut).To(
 						HaveATable(
@@ -667,11 +667,11 @@ var _ = Describe("Apps", LApplication, func() {
 					BeforeEach(func() {
 						appName1 = catalog.NewAppName()
 
-						out, err := env.dFlow("", "app", "create", appName1, "--app-chart", chartName)
+						out, err := env.DFlow("", "app", "create", appName1, "--app-chart", chartName)
 						Expect(err).ToNot(HaveOccurred(), out)
 						Expect(out).To(ContainSubstring("Ok"))
 
-						out, err = env.dFlow("", "app", "show", appName1)
+						out, err = env.DFlow("", "app", "show", appName1)
 						Expect(err).ToNot(HaveOccurred(), out)
 
 						Expect(out).To(
@@ -687,12 +687,12 @@ var _ = Describe("Apps", LApplication, func() {
 					})
 
 					It("respects the desired app chart", func() {
-						out, err := env.dFlow("", "app", "update", appName1,
+						out, err := env.DFlow("", "app", "update", appName1,
 							"--app-chart", "standard")
 						Expect(err).ToNot(HaveOccurred(), out)
 
 						Eventually(func() string {
-							out, err := env.dFlow("", "app", "show", appName1)
+							out, err := env.DFlow("", "app", "show", appName1)
 							ExpectWithOffset(1, err).ToNot(HaveOccurred(), out)
 
 							return out
@@ -707,11 +707,11 @@ var _ = Describe("Apps", LApplication, func() {
 			})
 
 			It("respects environment variable changes", func() {
-				out, err := env.dFlow("", "app", "update", appName, "--env", "MYVAR=myvalue")
+				out, err := env.DFlow("", "app", "update", appName, "--env", "MYVAR=myvalue")
 				Expect(err).ToNot(HaveOccurred(), out)
 
 				Eventually(func() string {
-					out, err := env.dFlow("", "apps", "env", "list", appName)
+					out, err := env.DFlow("", "apps", "env", "list", appName)
 					Expect(err).ToNot(HaveOccurred(), out)
 					return out
 				}, "2m").Should(
@@ -737,7 +737,7 @@ var _ = Describe("Apps", LApplication, func() {
 				env.DeleteApp(appName)
 			})
 			It("will be staged again, and restarted", func() {
-				restageLogs, err := env.dFlow("", "app", "restage", appName)
+				restageLogs, err := env.DFlow("", "app", "restage", appName)
 				Expect(err).ToNot(HaveOccurred(), restageLogs)
 				Expect(restageLogs).To(ContainSubstring("Restaging and restarting application"))
 				Expect(restageLogs).To(ContainSubstring("Restarting application"))
@@ -752,7 +752,7 @@ var _ = Describe("Apps", LApplication, func() {
 				env.DeleteApp(appName)
 			})
 			It("will be staged again, and NOT restarted", func() {
-				restageLogs, err := env.dFlow("", "app", "restage", appName)
+				restageLogs, err := env.DFlow("", "app", "restage", appName)
 				Expect(err).ToNot(HaveOccurred(), restageLogs)
 				Expect(restageLogs).To(ContainSubstring("Restaging application"))
 				Expect(restageLogs).ToNot(ContainSubstring("Restarting application"))
@@ -767,7 +767,7 @@ var _ = Describe("Apps", LApplication, func() {
 				env.DeleteApp(appName)
 			})
 			It("will be staged again, and NOT restarted", func() {
-				restageLogs, err := env.dFlow("", "app", "restage", "--no-restart", appName)
+				restageLogs, err := env.DFlow("", "app", "restage", "--no-restart", appName)
 				Expect(err).ToNot(HaveOccurred(), restageLogs)
 				Expect(restageLogs).To(ContainSubstring("Restaging application"))
 				Expect(restageLogs).ToNot(ContainSubstring("Restarting application"))
@@ -776,7 +776,7 @@ var _ = Describe("Apps", LApplication, func() {
 
 		When("restaging a non existing app", func() {
 			It("will return an error", func() {
-				restageLogs, err := env.dFlow("", "app", "restage", appName)
+				restageLogs, err := env.DFlow("", "app", "restage", appName)
 				Expect(err).To(HaveOccurred(), restageLogs)
 			})
 		})
@@ -785,7 +785,7 @@ var _ = Describe("Apps", LApplication, func() {
 			It("won't be staged", func() {
 				env.MakeContainerImageApp(appName, 1, containerImageURL)
 
-				restageLogs, err := env.dFlow("", "app", "restage", appName)
+				restageLogs, err := env.DFlow("", "app", "restage", appName)
 				Expect(err).ToNot(HaveOccurred(), restageLogs)
 				Expect(restageLogs).Should(ContainSubstring("Unable to restage container-based application"))
 
@@ -805,7 +805,7 @@ var _ = Describe("Apps", LApplication, func() {
 				Expect(err).ToNot(HaveOccurred(), pushLog)
 
 				Eventually(func() string {
-					out, listErr := env.dFlow("", "app", "list")
+					out, listErr := env.DFlow("", "app", "list")
 					Expect(listErr).ToNot(HaveOccurred(), out)
 					return out
 				}, "5m").Should(
@@ -834,7 +834,7 @@ var _ = Describe("Apps", LApplication, func() {
 			})
 
 			It("re-clones from git and stages successfully", func() {
-				restageLogs, err := env.dFlow("", "app", "restage", appName)
+				restageLogs, err := env.DFlow("", "app", "restage", appName)
 				Expect(err).ToNot(HaveOccurred(), restageLogs)
 				Expect(restageLogs).To(ContainSubstring("Restaging and restarting application"))
 				Expect(restageLogs).To(ContainSubstring("Restarting application"))
@@ -865,7 +865,7 @@ var _ = Describe("Apps", LApplication, func() {
 			Expect(err).ToNot(HaveOccurred(), pushLog)
 
 			Eventually(func() string {
-				out, err := env.dFlow("", "app", "list")
+				out, err := env.DFlow("", "app", "list")
 				Expect(err).ToNot(HaveOccurred(), out)
 				return out
 			}, "5m").Should(
@@ -890,7 +890,7 @@ var _ = Describe("Apps", LApplication, func() {
 		})
 
 		It("creates no ingresses", func() {
-			pushOutput, err := env.dFlow("", "apps", "push",
+			pushOutput, err := env.DFlow("", "apps", "push",
 				"--name", appName,
 				"--container-image-url", containerImageURL,
 				"--clear-routes",
@@ -898,7 +898,7 @@ var _ = Describe("Apps", LApplication, func() {
 			Expect(err).ToNot(HaveOccurred(), pushOutput)
 
 			Eventually(func() string {
-				out, err := env.dFlow("", "app", "list")
+				out, err := env.DFlow("", "app", "list")
 				ExpectWithOffset(1, err).ToNot(HaveOccurred(), out)
 				return out
 			}, "1m").Should(HaveATable(
@@ -924,7 +924,7 @@ var _ = Describe("Apps", LApplication, func() {
 
 		It("creates an ingress matching the custom route", func() {
 			route := "mycustomdomain.org/api"
-			pushOutput, err := env.dFlow("", "apps", "push",
+			pushOutput, err := env.DFlow("", "apps", "push",
 				"--name", appName,
 				"--container-image-url", containerImageURL,
 				"--route", route,
@@ -955,7 +955,7 @@ var _ = Describe("Apps", LApplication, func() {
 
 		It("ignores scheme prefixes in the custom route", func() {
 			route := "mycustomdomain.org/api"
-			pushOutput, err := env.dFlow("", "apps", "push",
+			pushOutput, err := env.DFlow("", "apps", "push",
 				"--name", appName,
 				"--container-image-url", containerImageURL,
 				"--route", "http://"+route,
@@ -1078,7 +1078,7 @@ var _ = Describe("Apps", LApplication, func() {
 		})
 
 		It("shows the proper status", func() {
-			out, err := env.dFlow("", "app", "show", appName)
+			out, err := env.DFlow("", "app", "show", appName)
 			Expect(err).ToNot(HaveOccurred(), out)
 			// Staging ok then deploy may still be rolling (deploying), pods may
 			// already exist at 0/1 (with a failure reason appended once one is
@@ -1090,7 +1090,7 @@ var _ = Describe("Apps", LApplication, func() {
 				),
 			)
 
-			out, err = env.dFlow("", "app", "list")
+			out, err = env.DFlow("", "app", "list")
 			Expect(err).ToNot(HaveOccurred(), out)
 			Expect(out).To(
 				HaveATable(
@@ -1465,7 +1465,7 @@ configuration:
 				// TODO : Match push output lines ?
 
 				By("verifying the stored settings")
-				out, err = env.dFlow("", "app", "show", appName)
+				out, err = env.DFlow("", "app", "show", appName)
 				Expect(err).ToNot(HaveOccurred(), out)
 
 				Expect(out).To(
@@ -1532,7 +1532,7 @@ configuration:
 			defer env.DeleteApp(app)
 
 			Eventually(func() string {
-				out, err := env.dFlow("", "app", "show", app)
+				out, err := env.DFlow("", "app", "show", app)
 				ExpectWithOffset(1, err).ToNot(HaveOccurred(), out)
 
 				return out
@@ -1552,11 +1552,11 @@ configuration:
 
 			var out string
 			var err error
-			out, err = env.dFlow("", "app", "delete", app1, app2)
+			out, err = env.DFlow("", "app", "delete", app1, app2)
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			Eventually(func() string {
-				out, err = env.dFlow("", "app", "list")
+				out, err = env.DFlow("", "app", "list")
 				Expect(err).ToNot(HaveOccurred(), out)
 
 				return out
@@ -1588,7 +1588,7 @@ configuration:
 
 				// And check presence
 				Eventually(func() string {
-					out, err := env.dFlow("", "app", "list")
+					out, err := env.DFlow("", "app", "list")
 					Expect(err).ToNot(HaveOccurred(), out)
 					return out
 				}, "2m").Should(
@@ -1608,7 +1608,7 @@ configuration:
 			env.BindAppConfiguration(appName, configurationName, namespace)
 
 			By("deleting the app")
-			out, err := env.dFlow("", "app", "delete", appName)
+			out, err := env.DFlow("", "app", "delete", appName)
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			Expect(out).To(
@@ -1619,7 +1619,7 @@ configuration:
 			)
 
 			Eventually(func() string {
-				out, err := env.dFlow("", "app", "list")
+				out, err := env.DFlow("", "app", "list")
 				Expect(err).ToNot(HaveOccurred(), out)
 				return out
 			}, "1m").ShouldNot(ContainSubstring(appName))
@@ -1765,7 +1765,7 @@ configuration:
 
 				// And check presence
 				Eventually(func() string {
-					out, err := env.dFlow("", "apps", "env", "list", appName)
+					out, err := env.DFlow("", "apps", "env", "list", appName)
 					Expect(err).ToNot(HaveOccurred(), out)
 					return out
 				}, "2m").Should(
@@ -1787,7 +1787,7 @@ configuration:
 			env.MakeContainerImageApp(appName, 1, containerImageURL)
 
 			Eventually(func() string {
-				out, err := env.dFlow("", "app", "show", appName)
+				out, err := env.DFlow("", "app", "show", appName)
 				ExpectWithOffset(1, err).ToNot(HaveOccurred(), out)
 
 				return out
@@ -1798,11 +1798,11 @@ configuration:
 				),
 			)
 
-			out, err := env.dFlow("", "app", "update", appName, "-i", "3")
+			out, err := env.DFlow("", "app", "update", appName, "-i", "3")
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			Eventually(func() string {
-				out, err := env.dFlow("", "app", "show", appName)
+				out, err := env.DFlow("", "app", "show", appName)
 				ExpectWithOffset(1, err).ToNot(HaveOccurred(), out)
 
 				return out
@@ -1832,7 +1832,7 @@ configuration:
 				env.MakeContainerImageApp(appName, 1, containerImageURL)
 
 				Eventually(func() string {
-					out, err := env.dFlow("", "app", "show", appName)
+					out, err := env.DFlow("", "app", "show", appName)
 					ExpectWithOffset(1, err).ToNot(HaveOccurred(), out)
 
 					return out
@@ -1843,12 +1843,12 @@ configuration:
 					),
 				)
 
-				out, err := env.dFlow("", "app", "update", appName, "--bind", configurationName)
+				out, err := env.DFlow("", "app", "update", appName, "--bind", configurationName)
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring("Successfully updated application"))
 
 				Eventually(func() string {
-					out, err := env.dFlow("", "app", "show", appName)
+					out, err := env.DFlow("", "app", "show", appName)
 					ExpectWithOffset(1, err).ToNot(HaveOccurred(), out)
 
 					return out
@@ -1885,7 +1885,7 @@ configuration:
 				env.MakeContainerImageApp(appName, 1, containerImageURL)
 
 				Eventually(func() string {
-					out, err := env.dFlow("", "app", "show", appName)
+					out, err := env.DFlow("", "app", "show", appName)
 					if err != nil {
 						return "" // retry on transient API errors (e.g. 503)
 					}
@@ -1902,13 +1902,13 @@ configuration:
 				Expect(podNamesBeforeUpdate).ToNot(BeEmpty())
 
 				// Update with --no-restart flag
-				out, err := env.dFlow("", "app", "update", appName, "-i", "2", "--no-restart")
+				out, err := env.DFlow("", "app", "update", appName, "-i", "2", "--no-restart")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring("Successfully updated application"))
 
 				// Verify desired instances changed; readiness can lag on overloaded CI clusters.
 				Eventually(func() string {
-					out, err := env.dFlow("", "app", "show", appName)
+					out, err := env.DFlow("", "app", "show", appName)
 					if err != nil {
 						return "" // retry on transient API errors (e.g. 503)
 					}
@@ -1935,7 +1935,7 @@ configuration:
 				env.MakeContainerImageApp(appName, 1, containerImageURL)
 
 				Eventually(func() string {
-					out, err := env.dFlow("", "app", "show", appName)
+					out, err := env.DFlow("", "app", "show", appName)
 					ExpectWithOffset(1, err).ToNot(HaveOccurred(), out)
 					return out
 				}, "1m").Should(
@@ -1949,13 +1949,13 @@ configuration:
 				Expect(err).ToNot(HaveOccurred())
 
 				// Update with --no-restart flag
-				out, err := env.dFlow("", "app", "update", appName, "--env", "TEST_VAR=test_value", "--no-restart")
+				out, err := env.DFlow("", "app", "update", appName, "--env", "TEST_VAR=test_value", "--no-restart")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring("Successfully updated application"))
 
 				// Verify environment variable was added
 				Eventually(func() string {
-					out, err := env.dFlow("", "app", "env", "list", appName)
+					out, err := env.DFlow("", "app", "env", "list", appName)
 					ExpectWithOffset(1, err).ToNot(HaveOccurred(), out)
 					return out
 				}, "30s").Should(ContainSubstring("TEST_VAR"))
@@ -1974,7 +1974,7 @@ configuration:
 				env.MakeContainerImageApp(appName, 1, containerImageURL)
 
 				Eventually(func() string {
-					out, err := env.dFlow("", "app", "show", appName)
+					out, err := env.DFlow("", "app", "show", appName)
 					if err != nil {
 						return "" // retry on transient API errors (e.g. 503)
 					}
@@ -1991,12 +1991,12 @@ configuration:
 				Expect(err).ToNot(HaveOccurred())
 
 				// Update WITHOUT --no-restart (should restart by default)
-				out, err := env.dFlow("", "app", "update", appName, "-i", "2")
+				out, err := env.DFlow("", "app", "update", appName, "-i", "2")
 				Expect(err).ToNot(HaveOccurred(), out)
 
 				// Wait for rollout to complete (2 instances ready) before checking pod names
 				Eventually(func() string {
-					out, err := env.dFlow("", "app", "show", appName)
+					out, err := env.DFlow("", "app", "show", appName)
 					if err != nil {
 						return ""
 					}
@@ -2035,7 +2035,7 @@ configuration:
 		})
 
 		It("lists all apps in the namespace", func() {
-			out, err := env.dFlow("", "app", "list")
+			out, err := env.DFlow("", "app", "list")
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			By(out)
@@ -2050,7 +2050,7 @@ configuration:
 		})
 
 		It("lists all apps in the namespace in JSON format", func() {
-			out, err := env.dFlow("", "app", "list", "--output", "json")
+			out, err := env.DFlow("", "app", "list", "--output", "json")
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			apps := models.AppList{}
@@ -2060,7 +2060,7 @@ configuration:
 		})
 
 		It("shows the details of an app", func() {
-			out, err := env.dFlow("", "app", "show", appName)
+			out, err := env.DFlow("", "app", "show", appName)
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			By(out)
@@ -2079,7 +2079,7 @@ configuration:
 			)
 
 			Eventually(func() string {
-				out, err := env.dFlow("", "app", "show", appName)
+				out, err := env.DFlow("", "app", "show", appName)
 				Expect(err).ToNot(HaveOccurred(), out)
 				return out
 			}, "1m").Should(
@@ -2100,7 +2100,7 @@ configuration:
 				tempFile = env.MakeAppchart(chartName)
 
 				appName = catalog.NewAppName()
-				out, err := env.dFlow("", "app", "create", appName,
+				out, err := env.DFlow("", "app", "create", appName,
 					"--app-chart", chartName)
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring("Ok"))
@@ -2112,11 +2112,11 @@ configuration:
 			})
 
 			It("shows the details of a customized app", func() {
-				out, err := env.dFlow("", "app", "update", appName,
+				out, err := env.DFlow("", "app", "update", appName,
 					"--chart-value", "foo=bar")
 				Expect(err).ToNot(HaveOccurred(), out)
 
-				out, err = env.dFlow("", "app", "show", appName)
+				out, err = env.DFlow("", "app", "show", appName)
 				Expect(err).ToNot(HaveOccurred(), out)
 
 				Expect(out).To(ContainSubstring("Show application details"))
@@ -2163,25 +2163,25 @@ configuration:
 				})
 
 				It("fails to export on conflict between destinations", func() {
-					out, err := env.dFlow("", "app", "export", app, exportPath, "--registry", "__bogus__")
+					out, err := env.DFlow("", "app", "export", app, exportPath, "--registry", "__bogus__")
 					Expect(err).To(HaveOccurred(), out)
 					Expect(out).To(ContainSubstring("Conflict, both directory and registry destinations found"))
 				})
 
 				It("fails to export without a destination", func() {
-					out, err := env.dFlow("", "app", "export", app)
+					out, err := env.DFlow("", "app", "export", app)
 					Expect(err).To(HaveOccurred(), out)
 					Expect(out).To(ContainSubstring("Neither directory nor registry destination found"))
 				})
 
 				It("fails to export for an unknown registry destination", func() {
-					out, err := env.dFlow("", "app", "export", app, "--registry", "__bogus__")
+					out, err := env.DFlow("", "app", "export", app, "--registry", "__bogus__")
 					Expect(err).To(HaveOccurred(), out)
 					Expect(out).To(ContainSubstring("bad export destination"))
 				})
 
 				It("fails to export an unknown application", func() {
-					out, err := env.dFlow("", "app", "export", "__bogus__", "--registry", "foo")
+					out, err := env.DFlow("", "app", "export", "__bogus__", "--registry", "foo")
 					Expect(err).To(HaveOccurred(), out)
 					Expect(out).To(ContainSubstring(""))
 				})
@@ -2190,7 +2190,7 @@ configuration:
 					Skip("Skipping export test for container image dflow/sample-app due upstream registry pull denial in CI")
 
 					Eventually(func() string {
-						out, err := env.dFlow("", "app", "show", app)
+						out, err := env.DFlow("", "app", "show", app)
 						if err != nil {
 							return ""
 						}
@@ -2203,7 +2203,7 @@ configuration:
 					)
 
 					Eventually(func() error {
-						out, err := env.dFlow("", "app", "export", app, exportPath)
+						out, err := env.DFlow("", "app", "export", app, exportPath)
 						if err != nil {
 							fmt.Fprintf(GinkgoWriter, "[DEBUG export customized] dflow app export failed: err=%v; combined stdout/stderr:\n---\n%s\n---\n", err, out)
 							return fmt.Errorf("export command failed: %w; output: %s", err, out)
@@ -2293,7 +2293,7 @@ userConfig:
 				Skip("Skipping export test for container image dflow/sample-app due upstream registry pull denial in CI")
 
 				Eventually(func() string {
-					out, err := env.dFlow("", "app", "show", app)
+					out, err := env.DFlow("", "app", "show", app)
 					if err != nil {
 						return ""
 					}
@@ -2306,7 +2306,7 @@ userConfig:
 				)
 
 				Eventually(func() error {
-					out, err := env.dFlow("", "app", "export", app, exportPath)
+					out, err := env.DFlow("", "app", "export", app, exportPath)
 					if err != nil {
 						fmt.Fprintf(GinkgoWriter, "[DEBUG export] dflow app export failed: err=%v (exit code may be 255); combined stdout/stderr:\n---\n%s\n---\n", err, out)
 						return fmt.Errorf("export command failed: %w; output: %s", err, out)
@@ -2362,7 +2362,7 @@ userConfig:
 			It("correctly handles complex quoting when deploying and exporting an app", func() {
 				Skip("Skipping export test for container image dflow/sample-app due upstream registry pull denial in CI")
 
-				out, err := env.dFlow("", "apps", "env", "set", app,
+				out, err := env.DFlow("", "apps", "env", "set", app,
 					"complex", `{
    "usernameOrOrg": "scures",
    "url":           "https://github.com/scures/dflow-sample-app",
@@ -2371,7 +2371,7 @@ userConfig:
 				Expect(err).ToNot(HaveOccurred(), out)
 
 				Eventually(func() string {
-					out, err := env.dFlow("", "app", "show", app)
+					out, err := env.DFlow("", "app", "show", app)
 					if err != nil {
 						return ""
 					}
@@ -2384,7 +2384,7 @@ userConfig:
 				)
 
 				Eventually(func() error {
-					out, err := env.dFlow("", "app", "export", app, exportPath)
+					out, err := env.DFlow("", "app", "export", app, exportPath)
 					if err != nil {
 						fmt.Fprintf(GinkgoWriter, "[DEBUG export complex quoting] dflow app export failed: err=%v; combined stdout/stderr:\n---\n%s\n---\n", err, out)
 						return fmt.Errorf("export command failed: %w; output: %s", err, out)
@@ -2471,7 +2471,7 @@ userConfig:
 
 			It("lists apps without instances", func() {
 				By("list apps")
-				out, err := env.dFlow("", "app", "list")
+				out, err := env.DFlow("", "app", "list")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(
 					HaveATable(
@@ -2483,7 +2483,7 @@ userConfig:
 
 			It("shows the details of an app without instances", func() {
 				By("show details")
-				out, err := env.dFlow("", "app", "show", app)
+				out, err := env.DFlow("", "app", "show", app)
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(
 					HaveATable(
@@ -2494,11 +2494,11 @@ userConfig:
 			})
 
 			It("scales up to a running workload", func() {
-				out, err := env.dFlow("", "app", "update", app, "-i", "3")
+				out, err := env.DFlow("", "app", "update", app, "-i", "3")
 				Expect(err).ToNot(HaveOccurred(), out)
 
 				Eventually(func() string {
-					out, err := env.dFlow("", "app", "show", app)
+					out, err := env.DFlow("", "app", "show", app)
 					ExpectWithOffset(1, err).ToNot(HaveOccurred(), out)
 					return out
 				}, "1m").Should(
@@ -2544,7 +2544,7 @@ userConfig:
 		It("lists all applications belonging to all namespaces", func() {
 			// But we care only about the two we know about from the setup.
 
-			out, err := env.dFlow("", "app", "list", "--all")
+			out, err := env.DFlow("", "app", "list", "--all")
 			Expect(err).ToNot(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("Listing all applications"))
 
@@ -2575,7 +2575,7 @@ userConfig:
 			Expect(route).ToNot(BeEmpty(), "route not found in MakeApp output (expected https://...sslip.io or ...nip.io). Output:\n%s", out)
 
 			By("getting the current logs in full")
-			out, err := env.dFlow("", "app", "logs", appName)
+			out, err := env.DFlow("", "app", "logs", appName)
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			podNames := env.GetPodNames(appName, namespace)
@@ -2610,7 +2610,7 @@ userConfig:
 		})
 
 		It("shows the staging logs", func() {
-			out, err := env.dFlow("", "app", "logs", "--staging", appName)
+			out, err := env.DFlow("", "app", "logs", "--staging", appName)
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			Expect(out).To(ContainSubstring(`Generating default PHP configuration`))
@@ -2744,7 +2744,7 @@ userConfig:
 		})
 
 		It("deploys successfully", func() {
-			pushOutput, err := env.dFlow("", "apps", "push",
+			pushOutput, err := env.DFlow("", "apps", "push",
 				"--name", appName,
 				"--container-image-url", containerImageURL,
 			)
@@ -2766,7 +2766,7 @@ userConfig:
 	} {
 		Context(command+" command completion", func() {
 			BeforeEach(func() {
-				out, err := env.dFlow("", "app", "create", appName)
+				out, err := env.DFlow("", "app", "create", appName)
 				Expect(err).ToNot(HaveOccurred(), out)
 			})
 
@@ -2775,19 +2775,19 @@ userConfig:
 			})
 
 			It("matches empty prefix", func() {
-				out, err := env.dFlow("", "__complete", "app", command, "")
+				out, err := env.DFlow("", "__complete", "app", command, "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring(appName))
 			})
 
 			It("does not match unknown prefix", func() {
-				out, err := env.dFlow("", "__complete", "app", command, "bogus")
+				out, err := env.DFlow("", "__complete", "app", command, "bogus")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring("bogus"))
 			})
 
 			It("does not match bogus arguments", func() {
-				out, err := env.dFlow("", "__complete", "app", command, appName, "")
+				out, err := env.DFlow("", "__complete", "app", command, appName, "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring(appName),
 					"completion for 'app %s <appName> \"\"' should not suggest app name. Full output:\n---\n%s\n---", command, out)

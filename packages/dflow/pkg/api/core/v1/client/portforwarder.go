@@ -19,15 +19,15 @@ import (
 	"net/url"
 	"strconv"
 
-	. "github.com/dflow-sh/kube-poc/packages/dflow/api/v1/proxy"
+	"github.com/dflow-sh/kube-poc/packages/dflow/api/v1/proxy"
 	"github.com/gorilla/websocket"
 )
 
 type ServicePortForwarder struct {
 	Client             *Client
 	Endpoint           string
-	ListeningAddresses []ListenAddress
-	Ports              []ForwardedPort
+	ListeningAddresses []proxy.ListenAddress
+	Ports              []proxy.ForwardedPort
 	StopChan           <-chan struct{}
 }
 
@@ -35,14 +35,14 @@ func NewServicePortForwarder(client *Client, endpoint string, addresses []string
 	if len(addresses) == 0 {
 		return nil, errors.New("you must specify at least 1 address")
 	}
-	parsedAddresses, err := ParseAddresses(addresses)
+	parsedAddresses, err := proxy.ParseAddresses(addresses)
 	if err != nil {
 		return nil, err
 	}
 	if len(ports) == 0 {
 		return nil, errors.New("you must specify at least 1 port")
 	}
-	parsedPorts, err := ParsePorts(ports)
+	parsedPorts, err := proxy.ParsePorts(ports)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +82,7 @@ func (pf *ServicePortForwarder) ForwardPorts() error {
 	return nil
 }
 
-func (pf *ServicePortForwarder) listenOnPort(port *ForwardedPort) error {
+func (pf *ServicePortForwarder) listenOnPort(port *proxy.ForwardedPort) error {
 	var errors []error
 	failCounters := make(map[string]int, 2)
 	successCounters := make(map[string]int, 2)
@@ -104,7 +104,7 @@ func (pf *ServicePortForwarder) listenOnPort(port *ForwardedPort) error {
 	return nil
 }
 
-func (pf *ServicePortForwarder) listenOnPortAndAddress(port *ForwardedPort, protocol string, address string) error {
+func (pf *ServicePortForwarder) listenOnPortAndAddress(port *proxy.ForwardedPort, protocol string, address string) error {
 	listener, err := pf.getListener(protocol, address, port)
 	if err != nil {
 		return err
@@ -117,7 +117,7 @@ func (pf *ServicePortForwarder) listenOnPortAndAddress(port *ForwardedPort, prot
 	return err
 }
 
-func (pf *ServicePortForwarder) getListener(protocol string, hostname string, port *ForwardedPort) (net.Listener, error) {
+func (pf *ServicePortForwarder) getListener(protocol string, hostname string, port *proxy.ForwardedPort) (net.Listener, error) {
 	listener, err := net.Listen(protocol, net.JoinHostPort(hostname, strconv.Itoa(int(port.Local))))
 	if err != nil {
 		return nil, fmt.Errorf("unable to create listener: Error %s", err)
@@ -136,7 +136,7 @@ func (pf *ServicePortForwarder) getListener(protocol string, hostname string, po
 	return listener, nil
 }
 
-func (pf *ServicePortForwarder) waitForConnection(listener net.Listener, port ForwardedPort) error {
+func (pf *ServicePortForwarder) waitForConnection(listener net.Listener, port proxy.ForwardedPort) error {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {

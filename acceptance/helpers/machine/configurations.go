@@ -24,12 +24,12 @@ import (
 func (m *Machine) MakeConfiguration(configurationName string) {
 	By("creating configuration " + configurationName)
 
-	out, err := m.dFlow("", "configuration", "create", configurationName, "username", "dflow-user")
+	out, err := m.DFlow("", "configuration", "create", configurationName, "username", "dflow-user")
 	ExpectWithOffset(1, err).ToNot(HaveOccurred(), out)
 
 	// And check presence
 
-	out, err = m.dFlow("", "configuration", "list")
+	out, err = m.DFlow("", "configuration", "list")
 	ExpectWithOffset(1, err).ToNot(HaveOccurred(), out)
 	ExpectWithOffset(1, out).To(MatchRegexp(configurationName))
 }
@@ -37,26 +37,26 @@ func (m *Machine) MakeConfiguration(configurationName string) {
 func (m *Machine) MakeConfigurationFromFiles(configurationName, path string) {
 	By("creating configuration " + configurationName)
 
-	out, err := m.dFlow("", "configuration", "create", configurationName,
+	out, err := m.DFlow("", "configuration", "create", configurationName,
 		"--from-file", "file="+path,
 	)
 	ExpectWithOffset(1, err).ToNot(HaveOccurred(), out)
 
 	// And check presence
 
-	out, err = m.dFlow("", "configuration", "list")
+	out, err = m.DFlow("", "configuration", "list")
 	ExpectWithOffset(1, err).ToNot(HaveOccurred(), out)
 	ExpectWithOffset(1, out).To(MatchRegexp(configurationName))
 }
 
 func (m *Machine) HaveConfiguration(configurationName string) {
-	out, err := m.dFlow("", "configuration", "list")
+	out, err := m.DFlow("", "configuration", "list")
 	ExpectWithOffset(1, err).ToNot(HaveOccurred(), out)
 	ExpectWithOffset(1, out).To(MatchRegexp(configurationName))
 }
 
 func (m *Machine) BindAppConfiguration(appName, configurationName, namespace string) {
-	out, err := m.dFlow("", "configuration", "bind", configurationName, appName)
+	out, err := m.DFlow("", "configuration", "bind", configurationName, appName)
 	ExpectWithOffset(1, err).ToNot(HaveOccurred(), out)
 
 	// And check deep into the kube structures
@@ -95,22 +95,22 @@ func (m *Machine) DeleteConfigurationsWithUnbind(configurationNames []string, un
 	var err error
 	var out string
 	if unbind {
-		out, err = m.dFlow("", "configuration", append([]string{"delete", "--unbind"}, configurationNames...)...)
+		out, err = m.DFlow("", "configuration", append([]string{"delete", "--unbind"}, configurationNames...)...)
 	} else {
-		out, err = m.dFlow("", "configuration", append([]string{"delete"}, configurationNames...)...)
+		out, err = m.DFlow("", "configuration", append([]string{"delete"}, configurationNames...)...)
 	}
 	ExpectWithOffset(1, err).ToNot(HaveOccurred(), out)
 
 	// And check non-presence
 	EventuallyWithOffset(1, func() string {
-		out, err = m.dFlow("", "configuration", "list")
+		out, err = m.DFlow("", "configuration", "list")
 		Expect(err).ToNot(HaveOccurred(), out)
 		return out
 	}, "10m").ShouldNot(MatchRegexp(strings.Join(configurationNames, "|")))
 }
 
 func (m *Machine) CleanupConfiguration(configurationName string) {
-	out, err := m.dFlow("", "configuration", "delete", configurationName)
+	out, err := m.DFlow("", "configuration", "delete", configurationName)
 
 	if err != nil {
 		fmt.Printf("deleting configuration failed : %s\n%s", err.Error(), out)
@@ -118,7 +118,7 @@ func (m *Machine) CleanupConfiguration(configurationName string) {
 }
 
 func (m *Machine) UnbindAppConfiguration(appName, configurationName, namespace string) {
-	out, err := m.dFlow("", "configuration", "unbind", configurationName, appName)
+	out, err := m.DFlow("", "configuration", "unbind", configurationName, appName)
 	ExpectWithOffset(1, err).ToNot(HaveOccurred(), out)
 
 	// And deep check in kube structures for non-presence

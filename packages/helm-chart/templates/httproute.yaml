@@ -36,6 +36,7 @@ spec:
       backendRefs:
         - name: dflow-server
           port: {{ .Values.service.port | default 80 }}
+    {{- if .Values.dflowUI.enabled }}
     - matches:
         - path:
             type: PathPrefix
@@ -43,6 +44,7 @@ spec:
       backendRefs:
         - name: dflow-ui
           port: {{ .Values.dflowUI.service.port | default 80 }}
+    {{- end }}
 {{- if .Values.gateway.tls.enabled }}
 ---
 apiVersion: gateway.networking.k8s.io/v1

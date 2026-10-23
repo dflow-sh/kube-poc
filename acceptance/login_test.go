@@ -135,7 +135,7 @@ var _ = Describe("Login", LMisc, func() {
 		ExpectEmptySettings(tmpSettingsPath)
 
 		// login with a non existing user
-		out, err := env.dFlow("", "login", "-u", "unknown", "-p", env.DFlowPassword,
+		out, err := env.DFlow("", "login", "-u", "unknown", "-p", env.DFlowPassword,
 			"--trust-ca", "--settings-file", tmpSettingsPath, testenv.AppRouteWithPort(serverURL))
 		Expect(err).To(HaveOccurred(), out)
 		fmt.Fprintf(GinkgoWriter, "[login non-existing user] output:\n%s\n", out)
@@ -179,7 +179,7 @@ var _ = Describe("Login", LMisc, func() {
 		parsed.Host = fmt.Sprintf("%s:%d", host, randomPort)
 		serverURLWithPort := parsed.String()
 
-		out, err := env.dFlow("", "login", "-u", "dflow", "-p", env.DFlowPassword,
+		out, err := env.DFlow("", "login", "-u", "dflow", "-p", env.DFlowPassword,
 			"--trust-ca", "--settings-file", tmpSettingsPath, serverURLWithPort)
 		Expect(err).To(HaveOccurred(), out)
 

@@ -14,7 +14,7 @@ package machine
 import (
 	"fmt"
 
-	. "github.com/dflow-sh/kube-poc/acceptance/helpers/matchers"
+	"github.com/dflow-sh/kube-poc/acceptance/helpers/matchers"
 	"github.com/dflow-sh/kube-poc/acceptance/helpers/proc"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -24,12 +24,12 @@ func (m *Machine) HaveServiceInstance(serviceName string) {
 	By(fmt.Sprintf("HSI %s", serviceName))
 
 	// And check presence and readiness
-	out, err := m.dFlow("", "service", "show", serviceName)
+	out, err := m.DFlow("", "service", "show", serviceName)
 	Expect(err).ToNot(HaveOccurred(), out)
 	Expect(out).To(ContainSubstring(serviceName))
-	Expect(out).To(HaveATable(
-		WithHeaders("KEY", "VALUE"),
-		WithRow("Status", "deployed"),
+	Expect(out).To(matchers.HaveATable(
+		matchers.WithHeaders("KEY", "VALUE"),
+		matchers.WithRow("Status", "deployed"),
 	))
 	By("HSI/ok")
 }
@@ -39,12 +39,12 @@ func (m *Machine) MakeServiceInstance(serviceName, catalogService string) {
 
 	By(fmt.Sprintf("creating service %s -> %s", catalogService, serviceName))
 
-	out, err := m.dFlow("", "service", "create", catalogService, serviceName, "--wait")
+	out, err := m.DFlow("", "service", "create", catalogService, serviceName, "--wait")
 	Expect(err).ToNot(HaveOccurred(), out)
 
 	// Wait for deployment to be ready (--wait may return before status is "deployed" in busy clusters)
 	Eventually(func() string {
-		out, err := m.dFlow("", "service", "show", serviceName)
+		out, err := m.DFlow("", "service", "show", serviceName)
 		if err != nil {
 			return ""
 		}
@@ -52,14 +52,14 @@ func (m *Machine) MakeServiceInstance(serviceName, catalogService string) {
 	}, "5m", "5s").Should(
 		And(
 			ContainSubstring(serviceName),
-			HaveATable(
-				WithHeaders("KEY", "VALUE"),
-				WithRow("Status", "deployed"),
+			matchers.HaveATable(
+				matchers.WithHeaders("KEY", "VALUE"),
+				matchers.WithRow("Status", "deployed"),
 			),
 		),
 	)
 
-	outNamespace, err := m.dFlow(m.nodeTmpDir, "target")
+	outNamespace, err := m.DFlow(m.nodeTmpDir, "target")
 	Expect(err).ToNot(HaveOccurred(), out)
 	outPods, err := proc.Kubectl("get", "pods", "-A")
 	Expect(err).ToNot(HaveOccurred(), out)
@@ -73,18 +73,18 @@ func (m *Machine) MakeServiceInstance(serviceName, catalogService string) {
 func (m *Machine) DeleteService(serviceName string) {
 	By("deleting service " + serviceName)
 
-	out, err := m.dFlow("", "service", "delete", serviceName)
+	out, err := m.DFlow("", "service", "delete", serviceName)
 	ExpectWithOffset(1, err).ToNot(HaveOccurred(), out)
 	Expect(out).To(ContainSubstring("Services Removed"))
 
 	EventuallyWithOffset(1, func() string {
-		out, err := m.dFlow("", "service", "list")
+		out, err := m.DFlow("", "service", "list")
 		Expect(err).ToNot(HaveOccurred(), out)
 		return out
 	}, "1m").ShouldNot(
-		HaveATable(
-			WithHeaders("NAME", "CREATED", "CATALOG SERVICE", "STATUS", "APPLICATIONS"),
-			WithRow(serviceName, WithDate(), "mysql-dev", "(not-ready|deployed)", ""),
+		matchers.HaveATable(
+			matchers.WithHeaders("NAME", "CREATED", "CATALOG SERVICE", "STATUS", "APPLICATIONS"),
+			matchers.WithRow(serviceName, matchers.WithDate(), "mysql-dev", "(not-ready|deployed)", ""),
 		),
 	)
 }

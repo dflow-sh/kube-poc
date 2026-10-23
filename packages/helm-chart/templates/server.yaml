@@ -255,10 +255,11 @@ spec:
   {{- end }}
   template:
     metadata:
-      {{- with .Values.podAnnotations }}
       annotations:
+        checksum/dflow-user-role: {{ include "dflow.defaultUserRoleActions" . | sha256sum }}
+        {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- end }}
       labels:
         app.kubernetes.io/component: dflow-server
         app.kubernetes.io/instance: default
@@ -304,9 +305,8 @@ spec:
               value: /tmp/settings.yaml
             - name: NAMESPACE
               value: "{{ .Release.Namespace }}"
-            {{ $rancherUrl := .Values.global.cattle.url | default .Values.rancher.url }}
             - name: ACCESS_CONTROL_ALLOW_ORIGIN
-              value: "{{ $rancherUrl }}"
+              value: {{ include "dflow.accessControlAllowOrigin" . | quote }}
             - name: DFLOW_TIMEOUT_MULTIPLIER
               value: "{{ .Values.server.timeoutMultiplier }}"
             - name: TLS_ISSUER
@@ -328,14 +328,11 @@ spec:
             {{- $imageSkopeo := .Values.image.skopeo -}}
             {{- if $imageSkopeo }}
             - name: APP_IMAGE_EXPORTER
-              value: "{{ default $imageSkopeo.registry (include "registry-url" .) }}{{ $imageSkopeo.repository}}:{{ $imageSkopeo.tag }}"
+              value: {{ include "dflow.imageRef" $imageSkopeo | quote }}
             {{- end }}
             {{- if and .Values.seaweedfs.enabled .Values.seaweedfs.tls.enabled .Values.seaweedfs.global.enableSecurity }}
             - name: S3_CERTIFICATE_SECRET
               value: {{ default (default "seaweedfs-tls" .Values.seaweedfs.tls.certSecret) .Values.s3.certificateSecret }}
-            {{- else if .Values.s3gw.enabled }}
-            - name: S3_CERTIFICATE_SECRET
-              value: {{ default "s3gw-cluster-ip-tls" .Values.s3.certificateSecret }}
             {{- else if .Values.s3.certificateSecret }}
             - name: S3_CERTIFICATE_SECRET
               value: {{ .Values.s3.certificateSecret }}
@@ -361,7 +358,12 @@ spec:
             {{- if .Values.extraEnv }}
             {{- toYaml .Values.extraEnv | nindent 12 -}}
           {{- end }}
-          image: "{{ default .Values.image.dflow.registry (include "registry-url" .) }}{{ .Values.image.dflow.repository }}:{{ default .Chart.AppVersion .Values.image.dflow.tag }}"
+          {{ $dflowImage := .Values.image.dflow }}
+          {{- if $dflowImage.digest }}
+          image: "{{ trimSuffix "/" (default $dflowImage.registry (include "registry-url" .)) }}/{{ $dflowImage.repository }}@{{ $dflowImage.digest }}"
+          {{- else }}
+          image: "{{ default $dflowImage.registry (include "registry-url" .) }}{{ $dflowImage.repository }}:{{ default .Chart.AppVersion $dflowImage.tag }}"
+          {{- end }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http
@@ -392,8 +394,14 @@ spec:
             subPath: tls.crt
 {{- end }}
           securityContext:
+            runAsNonRoot: true
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

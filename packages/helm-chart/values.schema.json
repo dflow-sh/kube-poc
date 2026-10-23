@@ -251,11 +251,15 @@
       "type": "object",
       "properties": {
         "adminPassword": {
-          "description": "The cleartext password for the 'admin' user",
+          "description": "Cleartext password for the admin user. Empty generates one in Secret dflow-generated-passwords. The values password and changeme are replaced.",
+          "type": "string"
+        },
+        "adminPasswordBcrypt": {
+          "description": "Bcrypt hash of adminPassword. Empty lets the chart hash the password. scripts/install.sh sets this so the Dex checksum matches the hash Dex stores.",
           "type": "string"
         },
         "dflowPassword": {
-          "description": "The cleartext password for the 'dflow' user",
+          "description": "Cleartext password for the dflow user. Empty generates one in Secret dflow-generated-passwords.",
           "type": "string"
         },
         "users": {
@@ -381,6 +385,7 @@
           "type": "string"
         },
         "registryPassword": {
+          "description": "Registry password. Empty generates one in Secret dflow-generated-passwords. The values password and changeme are old defaults and are replaced.",
           "type": "string"
         },
         "registryNamespace": {
@@ -587,6 +592,14 @@
         "fullnameOverride"
       ]
     },
+    "seaweedfsIngressPolicy": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    },
     "seaweedfs": {
       "type": "object",
       "properties": {
@@ -647,69 +660,6 @@
         "fullnameOverride",
         "existingSecret",
         "s3"
-      ]
-    },
-    "s3gw": {
-      "type": "object",
-      "properties": {
-        "enabled": {
-          "type": "boolean"
-        },
-        "ingress": {
-          "type": "object",
-          "properties": {
-            "enabled": {
-              "type": "boolean"
-            }
-          },
-          "required": [
-            "enabled"
-          ]
-        },
-        "ui": {
-          "type": "object",
-          "properties": {
-            "enabled": {
-              "type": "boolean"
-            }
-          },
-          "required": [
-            "enabled"
-          ]
-        },
-        "serviceName": {
-          "type": "string"
-        },
-        "useExistingSecret": {
-          "type": "boolean"
-        },
-        "storageSize": {
-          "type": "string"
-        },
-        "storageClass": {
-          "type": "object",
-          "properties": {
-            "create": {
-              "type": "boolean"
-            },
-            "name": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "create",
-            "name"
-          ]
-        }
-      },
-      "required": [
-        "enabled",
-        "ingress",
-        "ui",
-        "serviceName",
-        "useExistingSecret",
-        "storageSize",
-        "storageClass"
       ]
     },
     "rancher": {

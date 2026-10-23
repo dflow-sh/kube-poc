@@ -2,26 +2,53 @@ name: ci
 
 on:
   push:
+    branches: [main]
   pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
   version-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - run: bash scripts/check-version.sh
+
+  image-inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+        with:
+          version: v0.76.1
+      - run: bash scripts/image-inventory.sh --check --scan
+
+  vet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: "1.26.10"
+      - name: go vet
+        run: go vet ./...
+      - name: staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
 
   build-test:
     runs-on: ubuntu-latest
     env:
       TURBO_TELEMETRY_DISABLED: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
-          go-version: "1.26.0"
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+          go-version: "1.26.10"
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm
@@ -41,10 +68,10 @@ jobs:
           - goos: darwin
             goarch: amd64
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
-          go-version: "1.26.0"
+          go-version: "1.26.10"
       - name: Build dflow
         env:
           CGO_ENABLED: "0"
@@ -53,7 +80,7 @@ jobs:
         run: |
           mkdir -p dist
           go build -o "dist/dflow-${GOOS}-${GOARCH}" ./apps/cli
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: dflow-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/dflow-${{ matrix.goos }}-${{ matrix.goarch }}
@@ -61,27 +88,44 @@ jobs:
   goreleaser-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
         with:
           distribution: goreleaser
           version: "~> v2"
           args: check
 
+  cli-installer:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install v0.0.4 into RUNNER_TEMP
+        run: |
+          sh scripts/cli/install.sh --version v0.0.4 --install-dir "$RUNNER_TEMP/bin"
+          "$RUNNER_TEMP/bin/dflow" version
+      - name: Default install directory on macOS
+        if: matrix.os == 'macos-latest'
+        run: |
+          sh scripts/cli/install.sh
+          dflow version
+
   server-image:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
-          go-version: "1.26.0"
+          go-version: "1.26.10"
       - name: Build server image archive
         run: |
           mkdir -p apps/cli/dist
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o apps/cli/dist/dflow ./apps/cli
           docker build -f images/Dockerfile -t ghcr.io/dflow-sh/dflow-server:v0.0.0-dev .
           docker save ghcr.io/dflow-sh/dflow-server:v0.0.0-dev | gzip > dflow-server-linux-amd64.tar.gz
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: dflow-server-linux-amd64
           path: dflow-server-linux-amd64.tar.gz

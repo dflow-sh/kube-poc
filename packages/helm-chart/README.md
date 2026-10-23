@@ -67,6 +67,15 @@ These settings can be adjusted in the `ingress` section of your `values.yaml` fi
     defaultTokenExpiry: "60s"  # Example: increase to 1 minute for clock drift
   ```
 
+- **`server.accessControlAllowOrigin`**: Comma-separated browser origins allowed to call the API and open websockets. The chart sets `ACCESS_CONTROL_ALLOW_ORIGIN` from this value. Leave it empty to use `https://<api host>` (the install domain host, `dflow.<global.domain>` unless `ingress.hostnameOverride` or `gateway.hostnameOverride` is set) and, when it differs, the UI origin from `dflowUI.allowedOrigins` or `dflowUI.uiURL`. A `rancher.url` or `global.cattle.url` value is added as well.
+
+  Set `same-origin` to leave the variable empty. The server flag `--access-control-allow-origin` (`ACCESS_CONTROL_ALLOW_ORIGIN`) then allows a browser request only when the `Origin` host matches the request host. Requests that send no `Origin` header, including `dflow app logs` and `dflow app exec`, stay allowed.
+
+  ```yaml
+  server:
+    accessControlAllowOrigin: "https://dflow.example.com,https://ui.example.com"
+  ```
+
 #### Default Builder Image
 
 The chart creates a `standard` `BuilderImage` custom resource and marks it as
@@ -76,8 +85,8 @@ the server `DEFAULT_BUILDER_IMAGE` fallback when no `BuilderImage` resource
 has `spec.default: true`.
 
 `railpack` is not a container image. A `--build-mode buildpack` push has to
-name a builder image. `image.builder` remains the Paketo jammy full builder
-for that mode.
+name a builder image. `image.builder` only sets `userid` and `groupid`, which
+the stage scripts read. The chart does not install a builder image.
 
 ### Cert Manager
 
@@ -110,14 +119,8 @@ true (default).
 
 For additional values that are available, please see the helm chart source: https://github.com/seaweedfs/seaweedfs/tree/master/helm/seaweedfs
 
-This chart will install [s3gw](https://s3gw.io/) when `.Values.s3gw.enabled` is
-true.
-
-Any S3 compatible solution can be used instead by setting the aforementioned values
-to `false` and using [the values under `s3`](https://github.com/dflow-sh/kube-poc/blob/main/chart/dflow/values.yaml#L44)
-to point to the desired S3 server.
-
-For additional values that are available, please see the helm chart source: https://github.com/s3gw-tech/s3gw-charts/tree/main/charts/s3gw
+Any S3 compatible solution can be used instead by setting `seaweedfs.enabled`
+to `false` and using the values under `s3` to point at that store.
 
 ### Container Registry
 

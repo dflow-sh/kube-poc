@@ -14,6 +14,7 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -25,6 +26,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	apiv1 "github.com/dflow-sh/kube-poc/packages/dflow/api/v1"
+	"github.com/dflow-sh/kube-poc/packages/dflow/api/v1/middleware"
 	"github.com/dflow-sh/kube-poc/packages/dflow/tracing"
 	"github.com/dflow-sh/kube-poc/packages/dflow/version"
 )
@@ -55,6 +57,71 @@ var _ = Describe("setSwaggerVersion", func() {
 		Expect(info["version"]).To(Equal("v9.9.9"))
 	})
 })
+
+var _ = Describe("corsAllowOrigin", func() {
+	It("sends a single configured origin", func() {
+		request := httptest.NewRequest(http.MethodGet, "https://dflow.example.com/api/v1/info", nil)
+		Expect(corsAllowOrigin(request, []string{"https://dflow.example.com"})).To(Equal("https://dflow.example.com"))
+	})
+
+	It("echoes a listed origin and skips an unlisted one", func() {
+		allowed := []string{"https://dflow.example.com", "https://ui.example.com"}
+		listed := httptest.NewRequest(http.MethodGet, "https://dflow.example.com/wapi/v1/x", nil)
+		listed.Header.Set("Origin", "https://ui.example.com")
+		Expect(corsAllowOrigin(listed, allowed)).To(Equal("https://ui.example.com"))
+
+		unlisted := httptest.NewRequest(http.MethodGet, "https://dflow.example.com/wapi/v1/x", nil)
+		unlisted.Header.Set("Origin", "https://evil.example")
+		Expect(corsAllowOrigin(unlisted, allowed)).To(BeEmpty())
+	})
+
+	It("omits credentials when the allow-list is a wildcard", func() {
+		gin.SetMode(gin.TestMode)
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		request := httptest.NewRequest(http.MethodGet, "https://dflow.example.com/api/v1/info", nil)
+		request.Header.Set("Origin", "https://browser.example")
+		ctx.Request = request
+
+		setCORSHeaders(ctx, []string{"*"})
+
+		Expect(recorder.Header().Get("Access-Control-Allow-Origin")).To(Equal("https://browser.example"))
+		Expect(recorder.Header().Get("Access-Control-Allow-Credentials")).To(BeEmpty())
+	})
+
+	It("sends credentials when echoing a listed origin", func() {
+		gin.SetMode(gin.TestMode)
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		request := httptest.NewRequest(http.MethodGet, "https://dflow.example.com/api/v1/info", nil)
+		request.Header.Set("Origin", "https://ui.example.com")
+		ctx.Request = request
+
+		setCORSHeaders(ctx, []string{"https://dflow.example.com", "https://ui.example.com"})
+
+		Expect(recorder.Header().Get("Access-Control-Allow-Origin")).To(Equal("https://ui.example.com"))
+		Expect(recorder.Header().Get("Access-Control-Allow-Credentials")).To(Equal("true"))
+	})
+})
+
+var _ = Describe("websocket middleware", func() {
+	It("includes namespace authorization after token auth", func() {
+		chain := websocketMiddleware()
+		Expect(handlerIndex(chain, middleware.TokenAuth)).To(BeNumerically(">=", 0))
+		Expect(handlerIndex(chain, middleware.NamespaceAuthorization)).To(BeNumerically(">", handlerIndex(chain, middleware.TokenAuth)))
+		Expect(handlerIndex(chain, middleware.RoleAuthorization)).To(BeNumerically(">=", 0))
+	})
+})
+
+func handlerIndex(chain []gin.HandlerFunc, want gin.HandlerFunc) int {
+	wantPtr := reflect.ValueOf(want).Pointer()
+	for i, handler := range chain {
+		if reflect.ValueOf(handler).Pointer() == wantPtr {
+			return i
+		}
+	}
+	return -1
+}
 
 var _ = Describe("tracedPath", func() {
 	It("excludes websocket routes", func() {

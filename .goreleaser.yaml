@@ -28,13 +28,99 @@ archives:
 checksum:
   name_template: checksums.txt
   algorithm: sha256
+  extra_files:
+    - glob: chart-package/dflow-*.tgz
+    - glob: scripts/cli/install.sh
+      name_template: install.sh
 
+# SPDX JSON for each published CLI binary. Flags match `syft --help`:
+# `--output spdx-json=<file>` writes SPDX 2.3 JSON.
+sboms:
+  - id: cli
+    artifacts: binary
+    cmd: syft
+    args:
+      - "$artifact"
+      - "--output"
+      - "spdx-json=$document"
+    documents:
+      - "{{ .ArtifactName }}.spdx.json"
+
+# Keyless cosign 3. `sign-blob --help` has `--bundle` and `--yes`, and no
+# stored-key flag is set, so Fulcio uses the GitHub Actions OIDC token.
+# Each bundle is published next to its artifact as `<name>.sigstore.json`.
+signs:
+  - id: release-blobs
+    cmd: cosign
+    signature: "${artifact}.sigstore.json"
+    artifacts: all
+    args:
+      - sign-blob
+      - "--yes"
+      - "--oidc-provider=github-actions"
+      - "--bundle"
+      - "$signature"
+      - "$artifact"
+
+# Keyless image signing. This pipe runs only when the release publishes
+# images. `cosign sign --help` has --yes and --oidc-provider=github-actions.
+# The argument is the image digest, which `cosign sign` requires.
+docker_signs:
+  - id: server-image
+    cmd: cosign
+    artifacts: all
+    args:
+      - sign
+      - "--yes"
+      - "--oidc-provider=github-actions"
+      - "${artifact}@${digest}"
+
+# Grouped by conventional-commit type. The same text is the GitHub release body.
+# A snapshot build skips this pipe; a non-snapshot release writes dist/CHANGELOG.md.
 changelog:
-  disable: true
+  use: git
+  sort: asc
+  abbrev: 7
+  groups:
+    - title: Features
+      regexp: '^feat(\(.+\))?!?:'
+      order: 0
+    - title: Fixes
+      regexp: '^fix(\(.+\))?!?:'
+      order: 1
+    - title: Performance
+      regexp: '^perf(\(.+\))?!?:'
+      order: 2
+    - title: Refactors
+      regexp: '^refactor(\(.+\))?!?:'
+      order: 3
+    - title: Documentation
+      regexp: '^docs(\(.+\))?!?:'
+      order: 4
+    - title: Tests
+      regexp: '^test(\(.+\))?!?:'
+      order: 5
+    - title: Build and CI
+      regexp: '^(build|ci)(\(.+\))?!?:'
+      order: 6
+    - title: Chores
+      regexp: '^chore(\(.+\))?!?:'
+      order: 7
+    - title: Other
+      order: 999
+  filters:
+    exclude:
+      - '^Merge '
+      - '^ci: retrigger checks$'
+      - '^ci: rerun the image mirror$'
 
 release:
   extra_files:
     - glob: chart-package/dflow-*.tgz
+    - glob: scripts/cli/install.sh
+      name_template: install.sh
+  footer: |
+    [Known limits](https://github.com/dflow-sh/kube-poc/blob/{{ .Tag }}/docs/INSTALL.md#known-limits)
 
 dockers_v2:
   - dockerfile: images/Dockerfile.release

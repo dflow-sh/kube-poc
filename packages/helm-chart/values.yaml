@@ -24,50 +24,53 @@ image:
     registry: ghcr.io/
     repository: dflow-sh/dflow-server
     tag: v0.0.0-dev
-  dflow-ui:
-    registry: ghcr.io/
-    repository: dflow-sh/dflow-ui
-    tag: v0.0.0-dev
-  # Published upstream unpacker. This repo does not build that image.
+    # Digest of the published v0.0.4 release. The tag stays v0.0.0-dev so the
+    # release workflow can rewrite that line. The pod uses the digest.
+    digest: sha256:6bd9a740ceb0e56d014de9c94578c89daf943aadd7ee26101e71bf0ff976d8b8
+  # No UI image is set. dflowUI.enabled stays false. Turning it on requires
+  # image.dflow-ui.repository and image.dflow-ui.tag.
+  # Source archive tools. bci-base has GNU tar, find, gzip, and bash.
+  # It does not include unzip, bzip2, or xz.
   bash:
-    registry: ghcr.io/
-    repository: epinio/epinio-unpacker
-    tag: v1.14.3-rc1
+    repository: registry.suse.com/bci/bci-base
+    tag: "15.7"
+    digest: sha256:927140d8ede708eed63e8ce3c789801288403c23ac53a40ced59164abc938103
   awscli:
-    repository: amazon/aws-cli
-    tag: 2.13.26
+    repository: docker.io/amazon/aws-cli
+    tag: 2.38.5
+    digest: sha256:c8156a0e74e13929a42d7e60f0d4e14e7d28d980cd21822505d4bff80e5460c1
   skopeo:
-    registry: quay.io/
-    repository: skopeo/stable
-    tag: v1.13.2
+    repository: quay.io/skopeo/stable
+    tag: v1.22.3
+    digest: sha256:24940638e4abb0edfedc78a680554f316069d0212a00159276759421a059e611
   kubectl:
-    repository: rancher/kubectl
-    tag: v1.22.6
-  # Paketo builder used when a push selects --build-mode buildpack and
-  # passes a builder image. /info does not report this image. The default
-  # builder is server.defaultBuilderImage (railpack).
+    repository: docker.io/rancher/kubectl
+    tag: v1.36.2
+    digest: sha256:06c7a7a9772737494ae1e0c3af90f1b5385630c147e47c1c7cea92f4bed55fbe
+  # Buildpack is not the default. No builder image is installed with the chart.
+  # userid and groupid are still read by the stage scripts.
   builder:
-    repository: paketobuildpacks/builder-jammy-full
-    tag: 0.3.495
-    # The user/group combination to use when running
-    # the builder image (and in supporting scripts).
     userid: 1001
     groupid: 1000
   dockerfileBuilder:
-    # Built from dflow/kaniko (fork of chainguard-forks/kaniko), like Dex.
-    # Keep the -debug tag: the dockerfile-build stage script needs a shell.
-    # Track version bumps with Dex during release dependency updates.
-    # Published upstream kaniko image. This repo does not build that image.
-    registry: ghcr.io/
-    repository: epinio/kaniko
-    tag: v1.25.19-debug
+    # The dockerfile-build stage script needs a shell, so keep the debug image.
+    # v1.24.0 is the latest release that publishes a debug tag.
+    repository: gcr.io/kaniko-project/executor
+    tag: v1.24.0-debug
+    digest: sha256:2562c4fe551399514277ffff7dcca9a3b1628c4ea38cb017d7286dc6ea52f4cd
   # Railpack is the default staging mode. The staging job runs this BuildKit
   # image, downloads the railpack CLI, and pushes the image with buildctl.
+  # Railpack v0.43.0 builds against BuildKit v0.34.0. v0.34.1 is the latest
+  # release on that line.
   railpack:
-    repository: moby/buildkit
-    tag: v0.23.2
+    repository: docker.io/moby/buildkit
+    tag: v0.34.1
+    digest: sha256:99368f3e46177c6405b9740e4461d91cee004128daeecca78d4ceac50ec1da5c
     cliVersion: v0.43.0
-    frontend: ghcr.io/railwayapp/railpack-frontend:v0.43.0
+    frontend:
+      repository: ghcr.io/railwayapp/railpack-frontend
+      tag: v0.43.0
+      digest: sha256:355ef61fae6f2551103cd8b10c710cb07167dd353d561f15c69b8d7ac1c676cc
 # Runtime charts that deploy an application workload. They are packed into
 # the server image (see images/Dockerfile) and derived from the upstream
 # Apache-2.0 application charts.
@@ -92,8 +95,25 @@ server:
   # Reported by /info as default_builder_image. Also the fallback when no
   # BuilderImage resource is marked default. railpack is not a container image.
   defaultBuilderImage: railpack
+  # Comma-separated browser origins allowed to call the API and open websockets.
+  # Empty derives https://<install host> and, when different, the UI origin
+  # (dflowUI.allowedOrigins or dflowUI.uiURL). Set "same-origin" to leave
+  # ACCESS_CONTROL_ALLOW_ORIGIN empty. The server then allows a browser
+  # websocket only when its Origin host matches the request host. Requests
+  # with no Origin header, including the CLI, stay allowed.
+  # The dflow server flag is --access-control-allow-origin.
+  accessControlAllowOrigin: ""
 
-  # Configure staging jobs performing builds and deployment
+  # Configure staging jobs performing builds and deployment.
+  #
+  # Staging pods are not platform containers, and they are a Pod Security
+  # exception. The server creates them in packages/dflow/api/v1/application/stage.go:
+  # - railpack is privileged. BuildKit's OCI worker needs a privileged
+  #   container to run nested containers and push to the in-cluster registry.
+  # - buildpack runs as image.builder userid/groupid and does not drop
+  #   capabilities or set a seccomp profile.
+  # - dockerfile mode sets no securityContext.
+  # Do not put a restricted securityContext on these jobs. It would break builds.
   stagingWorkloads:
     # Name of the Service Account used by the staging job
     serviceAccountName: "dflow-server"
@@ -142,13 +162,14 @@ server:
     #   value: "linux"
     #   effect: "NoSchedule"
 
-  resources: {}
-  # limits:
-  #   cpu: 100m
-  #   memory: 128Mi
-  # requests:
-  #   cpu: 100m
-  #   memory: 128Mi
+  # Platform container budget for dflow-server. Limits are ceilings.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
   # Must stay 1. A second pod cannot mount image-export-pvc (ReadWriteOnce),
   # websocket JWTs are signed with a key generated in each process, and the
   # Helm client lock is per process. The chart rejects a higher count.
@@ -255,8 +276,8 @@ certManagerNamespace: cert-manager
 # With the auto-creation of secrets from Cert request gone the secrets have to specified manually.
 # See below. Leaving out the `dex` falls back to `dflow`. No other connections between them.
 # Further note:
-#  - s3 applies to either seaweedfs, or s3gw, whichever is active.
-#    In case of using an external s3 store it does not apply at all.
+#  - s3 applies when SeaweedFS is active.
+#    An external S3 store does not use that certificate.
 #  - dex applies only when enabled
 certManager:
   # install cert-manager chart alongside dFlow if one does not exist
@@ -297,21 +318,25 @@ api:
   # When false, only the default "user" and "blank" roles are available.
   rbac:
     enabled: true
-  # Default users
-  # plain password used for the 'admin' user
+  # Passwords for the admin and dflow API users. Empty generates a random
+  # value on first install and stores it in Secret dflow-generated-passwords.
+  # A later upgrade reuses that Secret, so a rerun keeps the same password.
+  # Set a value here, or pass --admin-password to scripts/install.sh, to
+  # choose or rotate the admin password. api.dflowPassword does the same
+  # for the dflow user. Read the generated values with:
+  #   kubectl -n <namespace> get secret dflow-generated-passwords -o jsonpath='{.data.adminPassword}' | base64 -d
+  #   kubectl -n <namespace> get secret dflow-generated-passwords -o jsonpath='{.data.dflowPassword}' | base64 -d
+  # When dex.staticPasswords is null, Dex users admin@dflow.sh and
+  # dflow@dflow.sh use these same two passwords. Dex reads its config only
+  # at startup, so after a rotation run:
+  #   kubectl -n <namespace> rollout restart deployment/dex
   adminPassword: ""
-  # plain password used for the 'dflow' user
   dflowPassword: ""
   users:
     - username: admin
-      password: password
-      # or you can provide an already bcrypt hashed password
-      # passwordBcrypt: "$2a$10$6bCi5NMstMK781In7JGiL.B44pgoplUb330FQvm6mVXMppbXBPiXS"
       roles:
         - admin
     - username: dflow
-      # the Bcrypt hash for the `password` password
-      passwordBcrypt: "$2a$10$6bCi5NMstMK781In7JGiL.B44pgoplUb330FQvm6mVXMppbXBPiXS"
       roles:
         - user
         - admin:workspace
@@ -319,11 +344,12 @@ api:
         - workspace
 # Dex subchart values -- None for now, and sub chart disabled
 dex:
-  # Target fork that supports pkce for oidc providers
-  # Published upstream Dex image with PKCE. This repo does not build Dex.
+  # Upstream Dex. Chart 0.26.0 uses image.digest when it is set.
+  # This repo does not build Dex.
   image:
-    repository: ghcr.io/epinio/dex
-    tag: v2.45.1-epinio-pkce
+    repository: ghcr.io/dexidp/dex
+    tag: v2.46.0
+    digest: sha256:933fcd3f523338c847b88ef84a7145fb2fcb7b9917f08418612afeaaa2001777
     pullPolicy: IfNotPresent
   # hardcode this, to avoid problems with release name
   fullnameOverride: "dex"
@@ -371,11 +397,17 @@ dex:
   rolesMapping: []
   # -- Enables Dex's local password database (static and stored users).
   enablePasswordDB: true
-  # -- Local users. null keeps the default admin@dflow.sh and
-  # dflow@dflow.sh users; [] removes them.
+  # -- Local users. null gives admin@dflow.sh the admin password and
+  # dflow@dflow.sh the dflow password from Secret dflow-generated-passwords.
+  # [] removes the static users and the admin@dflow.sh API user. A list replaces them.
+  # scripts/install.sh sets podAnnotations.checksum/generated-passwords to the
+  # sha256 of the admin password's bcrypt hash so this Deployment rolls when
+  # that hash changes. Dex reads its config only at startup.
   staticPasswords: null
-  # -- Static clients added after dFlow's own (dflow-api, dflow-cli,
-  # dflow-ui and, with a Rancher URL, rancher-dashboard).
+  podAnnotations: {}
+  # -- Static clients added after dFlow's own (dflow-api, dflow-cli, and,
+  # when dflowUI.enabled is true, the UI client, plus rancher-dashboard
+  # when a Rancher URL is set).
   extraStaticClients: []
   # -- Other top-level Dex settings, such as expiry, logger or frontend.
   # Keys the chart renders itself are rejected: web, issuer, storage, oauth2,
@@ -400,16 +432,39 @@ dex:
     port: null
     # The issuer CA certificate
     ca: ""
-  # Security context configuration to prevent privilege escalation and run as root
-  # See: https://github.com/dflow-sh/kube-poc/packages/dflow/issues/2730
+  # The Dex subchart reads podSecurityContext and securityContext (the
+  # container). A key named containerSecurityContext is ignored.
+  # Dex serves a mounted config and does not write the image root. /tmp is
+  # an emptyDir so the read-only root has a writable scratch directory.
   podSecurityContext:
     runAsNonRoot: true
     runAsUser: 1000
     runAsGroup: 1000
     fsGroup: 1000
     fsGroupChangePolicy: OnRootMismatch
-  containerSecurityContext:
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
     allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+    seccompProfile:
+      type: RuntimeDefault
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+  volumes:
+    - name: tmp
+      emptyDir: {}
+  volumeMounts:
+    - name: tmp
+      mountPath: /tmp
 # Extra environment variables passed to the dflow-server pod.
 # extraEnv:
 # - name: MY_ENV_VAR
@@ -420,6 +475,19 @@ dex:
 # majority, so raising master.replicas before three nodes are Ready leaves
 # S3 unavailable. After three servers exist, docs/INSTALL.md shows the
 # replica and replicationPlacement values.
+#
+# Pod Security exception. The upstream defaults keep hostPath volumes:
+# master data /ssd/seaweed-master and logs /storage/logs/seaweedfs/master,
+# volume data /ssd/object_store, filer data /storage/filer_store and logs
+# /storage/logs/seaweedfs/filer, and s3 logs /storage/logs/seaweedfs/s3.
+# hostPath fails PodSecurity baseline, so these pods are not baseline and
+# not restricted. runAsNonRoot is omitted because those directories are
+# created on the node as root and a non-root UID cannot write them.
+# readOnlyRootFilesystem is omitted because weed writes that data and those
+# logs as its working set, and this image is not verified with a read-only
+# root. The four containers still drop every capability, set
+# allowPrivilegeEscalation false, use RuntimeDefault seccomp, and set
+# resource requests and limits.
 seaweedfs:
   enabled: true
   fullnameOverride: seaweedfs
@@ -427,14 +495,90 @@ seaweedfs:
   global:
     # Set to true to enable SeaweedFS internal TLS. When enabled, also set `seaweedfs.tls.enabled=true`.
     enableSecurity: false
+    # Chart 4.48 joins imageRegistry, global.seaweedfs.image.name, and image.tag.
+    imageRegistry: docker.io
+    seaweedfs:
+      image:
+        name: chrislusf/seaweedfs
+  image:
+    # Tag 4.48, digest sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d.
+    # The chart has no digest field, so the tag carries both.
+    tag: 4.48@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d
+  master:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    containerSecurityContext:
+      enabled: true
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop:
+          - ALL
+      seccompProfile:
+        type: RuntimeDefault
+  volume:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+    containerSecurityContext:
+      enabled: true
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop:
+          - ALL
+      seccompProfile:
+        type: RuntimeDefault
+  filer:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    containerSecurityContext:
+      enabled: true
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop:
+          - ALL
+      seccompProfile:
+        type: RuntimeDefault
   s3:
     enabled: true
     port: 8333
     enableAuth: true
     existingConfigSecret: seaweedfs-creds
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 300m
+        memory: 256Mi
+    containerSecurityContext:
+      enabled: true
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop:
+          - ALL
+      seccompProfile:
+        type: RuntimeDefault
   tls:
     enabled: false
     certSecret: seaweedfs-tls
+# Ingress NetworkPolicies for the SeaweedFS master, volume, filer, and S3 pods.
+# Kept outside the seaweedfs: values so it is not the subchart's networkPolicy flag.
+seaweedfsIngressPolicy:
+  enabled: true
 dflowUI:
   enabled: false
   # UI theme, either 'light' or 'dark'
@@ -450,6 +594,15 @@ dflowUI:
   logLevel: info
   # Domain that will serve the UI and be the origin of browser requests, used by CORS process
   allowedOrigins: ""
+  # Applied when dflowUI.enabled is true. The container also drops all
+  # capabilities, runs as uid 1000, and uses a read-only root.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
   service:
     # receiving port on the UI service
     port: 80
@@ -460,30 +613,40 @@ dflowUI:
 reflector:
   enabled: true
   fullnameOverride: reflector
+  # The reflector chart joins repository and tag with a colon, so the
+  # repository ends in @sha256 and the tag is the digest hex.
   image:
-    repository: emberstack/kubernetes-reflector
-    tag: ""
+    repository: docker.io/emberstack/kubernetes-reflector@sha256
+    tag: 51dbd5880929dc26678f6e190c70abfbcccd3846679ff464e5815823fd782f1a
     pullPolicy: IfNotPresent
   rbac:
     enabled: true
   serviceAccount:
     create: true
     name: ""
+  # The subchart already drops ALL, sets a read-only root, and runs as uid
+  # 1000. These fields add the restricted-profile pieces it omits.
+  securityContext:
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 1000
+    allowPrivilegeEscalation: false
+    seccompProfile:
+      type: RuntimeDefault
+  podSecurityContext:
+    fsGroup: 2000
+    runAsNonRoot: true
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
 
-# s3gw subchart values
-s3gw:
-  enabled: false
-  ingress:
-    enabled: false
-  ui:
-    enabled: false
-  serviceName: s3gw
-  useExistingSecret: true
-  defaultUserCredentialsSecret: s3gw-creds
-  storageSize: 2Gi
-  storageClass:
-    create: false
-    name: ""
 # One registry pod. Its disk is not replicated. emptyDir (the default below)
 # is removed when the pod is rescheduled. Do not raise the Deployment replica
 # count: two registry processes would not share blobs. For a registry that
@@ -493,11 +656,13 @@ containerregistry:
   enabled: true
   image:
     registry:
-      repository: registry
-      tag: "3"
+      repository: docker.io/library/registry
+      tag: "3.1.2"
+      digest: sha256:01cd312e67026f06f5d89c3e133a4a9adc7cb9eeb9b1194e0b2954dfd770efd2
     nginx:
-      repository: nginx
-      tag: 1.27-alpine
+      repository: docker.io/library/nginx
+      tag: 1.30.6-alpine
+      digest: sha256:47928bf67eb62a1863cb08d9ecb52d3e704304ba614eaee17884204677702951
   imagePullPolicy: IfNotPresent
   # The ingressClassName is used to select the ingress controller. If
   # empty no class will be added to the ingresses.
@@ -520,13 +685,21 @@ containerregistry:
     # volumeMode: Filesystem
     # accessModes:
     # - ReadWriteOnce
-  resources: {}
-  # requests:
-  #   cpu: "200m"
-  #   memory: "1Gi"
-  # limits:
-  #   cpu: ""
-  #   memory: ""
+  # Registry container. nginx uses nginxResources below.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  nginxResources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
   nodeSelector: {}
   # kubernetes.io/os: linux
   affinity: {}
@@ -548,13 +721,25 @@ serviceCatalog:
   enableDevServices: true
 # Scheduling configurations for the Helm Controller
 helmController:
-  resources: {}
-  # requests:
-  #   cpu: "200m"
-  #   memory: "500Mi"
-  # limits:
-  #   cpu: ""
-  #   memory: ""
+  image:
+    repository: docker.io/rancher/helm-controller
+    tag: v0.17.9
+    digest: sha256:25a4fcbbf9fa8396ded332165e4497eb45e08a8f6677158c0f861a2d15982afc
+  # Used when a HelmChart does not set spec.jobImage. k3s v1.36.5+k3s1
+  # pairs helm-controller v0.17.9 with klipper-helm v0.13.3. An empty value
+  # makes the controller use a latest tag.
+  jobImage:
+    repository: ghcr.io/k3s-io/klipper-helm
+    tag: v0.13.3-build20261021
+    digest: sha256:391ec9f4824d631c49b52c1e3d10e4a2ced37a784afd75852e34bb2a6c7309b1
+  # Go API client. It runs as uid 1000 with a read-only root and /tmp on emptyDir.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
   nodeSelector: {}
   # kubernetes.io/os: linux
   affinity: {}
@@ -572,6 +757,17 @@ helmController:
   #   value: "linux"
   #   effect: "NoSchedule"
 
+# Pre-install Job that applies this chart's CRDs. Both containers run as
+# uid 1000 with a read-only root. kubectl's home is /tmp (emptyDir).
+crdUpgrade:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
 global:
   dex:
     enabled: true
@@ -585,7 +781,12 @@ global:
   # Skip if containerregistry.enabled is true
   registryURL: ""
   registryUsername: "admin"
-  registryPassword: "changeme"
+  # Empty generates a password on first install and stores it in Secret
+  # dflow-generated-passwords under registryPassword. A later upgrade reuses
+  # that Secret. "changeme" and "password" are old defaults and are replaced.
+  # The registry listens on NodePort 30500. Read the password with:
+  #   kubectl -n <namespace> get secret dflow-generated-passwords -o jsonpath='{.data.registryPassword}' | base64 -d
+  registryPassword: ""
   # Used in registry path when pushing -> "external.tld/apps/APPNAME"
   registryNamespace: "apps"
   # The name of the cluster issuer to use.
@@ -603,6 +804,7 @@ global:
 rancher:
   # dFlow's UI extension needs to reach both dflow and dex services.
   # Configuration for those services to enable this requires the uri of the Rancher instance.
-  # The uri comes from global.cattle.url (provided by rancher), or if that's missing this value (rancher.url)
-  # This supersedes server.accessControlAllowOrigin
+  # The uri comes from global.cattle.url (provided by rancher), or if that's missing this value (rancher.url).
+  # When set, that URL is added to the API access-control allow-list
+  # (server.accessControlAllowOrigin).
   url: ""

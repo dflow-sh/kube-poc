@@ -83,7 +83,7 @@ func InstallTraefik() {
 	Expect(err).NotTo(HaveOccurred(), out)
 }
 
-func UpgradeSequence(dflowHelper dflow.dFlow, domain string) {
+func UpgradeSequence(dflowHelper dflow.DFlow, domain string) {
 	By("Upgrading", func() {
 		var (
 			// after*  - after upgrade
@@ -154,7 +154,7 @@ func UpgradeSequence(dflowHelper dflow.dFlow, domain string) {
 
 			// Check that we can create a configuration before the upgrade
 			By("Create configuration pre-upgrade")
-			out, err := env.dFlow("", "configuration", "create", beforeConfig, "fox", "lair")
+			out, err := env.DFlow("", "configuration", "create", beforeConfig, "fox", "lair")
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			// Check that we can create a service before the upgrade
@@ -164,7 +164,7 @@ func UpgradeSequence(dflowHelper dflow.dFlow, domain string) {
 			// Check that a custom catalog entry is visible
 			By("Create custom catalog entry pre-upgrade")
 			catalog.CreateCatalogService(catalog.NginxCatalogService(beforeCatalog))
-			out, err = env.dFlow("", "service", "catalog")
+			out, err = env.DFlow("", "service", "catalog")
 			Expect(err).ToNot(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring(beforeCatalog))
 		})
@@ -204,29 +204,29 @@ func UpgradeSequence(dflowHelper dflow.dFlow, domain string) {
 				env.HaveServiceInstance(beforeService)
 
 				// Alternate check of the same using `service list` instead of `.. show`.
-				out, err := env.dFlow("", "service", "list")
+				out, err := env.DFlow("", "service", "list")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring(beforeService))
 
 				// We should be able to bind and unbind the old service to/from an application.
 
-				out, err = env.dFlow("", "service", "bind", beforeService, beforeApp)
+				out, err = env.DFlow("", "service", "bind", beforeService, beforeApp)
 				Expect(err).ToNot(HaveOccurred(), out)
 
-				out, err = env.dFlow("", "service", "list")
+				out, err = env.DFlow("", "service", "list")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(HaveATable(WithRow(beforeService, WithDate(), catentry, ".*", "deployed", beforeApp)))
 
-				out, err = env.dFlow("", "service", "unbind", beforeService, beforeApp)
+				out, err = env.DFlow("", "service", "unbind", beforeService, beforeApp)
 				Expect(err).ToNot(HaveOccurred(), out)
 
-				out, err = env.dFlow("", "service", "list")
+				out, err = env.DFlow("", "service", "list")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(HaveATable(WithRow(beforeService, WithDate(), catentry, ".*", "deployed", "")))
 			})
 
 			By("Create configuration post-upgrade")
-			out, err := env.dFlow("", "configuration", "create", afterConfig, "dog", "house")
+			out, err := env.DFlow("", "configuration", "create", afterConfig, "dog", "house")
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			By("Create service post-upgrade")
@@ -234,7 +234,7 @@ func UpgradeSequence(dflowHelper dflow.dFlow, domain string) {
 
 			By("Create custom catalog entry post-upgrade")
 			catalog.CreateCatalogService(catalog.NginxCatalogService(afterCatalog))
-			out, err = env.dFlow("", "service", "catalog")
+			out, err = env.DFlow("", "service", "catalog")
 			Expect(err).ToNot(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring(afterCatalog))
 
@@ -283,7 +283,11 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 		testenv.SetRoot("../..")
 		testenv.SetupEnv()
 
-		env = testenv.New(nodeTmpDir, testenv.Root(), "admin", "password", "", "")
+		adminPassword, credErr := testenv.GeneratedCredential("adminPassword")
+		if credErr != nil {
+			adminPassword = ""
+		}
+		env = testenv.New(nodeTmpDir, testenv.Root(), "admin", adminPassword, "", "")
 	})
 
 	released := os.Getenv("DFLOW_RELEASED")

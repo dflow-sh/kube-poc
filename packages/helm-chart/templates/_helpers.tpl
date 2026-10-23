@@ -68,6 +68,27 @@ Create the name of the service account to use
 
 
 {{/*
+imageRef prints repository@sha256:digest when digest is set, otherwise
+registry + repository:tag. A digest pin is absolute and is not prefixed.
+*/}}
+{{- define "dflow.imageRef" -}}
+{{- $digest := .digest | default "" | toString -}}
+{{- $repo := .repository | toString -}}
+{{- if $digest -}}
+{{- if not (hasPrefix "sha256:" $digest) -}}
+{{- $digest = printf "sha256:%s" $digest -}}
+{{- end -}}
+{{- printf "%s@%s" $repo $digest -}}
+{{- else -}}
+{{- $reg := .registry | default "" | toString -}}
+{{- if and $reg (not (hasSuffix "/" $reg)) -}}
+{{- $reg = printf "%s/" $reg -}}
+{{- end -}}
+{{- printf "%s%s:%s" $reg $repo (.tag | toString) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 URL prefix for container images to be compatible with Rancher
 */}}
 {{- define "registry-url" -}}
@@ -103,24 +124,6 @@ Host name of the SeaweedFS S3 service dflow installed
 */}}
 {{- define "dflow.seaweedfs-hostname" -}}
 {{- printf "%s-s3.%s.svc.cluster.local" (default "seaweedfs" .Values.seaweedfs.fullnameOverride) .Release.Namespace }}
-{{- end -}}
-
-{{/*
-URL of the s3gw dflow installed
-*/}}
-{{- define "dflow.s3gw-url" -}}
-{{- if .Values.s3gw.enabled -}}
-{{-   printf "%s.%s.svc.cluster.local" .Values.s3gw.serviceName .Release.Namespace }}
-{{- else -}}
-{{-  .Values.s3.endpoint }}
-{{- end -}}
-{{- end -}}
-
-{{/*
-Host name of the s3gw dflow installed
-*/}}
-{{- define "dflow.s3gw-hostname" -}}
-{{- printf "%s.%s.svc.cluster.local" .Values.s3gw.serviceName .Release.Namespace }}
 {{- end -}}
 
 {{/*
@@ -223,7 +226,7 @@ extraDeploy:
           - name: post-install-job
             image: "%s"
             command: ["kubectl", "delete", "pvc", "-n", "{{ .Release.Namespace }}", "-l", "app.kubernetes.io/instance={{ .Release.Name }}"]
-` (print (include "registry-url" .) .Values.image.kubectl.repository ":" .Values.image.kubectl.tag) | indent 4}}
+` (include "dflow.imageRef" .Values.image.kubectl) | indent 4}}
 {{- end -}}
 
 {{/*
@@ -316,3 +319,124 @@ Return the configured Issuer URL for Dex
  {{- printf "https://%s" (include "dflow-dex-hostname" .) -}}
 {{- end -}}
 {{- end }}
+
+{{/*
+Actions on the default "user" role. The server loads this ConfigMap once at
+startup, so the server pod template checksums this string and rolls on change.
+Admin is not in this list: the admin role allows every route.
+*/}}
+{{- define "dflow.defaultUserRoleActions" -}}
+namespace_write
+app_read
+configuration_read
+service_read
+gitconfig_read
+export_registries_read
+builderimage_read
+{{- end }}
+
+{{/*
+Comma-separated browser origins for ACCESS_CONTROL_ALLOW_ORIGIN.
+An empty server.accessControlAllowOrigin derives https://<api host> and, when
+different, the UI origin. A Rancher URL is appended when one is set.
+The value "same-origin" leaves the variable empty: the server then allows
+only same-origin browser requests. Clients that send no Origin header,
+including the CLI, stay allowed either way.
+*/}}
+{{- define "dflow.accessControlAllowOrigin" -}}
+{{- $explicit := trim (default "" .Values.server.accessControlAllowOrigin) -}}
+{{- if ne $explicit "same-origin" -}}
+{{- $origins := list -}}
+{{- if $explicit -}}
+{{- range splitList "," $explicit -}}
+{{- $item := trim . -}}
+{{- if $item -}}
+{{- $origins = append $origins $item -}}
+{{- end -}}
+{{- end -}}
+{{- else -}}
+{{- $apiOrigin := printf "https://%s" (include "dflow-hostname" .) -}}
+{{- $uiOrigin := $apiOrigin -}}
+{{- if .Values.dflowUI.allowedOrigins -}}
+{{- $uiOrigin = trim .Values.dflowUI.allowedOrigins -}}
+{{- else if .Values.dflowUI.uiURL -}}
+{{- $uiOrigin = trim .Values.dflowUI.uiURL -}}
+{{- end -}}
+{{- $origins = append $origins $apiOrigin -}}
+{{- if and $uiOrigin (ne $uiOrigin $apiOrigin) -}}
+{{- $origins = append $origins $uiOrigin -}}
+{{- end -}}
+{{- end -}}
+{{- $rancherUrl := trim (default "" (.Values.global.cattle.url | default .Values.rancher.url)) -}}
+{{- if and $rancherUrl (not (has $rancherUrl $origins)) -}}
+{{- $origins = append $origins $rancherUrl -}}
+{{- end -}}
+{{- join "," $origins -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Resolve one password. The caller passes a dict with explicit, plainKey,
+hashKey, and existing (the data map from Secret dflow-generated-passwords).
+An explicit value wins, then the stored plaintext, then a new random value.
+The stored bcrypt is reused when the plaintext did not change.
+The dict gains plain and hash.
+*/}}
+{{- define "dflow.oneCredential" -}}
+{{- $explicit := .explicit | default "" -}}
+{{- $explicitHash := .explicitHash | default "" | toString -}}
+{{- /* password and changeme are the old installer and registry defaults. */ -}}
+{{- if or (eq $explicit "password") (eq $explicit "changeme") -}}
+{{- $explicit = "" -}}
+{{- $explicitHash = "" -}}
+{{- end -}}
+{{- $existing := .existing -}}
+{{- $storedPlain := "" -}}
+{{- $storedRaw := index $existing .plainKey | default "" -}}
+{{- if $storedRaw -}}
+{{- $storedPlain = $storedRaw | b64dec -}}
+{{- end -}}
+{{- if or (eq $storedPlain "password") (eq $storedPlain "changeme") -}}
+{{- $storedPlain = "" -}}
+{{- end -}}
+{{- $plain := $explicit -}}
+{{- if not $plain -}}
+{{- $plain = $storedPlain -}}
+{{- end -}}
+{{- if not $plain -}}
+{{- $plain = randAlphaNum 32 -}}
+{{- end -}}
+{{- $hash := "" -}}
+{{- $storedHashRaw := index $existing .hashKey | default "" -}}
+{{- if and $explicit $explicitHash -}}
+{{- $hash = $explicitHash -}}
+{{- else if and $storedHashRaw (eq $plain $storedPlain) -}}
+{{- $hash = $storedHashRaw | b64dec -}}
+{{- else -}}
+{{- $hash = bcrypt $plain -}}
+{{- end -}}
+{{- $_ := set . "plain" $plain -}}
+{{- $_ := set . "hash" $hash -}}
+{{- end -}}
+
+{{/*
+Set .dflowGeneratedCredentials once per render. Later includes see the
+same plaintext and bcrypt, including templates rendered before the Secret
+exists in the cluster.
+*/}}
+{{- define "dflow.ensureGeneratedCredentials" -}}
+{{- if not (hasKey . "dflowGeneratedCredentials") -}}
+{{- $existing := dict -}}
+{{- $found := lookup "v1" "Secret" .Release.Namespace "dflow-generated-passwords" -}}
+{{- if $found -}}
+{{- $existing = $found.data | default dict -}}
+{{- end -}}
+{{- $admin := dict "explicit" (.Values.api.adminPassword | default "") "explicitHash" (.Values.api.adminPasswordBcrypt | default "") "plainKey" "adminPassword" "hashKey" "adminPasswordBcrypt" "existing" $existing -}}
+{{- include "dflow.oneCredential" $admin -}}
+{{- $user := dict "explicit" (.Values.api.dflowPassword | default "") "plainKey" "dflowPassword" "hashKey" "dflowPasswordBcrypt" "existing" $existing -}}
+{{- include "dflow.oneCredential" $user -}}
+{{- $registry := dict "explicit" (.Values.global.registryPassword | default "") "plainKey" "registryPassword" "hashKey" "registryPasswordBcrypt" "existing" $existing -}}
+{{- include "dflow.oneCredential" $registry -}}
+{{- $_ := set . "dflowGeneratedCredentials" (dict "adminPassword" (index $admin "plain") "adminPasswordBcrypt" (index $admin "hash") "dflowPassword" (index $user "plain") "dflowPasswordBcrypt" (index $user "hash") "registryPassword" (index $registry "plain") "registryPasswordBcrypt" (index $registry "hash")) -}}
+{{- end -}}
+{{- end -}}

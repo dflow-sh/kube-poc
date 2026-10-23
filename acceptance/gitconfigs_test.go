@@ -28,12 +28,12 @@ var _ = Describe("Gitconfigs", LGitconfig, func() {
 
 	Describe("gitconfig create", func() {
 		AfterEach(func() {
-			out, err := env.dFlow("", "gitconfig", "delete", gitconfigName)
+			out, err := env.DFlow("", "gitconfig", "delete", gitconfigName)
 			Expect(err).ToNot(HaveOccurred(), out)
 		})
 
 		It("creates a gitconfig", func() {
-			out, err := env.dFlow("", "gitconfig", "create",
+			out, err := env.DFlow("", "gitconfig", "create",
 				gitconfigName, "url",
 				"--username", "selfie",
 				"--password", "pass",
@@ -46,7 +46,7 @@ var _ = Describe("Gitconfigs", LGitconfig, func() {
 			Expect(out).To(ContainSubstring("Name: " + gitconfigName))
 			Expect(out).To(ContainSubstring("Git configuration created"))
 
-			out, err = env.dFlow("", "gitconfig", "show", gitconfigName)
+			out, err = env.DFlow("", "gitconfig", "show", gitconfigName)
 			Expect(err).ToNot(HaveOccurred(), out)
 			Expect(out).To(
 				HaveATable(
@@ -63,12 +63,12 @@ var _ = Describe("Gitconfigs", LGitconfig, func() {
 		})
 
 		It("rejects creating an existing gitconfig", func() {
-			out, err := env.dFlow("", "gitconfig", "create", gitconfigName, "url",
+			out, err := env.DFlow("", "gitconfig", "create", gitconfigName, "url",
 				"--username", "user",
 				"--password", "pass")
 			Expect(err).ToNot(HaveOccurred(), out)
 
-			out, err = env.dFlow("", "gitconfig", "create", gitconfigName, "url",
+			out, err = env.DFlow("", "gitconfig", "create", gitconfigName, "url",
 				"--username", "user",
 				"--password", "pass")
 			Expect(err).To(HaveOccurred(), out)
@@ -79,7 +79,7 @@ var _ = Describe("Gitconfigs", LGitconfig, func() {
 	Describe("gitconfig create failures", func() {
 		It("rejects names not fitting kubernetes requirements", func() {
 			gitconfigName := "BOGUS"
-			out, err := env.dFlow("", "gitconfig", "create", gitconfigName, "url",
+			out, err := env.DFlow("", "gitconfig", "create", gitconfigName, "url",
 				"--username", "user",
 				"--password", "pass")
 			Expect(err).To(HaveOccurred(), out)
@@ -87,7 +87,7 @@ var _ = Describe("Gitconfigs", LGitconfig, func() {
 		})
 
 		It("rejects unknown git providers", func() {
-			out, err := env.dFlow("", "gitconfig", "create",
+			out, err := env.DFlow("", "gitconfig", "create",
 				gitconfigName, "url",
 				"--username", "user",
 				"--password", "pass",
@@ -105,7 +105,7 @@ var _ = Describe("Gitconfigs", LGitconfig, func() {
 		})
 
 		It("lists gitconfigs", func() {
-			out, err := env.dFlow("", "gitconfig", "list")
+			out, err := env.DFlow("", "gitconfig", "list")
 			Expect(err).ToNot(HaveOccurred(), out)
 			Expect(out).To(
 				HaveATable(
@@ -124,26 +124,26 @@ var _ = Describe("Gitconfigs", LGitconfig, func() {
 		})
 
 		It("rejects showing an unknown gitconfig", func() {
-			out, err := env.dFlow("", "gitconfig", "show", "missing-gitconfig")
+			out, err := env.DFlow("", "gitconfig", "show", "missing-gitconfig")
 			Expect(err).To(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("gitconfig 'missing-gitconfig' does not exist"))
 		})
 
 		Context("command completion", func() {
 			It("matches empty prefix", func() {
-				out, err := env.dFlow("", "__complete", "gitconfig", "show", "")
+				out, err := env.DFlow("", "__complete", "gitconfig", "show", "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring(gitconfigName))
 			})
 
 			It("does not match unknown prefix", func() {
-				out, err := env.dFlow("", "__complete", "gitconfig", "show", "bogus")
+				out, err := env.DFlow("", "__complete", "gitconfig", "show", "bogus")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring("bogus"))
 			})
 
 			It("does not match bogus arguments", func() {
-				out, err := env.dFlow("", "__complete", "gitconfig", "show", gitconfigName, "")
+				out, err := env.DFlow("", "__complete", "gitconfig", "show", gitconfigName, "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring(gitconfigName))
 			})
@@ -151,7 +151,7 @@ var _ = Describe("Gitconfigs", LGitconfig, func() {
 
 		Context("existing gitconfig", func() {
 			It("shows a gitconfig", func() {
-				out, err := env.dFlow("", "gitconfig", "show", gitconfigName)
+				out, err := env.DFlow("", "gitconfig", "show", gitconfigName)
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(
 					HaveATable(
@@ -177,7 +177,7 @@ var _ = Describe("Gitconfigs", LGitconfig, func() {
 		})
 
 		It("deletes a git configuration", func() {
-			out, err := env.dFlow("", "gitconfig", "delete", gitconfigName)
+			out, err := env.DFlow("", "gitconfig", "delete", gitconfigName)
 			Expect(err).ToNot(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("Git configurations: %s", gitconfigName))
 			Expect(out).To(ContainSubstring("Git configurations deleted."))
@@ -185,19 +185,19 @@ var _ = Describe("Gitconfigs", LGitconfig, func() {
 
 		Context("command completion", func() {
 			It("matches empty prefix", func() {
-				out, err := env.dFlow("", "__complete", "gitconfig", "delete", "")
+				out, err := env.DFlow("", "__complete", "gitconfig", "delete", "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring(gitconfigName))
 			})
 
 			It("does not match unknown prefix", func() {
-				out, err := env.dFlow("", "__complete", "gitconfig", "delete", "bogus")
+				out, err := env.DFlow("", "__complete", "gitconfig", "delete", "bogus")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring("bogus"))
 			})
 
 			It("does not match bogus arguments", func() {
-				out, err := env.dFlow("", "__complete", "gitconfig", "delete", gitconfigName, "")
+				out, err := env.DFlow("", "__complete", "gitconfig", "delete", gitconfigName, "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring(gitconfigName))
 			})

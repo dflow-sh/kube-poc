@@ -82,7 +82,7 @@ var _ = Describe("ServiceList Endpoint, scoped to an application", LService, fun
 		env.MakeContainerImageApp(boundApp, 1, containerImageURL)
 		env.MakeContainerImageApp(unboundApp, 1, containerImageURL)
 
-		out, err := env.dFlow("", "service", "bind", boundService, boundApp)
+		out, err := env.DFlow("", "service", "bind", boundService, boundApp)
 		Expect(err).ToNot(HaveOccurred(), out)
 	})
 

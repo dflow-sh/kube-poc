@@ -17,10 +17,10 @@ data:
   groupID: "{{ .Values.image.builder.groupid }}"
   env: |-
     CNB_PLATFORM_API: "0.11"
-  downloadImage: "{{ default .Values.image.awscli.registry (include "registry-url" .) }}{{ .Values.image.awscli.repository}}:{{ .Values.image.awscli.tag }}"
-  unpackImage:   "{{ default .Values.image.bash.registry (include "registry-url" .) }}{{ .Values.image.bash.repository}}:{{ default .Chart.AppVersion .Values.image.bash.tag }}"
-  dockerfileBuildImage: "{{ default .Values.image.dockerfileBuilder.registry (include "registry-url" .) }}{{ .Values.image.dockerfileBuilder.repository }}:{{ .Values.image.dockerfileBuilder.tag }}"
-  railpackBuildImage: "{{ .Values.image.railpack.repository }}:{{ .Values.image.railpack.tag }}"
+  downloadImage: {{ include "dflow.imageRef" .Values.image.awscli | quote }}
+  unpackImage: {{ include "dflow.imageRef" .Values.image.bash | quote }}
+  dockerfileBuildImage: {{ include "dflow.imageRef" .Values.image.dockerfileBuilder | quote }}
+  railpackBuildImage: {{ include "dflow.imageRef" .Values.image.railpack | quote }}
   download: |-
     # Parameters
     # - PROTOCOL # s3 protocol
@@ -32,7 +32,7 @@ data:
     # internal s3 the chart has no information.  Therefore we cannot
     # use helm templating to insert these.
     echo By _ _ __ ___ _____ $(whoami),$(id -u)/$(id -g) $(pwd)
-    echo Image "{{ default .Values.image.awscli.registry (include "registry-url" .) }}{{ .Values.image.awscli.repository}}:{{ .Values.image.awscli.tag }}"
+    echo Image {{ include "dflow.imageRef" .Values.image.awscli | quote }}
     cat /etc/ssl/certs/ca-bundle.crt               > /tmp/ca-bundle.pem
     test -f /certs/ca.crt   && cat /certs/ca.crt  >> /tmp/ca-bundle.pem
     test -f /certs/tls.crt  && cat /certs/tls.crt >> /tmp/ca-bundle.pem
@@ -57,7 +57,7 @@ data:
     # unpacker to recognize/reject input properly.
     #
     echo By _ _ __ ___ _____ $(whoami),$(id -u)/$(id -g) $(pwd)
-    echo Image "{{ default .Values.image.bash.registry (include "registry-url" .) }}{{ .Values.image.bash.repository}}:{{ default .Chart.AppVersion .Values.image.bash.tag }}"
+    echo Image {{ include "dflow.imageRef" .Values.image.bash | quote }}
     if test ! -f "/workspace/source/${BLOBID}" ; then
       echo Nothing to unpack
       exit
@@ -187,7 +187,7 @@ data:
       exit 1
     fi
     RAILPACK_VERSION="{{ .Values.image.railpack.cliVersion }}"
-    RAILPACK_FRONTEND="{{ .Values.image.railpack.frontend }}"
+    RAILPACK_FRONTEND={{ include "dflow.imageRef" .Values.image.railpack.frontend | quote }}
     case "$(uname -m)" in
       x86_64) RAILPACK_ARCH=x86_64 ;;
       aarch64|arm64) RAILPACK_ARCH=aarch64 ;;

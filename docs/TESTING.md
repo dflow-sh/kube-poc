@@ -4,11 +4,11 @@ Run `scripts/install.sh` first. It already logs in, pushes `traefik/whoami`, che
 
 Set `DOMAIN` to the domain the installer printed. For a public IP `203.0.113.10` chosen automatically, that is `203.0.113.10.sslip.io`. The API is `https://dflow.203.0.113.10.sslip.io`. An app named `hello` is `https://hello.203.0.113.10.sslip.io`. The namespace is not part of the hostname.
 
-The default user is `admin`. The default password is `password` unless you passed `--admin-password`. With `--domain auto` the API certificate is the dFlow CA, so login uses `--trust-ca` and curl uses `-k`. A custom domain uses Let's Encrypt production: drop `--trust-ca` and `-k`. `--letsencrypt-staging` still needs them.
+The API user is `admin`. The password is the one `scripts/install.sh` printed, or the value in Secret `dflow-generated-passwords`. With `--domain auto` the API certificate is the dFlow CA, so login uses `--trust-ca` and curl uses `-k`. A custom domain uses Let's Encrypt production: drop `--trust-ca` and `-k`. `--letsencrypt-staging` still needs them.
 
 ```bash
 export DOMAIN=203.0.113.10.sslip.io
-export PASSWORD=password
+export PASSWORD="$(kubectl -n dflow get secret dflow-generated-passwords -o jsonpath='{.data.adminPassword}' | base64 -d)"
 ```
 
 ## Login

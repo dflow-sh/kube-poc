@@ -183,7 +183,7 @@ var _ = Describe("AppSourcePatch and AppSync Endpoints",
 
 			It("fails with 503 when the app has no running pod", func() {
 				bareApp := catalog.NewAppName()
-				createOutput, createError := env.dFlow(
+				createOutput, createError := env.DFlow(
 					"",
 					"app",
 					"create",

@@ -57,7 +57,7 @@ func init() {
 	err = viper.BindEnv("tls-issuer", "TLS_ISSUER")
 	checkErr(err)
 
-	flags.String("access-control-allow-origin", "", "(ACCESS_CONTROL_ALLOW_ORIGIN) Domains allowed to use the API")
+	flags.String("access-control-allow-origin", "", "(ACCESS_CONTROL_ALLOW_ORIGIN) Comma-separated browser origins allowed to call the API. Empty allows same-origin browser requests only. Requests with no Origin header are always allowed.")
 	err = viper.BindPFlag("access-control-allow-origin", flags.Lookup("access-control-allow-origin"))
 	checkErr(err)
 	err = viper.BindEnv("access-control-allow-origin", "ACCESS_CONTROL_ALLOW_ORIGIN")

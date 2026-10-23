@@ -48,6 +48,10 @@ func RoleAuthorization(c *gin.Context) {
 // NamespaceAuthorization ensures the user is allowed to access the requested namespace.
 // Only admins may access any namespace; all other users are restricted to namespaces
 // listed in their Secret's "namespaces" field.
+//
+// The user is the one Authentication or TokenAuth already stored on the request.
+// TokenAuth loads that user with a direct secret read, so this check does not
+// use a namespace list that can lag behind the secret.
 func NamespaceAuthorization(c *gin.Context) {
 	user := requestctx.User(c.Request.Context())
 	authorization(c, "namespace", user.Namespaces)
@@ -82,12 +86,12 @@ func authorization(c *gin.Context, label string, allowed []string) {
 		return
 	}
 
-	// extract the resources
-	resourceName := c.Param(label)
-	var resourceNames []string
-	resourceNames, found := c.GetQueryArray(label + "s[]")
-	if !found {
-		resourceNames = append(resourceNames, resourceName)
+	// A route with a path parameter is authorized on that value alone.
+	// The query list is used only when the route has no path parameter.
+	// A request that names no resource is not namespace-scoped.
+	resourceNames, explicit := scopedResources(c, label)
+	if !explicit {
+		return
 	}
 
 	for _, rsrc := range resourceNames {
@@ -114,10 +118,11 @@ func authorization(c *gin.Context, label string, allowed []string) {
 func authorizeUser(ctx context.Context, label, resource string, allowed []string) bool {
 	logger := requestctx.Logger(ctx).With("component", "authorizeUser")
 
-	// check if the user has permission on the requested resource
+	// An explicit empty value is not a namespace the user may access.
+	// Requests that name no resource return before this check.
 	if resource == "" {
-		// empty resource always permitted
-		return true
+		logger.Infow("empty resource is not permitted", "resource_type", label)
+		return false
 	}
 
 	for _, ns := range allowed {
@@ -131,6 +136,23 @@ func authorizeUser(ctx context.Context, label, resource string, allowed []string
 		"resource", resource,
 		"allowed", strings.Join(allowed, ", "))
 	return false
+}
+
+// scopedResources reports the resource names this request must be allowed
+// to use. The boolean is false when the request does not name a resource.
+func scopedResources(c *gin.Context, label string) ([]string, bool) {
+	if resource, ok := c.Params.Get(label); ok {
+		return []string{resource}, true
+	}
+
+	query, found := c.GetQueryArray(label + "s[]")
+	if !found {
+		return nil, false
+	}
+	if len(query) == 0 {
+		return []string{""}, true
+	}
+	return query, true
 }
 
 func restrictedPath(ctx context.Context, path string) bool {

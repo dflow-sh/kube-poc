@@ -20,9 +20,17 @@ spec:
         app.kubernetes.io/name: dflow-ui
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
       containers:
       - name: dflow-ui
-        {{ $dflowUiImage := index .Values "image" "dflow-ui" -}}
+        {{- $dflowUiImage := index .Values.image "dflow-ui" | default dict }}
+        {{- if or (not $dflowUiImage.repository) (not $dflowUiImage.tag) }}
+        {{- fail "dflowUI.enabled requires image.dflow-ui.repository and image.dflow-ui.tag" }}
+        {{- end }}
         image: "{{ default $dflowUiImage.registry (include "registry-url" .) }}{{ $dflowUiImage.repository }}:{{ $dflowUiImage.tag }}"
         imagePullPolicy: {{ .Values.dflowUI.imagePullPolicy }}
         workingDir: /db
@@ -96,6 +104,11 @@ spec:
           runAsNonRoot: true
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+              - ALL
+          seccompProfile:
+            type: RuntimeDefault
         livenessProbe:
           tcpSocket:
             port: {{ .Values.dflowUI.service.containerPort | default 8000 }}

@@ -1,0 +1,129 @@
+{{- /* Parent-only gate. seaweedfs.networkPolicy belongs to the subchart and must stay off. */ -}}
+{{- $ingressPolicy := .Values.seaweedfsIngressPolicy | default dict -}}
+{{- $ingressPolicyEnabled := true -}}
+{{- if hasKey $ingressPolicy "enabled" -}}
+{{- $ingressPolicyEnabled = index $ingressPolicy "enabled" -}}
+{{- end -}}
+{{- if and .Values.seaweedfs.enabled $ingressPolicyEnabled }}
+{{- $master := .Values.seaweedfs.master | default dict -}}
+{{- $volume := .Values.seaweedfs.volume | default dict -}}
+{{- $filer := .Values.seaweedfs.filer | default dict -}}
+{{- $s3 := .Values.seaweedfs.s3 | default dict -}}
+{{- $extraVolumes := .Values.seaweedfs.volumes | default dict -}}
+{{- /* Ports match the SeaweedFS chart defaults. Parent values override them when set. */ -}}
+{{- $masterPorts := list (dig "port" 9333 $master) (dig "grpcPort" 19333 $master) -}}
+{{- $masterMetrics := dig "metricsPort" 9327 $master -}}
+{{- if and (kindIs "float64" $masterMetrics | or (kindIs "int" $masterMetrics)) (gt (int $masterMetrics) 0) -}}
+{{- $masterPorts = append $masterPorts (int $masterMetrics) -}}
+{{- end -}}
+{{- $volumePorts := list (dig "port" 8080 $volume) (dig "grpcPort" 18080 $volume) -}}
+{{- $volumeMetrics := dig "metricsPort" 9327 $volume -}}
+{{- if and (kindIs "float64" $volumeMetrics | or (kindIs "int" $volumeMetrics)) (gt (int $volumeMetrics) 0) -}}
+{{- $volumePorts = append $volumePorts (int $volumeMetrics) -}}
+{{- end -}}
+{{- $filerPorts := list (dig "port" 8888 $filer) (dig "grpcPort" 18888 $filer) -}}
+{{- $filerMetrics := dig "metricsPort" 9327 $filer -}}
+{{- if and (kindIs "float64" $filerMetrics | or (kindIs "int" $filerMetrics)) (gt (int $filerMetrics) 0) -}}
+{{- $filerPorts = append $filerPorts (int $filerMetrics) -}}
+{{- end -}}
+{{- $s3Port := dig "port" 8333 $s3 -}}
+{{- $s3HTTPS := dig "httpsPort" 0 $s3 -}}
+{{- $peers := list -}}
+{{- if dig "enabled" true $master -}}
+{{- $peers = append $peers (dict "name" "master" "component" "master" "ports" $masterPorts) -}}
+{{- end -}}
+{{- if dig "enabled" true $volume -}}
+{{- $peers = append $peers (dict "name" "volume" "component" "volume" "ports" $volumePorts) -}}
+{{- end -}}
+{{- range $groupName, $group := $extraVolumes -}}
+{{- $merged := mergeOverwrite (deepCopy $volume) ($group | default dict) -}}
+{{- if dig "enabled" true $merged -}}
+{{- $groupPorts := list (dig "port" 8080 $merged) (dig "grpcPort" 18080 $merged) -}}
+{{- $groupMetrics := dig "metricsPort" 9327 $merged -}}
+{{- if and (kindIs "float64" $groupMetrics | or (kindIs "int" $groupMetrics)) (gt (int $groupMetrics) 0) -}}
+{{- $groupPorts = append $groupPorts (int $groupMetrics) -}}
+{{- end -}}
+{{- $component := trimSuffix "-" (printf "volume-%s" $groupName) -}}
+{{- $peers = append $peers (dict "name" $component "component" $component "ports" $groupPorts) -}}
+{{- end -}}
+{{- end -}}
+{{- if dig "enabled" true $filer -}}
+{{- $peers = append $peers (dict "name" "filer" "component" "filer" "ports" $filerPorts) -}}
+{{- end -}}
+{{- /* Master, volume, and filer talk to each other. The filer gRPC port is the
+       IAM API and is included here so the S3 gateway can reach it, and is not
+       opened to any other pod. */ -}}
+{{- range $peer := $peers }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: seaweedfs-{{ $peer.name }}
+  namespace: {{ $.Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: seaweedfs
+      app.kubernetes.io/instance: {{ $.Release.Name }}
+      app.kubernetes.io/component: {{ $peer.component }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: seaweedfs
+              app.kubernetes.io/instance: {{ $.Release.Name }}
+      ports:
+        {{- range $port := $peer.ports }}
+        {{- if and $port (gt (int $port) 0) }}
+        - protocol: TCP
+          port: {{ int $port }}
+        {{- end }}
+        {{- end }}
+{{- end }}
+{{- if and (dig "enabled" true $s3) (gt (int $s3Port) 0) }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: seaweedfs-s3
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: seaweedfs
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: s3
+  policyTypes:
+    - Ingress
+  ingress:
+    # dflow-server uploads and reads source blobs through the S3 API.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: dflow-server
+              app.kubernetes.io/component: dflow-server
+      ports:
+        - protocol: TCP
+          port: {{ int $s3Port }}
+          {{- if and $s3HTTPS (gt (int $s3HTTPS) 0) }}
+        - protocol: TCP
+          port: {{ int $s3HTTPS }}
+          {{- end }}
+    # Staging jobs run in the release namespace. Only the download init
+    # container calls S3; the pod label is the selector NetworkPolicy can use.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: staging
+              app.kubernetes.io/managed-by: dflow
+      ports:
+        - protocol: TCP
+          port: {{ int $s3Port }}
+          {{- if and $s3HTTPS (gt (int $s3HTTPS) 0) }}
+        - protocol: TCP
+          port: {{ int $s3HTTPS }}
+          {{- end }}
+{{- end }}
+{{- end }}

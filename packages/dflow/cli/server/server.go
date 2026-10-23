@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	apiv1 "github.com/dflow-sh/kube-poc/packages/dflow/api/v1"
+	"github.com/dflow-sh/kube-poc/packages/dflow/api/v1/application"
 	"github.com/dflow-sh/kube-poc/packages/dflow/api/v1/middleware"
 	"github.com/dflow-sh/kube-poc/packages/dflow/api/v1/response"
 	"github.com/dflow-sh/kube-poc/packages/dflow/auth"
@@ -36,6 +37,84 @@ import (
 
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 )
+
+// apiMiddleware is the authenticated REST chain.
+// gitconfig authorization is enforced in the handlers (read allows global,
+// delete is owner/admin only), which the middleware cannot express without
+// loading the resource.
+func apiMiddleware() []gin.HandlerFunc {
+	return []gin.HandlerFunc{
+		middleware.Authentication,
+		middleware.DFlowVersion,
+		middleware.NamespaceExists,
+		middleware.RoleAuthorization,
+		middleware.NamespaceAuthorization,
+	}
+}
+
+// websocketMiddleware is the authenticated websocket chain.
+// TokenAuth stores the user it just read, and NamespaceAuthorization uses
+// that user. gitconfig has no websocket routes.
+func websocketMiddleware() []gin.HandlerFunc {
+	return []gin.HandlerFunc{
+		middleware.TokenAuth,
+		middleware.DFlowVersion,
+		middleware.NamespaceExists,
+		middleware.RoleAuthorization,
+		middleware.NamespaceAuthorization,
+	}
+}
+
+// corsAllowOrigin chooses the Access-Control-Allow-Origin value.
+// A single configured origin is sent as-is. A list echoes the request Origin
+// when that origin is allowed. Credentials cannot be combined with "*".
+func corsAllowOrigin(r *http.Request, allowed []string) string {
+	if len(allowed) == 1 && allowed[0] != "*" {
+		return allowed[0]
+	}
+
+	origin := strings.TrimSuffix(strings.TrimSpace(r.Header.Get("Origin")), "/")
+	for _, allowedOrigin := range allowed {
+		if allowedOrigin == "*" {
+			if origin != "" {
+				return origin
+			}
+			return "*"
+		}
+		if origin != "" && allowedOrigin == origin {
+			return origin
+		}
+	}
+	return ""
+}
+
+// setCORSHeaders writes the CORS response headers for one request.
+// Access-Control-Allow-Credentials is omitted when the allow-list echoes
+// for "*", because credentials cannot be combined with a wildcard origin.
+func setCORSHeaders(ctx *gin.Context, allowed []string) {
+	header := corsAllowOrigin(ctx.Request, allowed)
+	if header == "" {
+		return
+	}
+
+	ctx.Header("Access-Control-Allow-Origin", header)
+	if corsAllowsCredentials(allowed) {
+		ctx.Header("Access-Control-Allow-Credentials", "true")
+	}
+	// These cannot be wildcards when Access-Control-Allow-Credentials is true.
+	ctx.Header("Access-Control-Allow-Methods", "POST, PUT, PATCH, GET, OPTIONS, DELETE")
+	ctx.Header("Access-Control-Allow-Headers", "Authorization,x-api-csrf,content-type,file-size")
+	ctx.Header("Vary", "Origin")
+}
+
+func corsAllowsCredentials(allowed []string) bool {
+	for _, origin := range allowed {
+		if origin == "*" {
+			return false
+		}
+	}
+	return true
+}
 
 // tracedPath reports whether a request should be traced by the otelgin
 // middleware. Websocket connections are long-running, so a span covering
@@ -71,15 +150,12 @@ func NewHandler() (*gin.Engine, error) {
 		response.Error(ctx, apierrors.NewNotFoundError("route", ctx.Request.URL.Path))
 	})
 
-	// Do not set header if nothing is specified.
-	accessControlAllowOrigin := strings.TrimSuffix(viper.GetString("access-control-allow-origin"), "/")
-	if accessControlAllowOrigin != "" {
+	// An empty allow-list sets no CORS header. Browser callers are then limited
+	// to same-origin, which matches the websocket CheckOrigin rule.
+	allowedOrigins := application.SplitAllowOrigins(viper.GetString("access-control-allow-origin"))
+	if len(allowedOrigins) > 0 {
 		router.Use(func(ctx *gin.Context) {
-			ctx.Header("Access-Control-Allow-Origin", accessControlAllowOrigin)
-			ctx.Header("Access-Control-Allow-Credentials", "true")
-			ctx.Header("Access-Control-Allow-Methods", "POST, PUT, PATCH, GET, OPTIONS, DELETE")          // This cannot be a wildcard when `Access-Control-Allow-Credentials` is true
-			ctx.Header("Access-Control-Allow-Headers", "Authorization,x-api-csrf,content-type,file-size") // This cannot be a wildcard when `Access-Control-Allow-Credentials` is true
-			ctx.Header("Vary", "Origin")                                                                  // Required when `Access-Control-Allow-Origin` is not a wildcard value
+			setCORSHeaders(ctx, allowedOrigins)
 
 			if ctx.Request.Method == "OPTIONS" {
 				// OPTIONS requests don't support `Authorization` headers, so return before we hit any checks
@@ -141,32 +217,13 @@ func NewHandler() (*gin.Engine, error) {
 
 	// Register api routes
 	{
-		apiRoutesGroup := router.Group(apiv1.Root,
-			middleware.Authentication,
-			middleware.DFlowVersion,
-			middleware.NamespaceExists,
-			middleware.RoleAuthorization,
-			middleware.NamespaceAuthorization,
-			// gitconfig authorization is enforced in the handlers (read allows
-			// global, delete is owner/admin only), which the middleware cannot
-			// express without loading the resource.
-		)
+		apiRoutesGroup := router.Group(apiv1.Root, apiMiddleware()...)
 		apiv1.Lemon(apiRoutesGroup)
 	}
 
 	// Register web socket routes
 	{
-		wapiRoutesGroup := router.Group(apiv1.WsRoot,
-			middleware.TokenAuth,
-			middleware.DFlowVersion,
-			middleware.NamespaceExists,
-			middleware.RoleAuthorization,
-			// NOTE: websocket endpoints rely on TokenAuth + RoleAuthorization.
-			// We intentionally skip NamespaceAuthorization here because token-backed
-			// websocket sessions can observe transient namespace-list lag, causing
-			// intermittent 403 handshake failures in exec/port-forward flows.
-			// gitconfig has no websocket routes
-		)
+		wapiRoutesGroup := router.Group(apiv1.WsRoot, websocketMiddleware()...)
 		apiv1.Spice(wapiRoutesGroup)
 	}
 

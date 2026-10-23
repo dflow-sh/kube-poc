@@ -63,7 +63,7 @@ var _ = Describe("Services", LService, func() {
 	Describe("Catalog", func() {
 
 		It("lists the standard catalog", func() {
-			out, err := env.dFlow("", "service", "catalog")
+			out, err := env.DFlow("", "service", "catalog")
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			Expect(out).To(ContainSubstring("Getting catalog"))
@@ -80,7 +80,7 @@ var _ = Describe("Services", LService, func() {
 		})
 
 		It("lists the catalog details", func() {
-			out, err := env.dFlow("", "service", "catalog", "redis-dev")
+			out, err := env.DFlow("", "service", "catalog", "redis-dev")
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			Expect(out).To(ContainSubstring("Show service details"))
@@ -103,7 +103,7 @@ var _ = Describe("Services", LService, func() {
 			// mysql takes more time to provision.
 
 			It("lists the extended catalog", func() {
-				out, err := env.dFlow("", "service", "catalog")
+				out, err := env.DFlow("", "service", "catalog")
 				Expect(err).ToNot(HaveOccurred(), out)
 
 				Expect(out).To(ContainSubstring("Getting catalog"))
@@ -111,7 +111,7 @@ var _ = Describe("Services", LService, func() {
 			})
 
 			It("lists the extended catalog details", func() {
-				out, err := env.dFlow("", "service", "catalog", catalogService.Meta.Name)
+				out, err := env.DFlow("", "service", "catalog", catalogService.Meta.Name)
 				Expect(err).ToNot(HaveOccurred(), out)
 
 				Expect(out).To(ContainSubstring("Settings"))
@@ -133,19 +133,19 @@ var _ = Describe("Services", LService, func() {
 
 		Context("command completion", func() {
 			It("matches empty prefix", func() {
-				out, err := env.dFlow("", "__complete", "service", "catalog", "")
+				out, err := env.DFlow("", "__complete", "service", "catalog", "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring(catalogService.Meta.Name))
 			})
 
 			It("does not match unknown prefix", func() {
-				out, err := env.dFlow("", "__complete", "service", "catalog", "bogus")
+				out, err := env.DFlow("", "__complete", "service", "catalog", "bogus")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring("bogus"))
 			})
 
 			It("does not match bogus arguments", func() {
-				out, err := env.dFlow("", "__complete", "service", "catalog",
+				out, err := env.DFlow("", "__complete", "service", "catalog",
 					catalogService.Meta.Name, "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring(catalogService.Meta.Name))
@@ -160,13 +160,13 @@ var _ = Describe("Services", LService, func() {
 			service = catalog.NewServiceName()
 
 			By("create it")
-			out, err := env.dFlow("", "service", "create", "mysql-dev", service, "--wait")
+			out, err := env.DFlow("", "service", "create", "mysql-dev", service, "--wait")
 			Expect(err).ToNot(HaveOccurred(), out)
 		})
 
 		It("shows a service which has credentials", func() {
 			By("show it")
-			out, err := env.dFlow("", "service", "show", service)
+			out, err := env.DFlow("", "service", "show", service)
 			Expect(err).ToNot(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("Showing Service"))
 			Expect(out).To(ContainSubstring("No settings"))
@@ -188,11 +188,11 @@ var _ = Describe("Services", LService, func() {
 			service = catalog.NewServiceName()
 
 			By("create it")
-			out, err := env.dFlow("", "service", "create", catalogService.Meta.Name, service, "--wait")
+			out, err := env.DFlow("", "service", "create", catalogService.Meta.Name, service, "--wait")
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			Eventually(func() string {
-				out, _ := env.dFlow("", "service", "show", service)
+				out, _ := env.DFlow("", "service", "show", service)
 				return out
 			}, ServiceDeployTimeout, ServiceDeployPollingInterval).Should(
 				And(
@@ -204,7 +204,7 @@ var _ = Describe("Services", LService, func() {
 
 		It("shows a service which has no credentials", func() {
 			By("show it")
-			out, err := env.dFlow("", "service", "show", service)
+			out, err := env.DFlow("", "service", "show", service)
 			Expect(err).ToNot(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("Showing Service"))
 			Expect(out).To(ContainSubstring("No settings"))
@@ -237,7 +237,7 @@ var _ = Describe("Services", LService, func() {
 					servicePort = "443"
 				}
 
-				out, err := env.dFlow("", "service", "create",
+				out, err := env.DFlow("", "service", "create",
 					catalogService.Meta.Name, serviceName,
 					"--chart-value", "ingress.enabled=true",
 					"--chart-value", "ingress.hostname="+serviceHostname,
@@ -264,7 +264,7 @@ var _ = Describe("Services", LService, func() {
 					return resp.StatusCode
 				}, "5m", "2s").Should(Equal(http.StatusOK))
 
-				out, err = env.dFlow("", "service", "show", serviceName)
+				out, err = env.DFlow("", "service", "show", serviceName)
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring("Showing Service"))
 				Expect(out).To(ContainSubstring("Settings"))
@@ -284,19 +284,19 @@ var _ = Describe("Services", LService, func() {
 
 		Context("command completion", func() {
 			It("matches empty prefix", func() {
-				out, err := env.dFlow("", "__complete", "service", "show", "")
+				out, err := env.DFlow("", "__complete", "service", "show", "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring(service))
 			})
 
 			It("does not match unknown prefix", func() {
-				out, err := env.dFlow("", "__complete", "service", "show", "bogus")
+				out, err := env.DFlow("", "__complete", "service", "show", "bogus")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring("bogus"))
 			})
 
 			It("does not match bogus arguments", func() {
-				out, err := env.dFlow("", "__complete", "service", "show", service, "")
+				out, err := env.DFlow("", "__complete", "service", "show", service, "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring(service))
 			})
@@ -310,11 +310,11 @@ var _ = Describe("Services", LService, func() {
 			service = catalog.NewServiceName()
 
 			By("create it")
-			out, err := env.dFlow("", "service", "create", catalogService.Meta.Name, service, "--wait")
+			out, err := env.DFlow("", "service", "create", catalogService.Meta.Name, service, "--wait")
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			Eventually(func() string {
-				out, _ := env.dFlow("", "service", "show", service)
+				out, _ := env.DFlow("", "service", "show", service)
 				return out
 			}, ServiceDeployTimeout, ServiceDeployPollingInterval).Should(
 				And(
@@ -326,7 +326,7 @@ var _ = Describe("Services", LService, func() {
 
 		It("lists a service", func() {
 			By("show it")
-			out, err := env.dFlow("", "service", "list")
+			out, err := env.DFlow("", "service", "list")
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			Expect(out).To(ContainSubstring("Listing Services"))
@@ -341,7 +341,7 @@ var _ = Describe("Services", LService, func() {
 
 			By("wait for deployment")
 			Eventually(func() string {
-				out, _ := env.dFlow("", "service", "list")
+				out, _ := env.DFlow("", "service", "list")
 				return out
 			}, ServiceDeployTimeout, ServiceDeployPollingInterval).Should(
 				HaveATable(
@@ -354,7 +354,7 @@ var _ = Describe("Services", LService, func() {
 		})
 
 		It("lists services in JSON format", func() {
-			out, err := env.dFlow("", "service", "list", "--output", "json")
+			out, err := env.DFlow("", "service", "list", "--output", "json")
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			services := models.ServiceList{}
@@ -420,17 +420,17 @@ var _ = Describe("Services", LService, func() {
 			By("create them in different namespaces")
 			// create service1 in namespace1
 			env.TargetNamespace(namespace1)
-			out, err := env.dFlow("", "service", "create", catalogService.Meta.Name, service1, "--wait")
+			out, err := env.DFlow("", "service", "create", catalogService.Meta.Name, service1, "--wait")
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			// create service2 in namespace2
 			env.TargetNamespace(namespace2)
-			out, err = env.dFlow("", "service", "create", catalogService.Meta.Name, service2, "--wait")
+			out, err = env.DFlow("", "service", "create", catalogService.Meta.Name, service2, "--wait")
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			// show all the services (we are admin, good to go)
 			By("show it")
-			out, err = env.dFlow("", "service", "list", "--all")
+			out, err = env.DFlow("", "service", "list", "--all")
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			Expect(out).To(ContainSubstring("Listing all Services"))
@@ -451,7 +451,7 @@ var _ = Describe("Services", LService, func() {
 			updateSettings(user1, password1, namespace1)
 
 			// create service1 in namespace1
-			out, err := env.dFlow("", "service", "create", catalogService.Meta.Name, service1, "--settings-file", tmpSettingsPath, "--wait")
+			out, err := env.DFlow("", "service", "create", catalogService.Meta.Name, service1, "--settings-file", tmpSettingsPath, "--wait")
 			Expect(err).ToNot(HaveOccurred(), out, tmpSettingsPath)
 
 			// impersonate user2
@@ -459,12 +459,12 @@ var _ = Describe("Services", LService, func() {
 
 			// create service2 in namespace2
 			env.TargetNamespace(namespace2)
-			out, err = env.dFlow("", "service", "create", catalogService.Meta.Name, service2, "--settings-file", tmpSettingsPath, "--wait")
+			out, err = env.DFlow("", "service", "create", catalogService.Meta.Name, service2, "--settings-file", tmpSettingsPath, "--wait")
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			// show only owned namespaces (we are user2, only namespace2)
 			By("show it")
-			out, err = env.dFlow("", "service", "list", "--all", "--settings-file", tmpSettingsPath)
+			out, err = env.DFlow("", "service", "list", "--all", "--settings-file", tmpSettingsPath)
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			Expect(out).To(ContainSubstring("Listing all Services"))
@@ -483,7 +483,7 @@ var _ = Describe("Services", LService, func() {
 			)
 
 			By("verify service deployment")
-			out, err = env.dFlow("", "service", "list", "--all", "--settings-file", tmpSettingsPath)
+			out, err = env.DFlow("", "service", "list", "--all", "--settings-file", tmpSettingsPath)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(out).To(
 				HaveATable(
@@ -501,11 +501,11 @@ var _ = Describe("Services", LService, func() {
 			service := catalog.NewServiceName()
 
 			By("create it")
-			out, err := env.dFlow("", "service", "create", catalogService.Meta.Name, service, "--wait")
+			out, err := env.DFlow("", "service", "create", catalogService.Meta.Name, service, "--wait")
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			By("show it")
-			out, err = env.dFlow("", "service", "show", service)
+			out, err = env.DFlow("", "service", "show", service)
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			Expect(out).To(
@@ -525,11 +525,11 @@ var _ = Describe("Services", LService, func() {
 			service := catalog.NewServiceName()
 
 			By("create it")
-			out, err := env.dFlow("", "service", "create", catalogService.Meta.Name, service)
+			out, err := env.DFlow("", "service", "create", catalogService.Meta.Name, service)
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			By("show it")
-			out, err = env.dFlow("", "service", "show", service)
+			out, err = env.DFlow("", "service", "show", service)
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			Expect(out).To(
@@ -544,7 +544,7 @@ var _ = Describe("Services", LService, func() {
 
 			By("wait for deployment")
 			Eventually(func() string {
-				out, _ := env.dFlow("", "service", "show", service)
+				out, _ := env.DFlow("", "service", "show", service)
 				return out
 			}, ServiceDeployTimeout, ServiceDeployPollingInterval).Should(
 				HaveATable(
@@ -559,19 +559,19 @@ var _ = Describe("Services", LService, func() {
 
 		Context("command completion", func() {
 			It("matches empty prefix", func() {
-				out, err := env.dFlow("", "__complete", "service", "create", "")
+				out, err := env.DFlow("", "__complete", "service", "create", "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring(catalogService.Meta.Name))
 			})
 
 			It("does not match unknown prefix", func() {
-				out, err := env.dFlow("", "__complete", "service", "create", "bogus")
+				out, err := env.DFlow("", "__complete", "service", "create", "bogus")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring("bogus"))
 			})
 
 			It("does not match bogus arguments", func() {
-				out, err := env.dFlow("", "__complete", "service", "create", catalogService.Meta.Name, "")
+				out, err := env.DFlow("", "__complete", "service", "create", catalogService.Meta.Name, "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring(catalogService.Meta.Name))
 			})
@@ -588,11 +588,11 @@ var _ = Describe("Services", LService, func() {
 		})
 
 		It("deletes a service", func() {
-			out, err := env.dFlow("", "service", "delete", service)
+			out, err := env.DFlow("", "service", "delete", service)
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			Eventually(func() string {
-				out, _ := env.dFlow("", "service", "delete", service)
+				out, _ := env.DFlow("", "service", "delete", service)
 				return out
 			}, "1m", "5s").Should(ContainSubstring("service '%s' does not exist", service))
 		})
@@ -606,22 +606,22 @@ var _ = Describe("Services", LService, func() {
 			})
 
 			It("deletes multiple services", func() {
-				out, err := env.dFlow("", "service", "delete", service, service2)
+				out, err := env.DFlow("", "service", "delete", service, service2)
 				Expect(err).ToNot(HaveOccurred(), out)
 
 				Eventually(func() string {
-					out, _ := env.dFlow("", "service", "show", service)
+					out, _ := env.DFlow("", "service", "show", service)
 					return out
 				}, "1m", "5s").Should(ContainSubstring("service '%s' does not exist", service))
 
 				Eventually(func() string {
-					out, _ := env.dFlow("", "service", "show", service2)
+					out, _ := env.DFlow("", "service", "show", service2)
 					return out
 				}, "1m", "5s").Should(ContainSubstring("service '%s' does not exist", service2))
 			})
 
 			It("does match for more than one service", func() {
-				out, err := env.dFlow("", "__complete", "service", "delete", "")
+				out, err := env.DFlow("", "__complete", "service", "delete", "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring(service))
 				Expect(out).To(ContainSubstring(service2))
@@ -630,7 +630,7 @@ var _ = Describe("Services", LService, func() {
 			It("does match for more than one service but only the remaining one", func() {
 				// Completion may need a moment to see both services; retry briefly
 				Eventually(func() string {
-					out, _ := env.dFlow("", "__complete", "service", "delete", service, "")
+					out, _ := env.DFlow("", "__complete", "service", "delete", service, "")
 					return out
 				}, "30s", "2s").Should(And(
 					Not(ContainSubstring(service)),
@@ -638,7 +638,7 @@ var _ = Describe("Services", LService, func() {
 				))
 
 				Eventually(func() string {
-					out, _ := env.dFlow("", "__complete", "service", "delete", service2, "")
+					out, _ := env.DFlow("", "__complete", "service", "delete", service2, "")
 					return out
 				}, "30s", "2s").Should(And(
 					ContainSubstring(service),
@@ -658,7 +658,7 @@ var _ = Describe("Services", LService, func() {
 
 				// we need to create a new service with some secrets to create the configuration
 				By("create it")
-				out, err := env.dFlow("", "service", "create", "postgresql-dev", service, "--wait")
+				out, err := env.DFlow("", "service", "create", "postgresql-dev", service, "--wait")
 				Expect(err).ToNot(HaveOccurred(), out)
 
 				By("create app")
@@ -666,11 +666,11 @@ var _ = Describe("Services", LService, func() {
 				env.MakeContainerImageApp(app, 1, containerImageURL)
 
 				By("bind it")
-				out, err = env.dFlow("", "service", "bind", service, app)
+				out, err = env.DFlow("", "service", "bind", service, app)
 				Expect(err).ToNot(HaveOccurred(), out)
 
 				By("verify binding")
-				appShowOut, err := env.dFlow("", "app", "show", app)
+				appShowOut, err := env.DFlow("", "app", "show", app)
 				Expect(err).ToNot(HaveOccurred())
 				Expect(appShowOut).To(
 					HaveATable(
@@ -681,7 +681,7 @@ var _ = Describe("Services", LService, func() {
 			})
 
 			It("fails to delete a bound service", func() {
-				out, err := env.dFlow("", "service", "delete", service)
+				out, err := env.DFlow("", "service", "delete", service)
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring("Unable to delete service. It is still used by"))
 				Expect(out).To(ContainSubstring(app))
@@ -692,24 +692,24 @@ var _ = Describe("Services", LService, func() {
 				env.DeleteApp(app)
 
 				By("delete it")
-				out, err = env.dFlow("", "service", "delete", service)
+				out, err = env.DFlow("", "service", "delete", service)
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring("Services Removed"))
 
 				Eventually(func() string {
-					out, _ := env.dFlow("", "service", "delete", service)
+					out, _ := env.DFlow("", "service", "delete", service)
 					return out
 				}, "1m", "5s").Should(ContainSubstring("service '%s' does not exist", service))
 
 			})
 
 			It("unbinds and deletes a bound service when forced", func() {
-				out, err := env.dFlow("", "service", "delete", "--unbind", service)
+				out, err := env.DFlow("", "service", "delete", "--unbind", service)
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring("Services Removed"))
 
 				Eventually(func() string {
-					out, _ := env.dFlow("", "service", "delete", service)
+					out, _ := env.DFlow("", "service", "delete", service)
 					return out
 				}, "1m", "5s").Should(ContainSubstring("service '%s' does not exist", service))
 			})
@@ -723,26 +723,26 @@ var _ = Describe("Services", LService, func() {
 
 					// we need to create second service for this
 					By("create it")
-					out, err := env.dFlow("", "service", "create", "postgresql-dev", service2, "--wait")
+					out, err := env.DFlow("", "service", "create", "postgresql-dev", service2, "--wait")
 					Expect(err).ToNot(HaveOccurred(), out)
 				})
 
 				It("unbinds and deletes a bound service when forced, and can bind again", func() {
-					out, err := env.dFlow("", "service", "delete", "--unbind", service)
+					out, err := env.DFlow("", "service", "delete", "--unbind", service)
 					Expect(err).ToNot(HaveOccurred(), out)
 					Expect(out).To(ContainSubstring("Services Removed"))
 
 					Eventually(func() string {
-						out, _ := env.dFlow("", "service", "delete", service)
+						out, _ := env.DFlow("", "service", "delete", service)
 						return out
 					}, "1m", "5s").Should(ContainSubstring("service '%s' does not exist", service))
 
 					By("bind second service to changed app")
-					out, err = env.dFlow("", "service", "bind", service2, app)
+					out, err = env.DFlow("", "service", "bind", service2, app)
 					Expect(err).ToNot(HaveOccurred(), out)
 
 					By("verify binding")
-					appShowOut, err := env.dFlow("", "app", "show", app)
+					appShowOut, err := env.DFlow("", "app", "show", app)
 					Expect(err).ToNot(HaveOccurred())
 					Expect(appShowOut).To(
 						HaveATable(
@@ -756,19 +756,19 @@ var _ = Describe("Services", LService, func() {
 
 		Context("command completion", func() {
 			It("matches empty prefix", func() {
-				out, err := env.dFlow("", "__complete", "service", "delete", "")
+				out, err := env.DFlow("", "__complete", "service", "delete", "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring(service))
 			})
 
 			It("does not match unknown prefix", func() {
-				out, err := env.dFlow("", "__complete", "service", "delete", "bogus")
+				out, err := env.DFlow("", "__complete", "service", "delete", "bogus")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring("bogus"))
 			})
 
 			It("does match for more than one argument", func() {
-				out, err := env.dFlow("", "__complete", "service", "delete", "fake", "")
+				out, err := env.DFlow("", "__complete", "service", "delete", "fake", "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring(service))
 			})
@@ -785,12 +785,12 @@ var _ = Describe("Services", LService, func() {
 			chart = names.ServiceReleaseName(service)
 
 			By("create it")
-			out, err := env.dFlow("", "service", "create", "postgresql-dev", service)
+			out, err := env.DFlow("", "service", "create", "postgresql-dev", service)
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			By("wait for deployment")
 			Eventually(func() string {
-				out, _ := env.dFlow("", "service", "show", service)
+				out, _ := env.DFlow("", "service", "show", service)
 				return out
 			}, ServiceDeployTimeout, ServiceDeployPollingInterval).Should(
 				HaveATable(WithRow("Status", "deployed")),
@@ -803,12 +803,12 @@ var _ = Describe("Services", LService, func() {
 
 		// [EC] we should have a look at this unbind. It should be part of a test probably
 		AfterEach(func() {
-			out, err := env.dFlow("", "service", "unbind", service, app)
+			out, err := env.DFlow("", "service", "unbind", service, app)
 			Expect(err).ToNot(HaveOccurred(), out)
 			Expect(out).ToNot(ContainSubstring("Available Commands:")) // Command should exist
 
 			By("verify unbinding")
-			appShowOut, err := env.dFlow("", "app", "show", app)
+			appShowOut, err := env.DFlow("", "app", "show", app)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(appShowOut).ToNot(
 				HaveATable(
@@ -818,23 +818,23 @@ var _ = Describe("Services", LService, func() {
 			)
 
 			By("delete it")
-			out, err = env.dFlow("", "service", "delete", service)
+			out, err = env.DFlow("", "service", "delete", service)
 			Expect(err).ToNot(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("Services Removed"))
 
 			Eventually(func() string {
-				out, _ := env.dFlow("", "service", "delete", service)
+				out, _ := env.DFlow("", "service", "delete", service)
 				return out
 			}, "1m", "5s").Should(ContainSubstring("service '%s' does not exist", service))
 		})
 
 		It("binds the service", func() {
 			By("bind it")
-			out, err := env.dFlow("", "service", "bind", service, app)
+			out, err := env.DFlow("", "service", "bind", service, app)
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			By("verify binding /app")
-			appShowOut, err := env.dFlow("", "app", "show", app)
+			appShowOut, err := env.DFlow("", "app", "show", app)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(appShowOut).To(
 				HaveATable(
@@ -844,7 +844,7 @@ var _ = Describe("Services", LService, func() {
 			)
 
 			By("verify binding /show")
-			out, err = env.dFlow("", "service", "show", service)
+			out, err = env.DFlow("", "service", "show", service)
 			Expect(err).ToNot(HaveOccurred(), out)
 			Expect(out).To(
 				HaveATable(
@@ -854,7 +854,7 @@ var _ = Describe("Services", LService, func() {
 			)
 
 			By("verify binding /list")
-			out, err = env.dFlow("", "service", "list")
+			out, err = env.DFlow("", "service", "list")
 			Expect(err).ToNot(HaveOccurred(), out)
 			Expect(out).To(
 				HaveATable(
@@ -864,7 +864,7 @@ var _ = Describe("Services", LService, func() {
 			)
 
 			By("verify binding /list-all")
-			out, err = env.dFlow("", "service", "list", "--all")
+			out, err = env.DFlow("", "service", "list", "--all")
 			Expect(err).ToNot(HaveOccurred(), out)
 			Expect(out).To(
 				HaveATable(
@@ -876,31 +876,31 @@ var _ = Describe("Services", LService, func() {
 
 		Context("command completion", func() {
 			It("matches empty service prefix", func() {
-				out, err := env.dFlow("", "__complete", "service", "bind", "")
+				out, err := env.DFlow("", "__complete", "service", "bind", "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring(service))
 			})
 
 			It("matches empty app prefix", func() {
-				out, err := env.dFlow("", "__complete", "service", "bind", service, "")
+				out, err := env.DFlow("", "__complete", "service", "bind", service, "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring(app))
 			})
 
 			It("does not match unknown service prefix", func() {
-				out, err := env.dFlow("", "__complete", "service", "bind", "bogus")
+				out, err := env.DFlow("", "__complete", "service", "bind", "bogus")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring("bogus"))
 			})
 
 			It("does not match unknown app prefix", func() {
-				out, err := env.dFlow("", "__complete", "service", "bind", service, "bogus")
+				out, err := env.DFlow("", "__complete", "service", "bind", service, "bogus")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring("bogus"))
 			})
 
 			It("does not match bogus arguments", func() {
-				out, err := env.dFlow("", "__complete", "service", "bind", service, app, "")
+				out, err := env.DFlow("", "__complete", "service", "bind", service, app, "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring(app))
 				Expect(out).ToNot(ContainSubstring(service))
@@ -918,7 +918,7 @@ var _ = Describe("Services", LService, func() {
 			chart = names.ServiceReleaseName(service)
 
 			By("create it")
-			out, err := env.dFlow("", "service", "create", "postgresql-dev", service)
+			out, err := env.DFlow("", "service", "create", "postgresql-dev", service)
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			By("create app")
@@ -927,7 +927,7 @@ var _ = Describe("Services", LService, func() {
 
 			By("wait for deployment")
 			Eventually(func() string {
-				out, _ := env.dFlow("", "service", "show", service)
+				out, _ := env.DFlow("", "service", "show", service)
 				return out
 			}, ServiceDeployTimeout, ServiceDeployPollingInterval).Should(
 				HaveATable(
@@ -937,11 +937,11 @@ var _ = Describe("Services", LService, func() {
 			)
 
 			By("bind it")
-			out, err = env.dFlow("", "service", "bind", service, app)
+			out, err = env.DFlow("", "service", "bind", service, app)
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			By("verify binding")
-			appShowOut, err := env.dFlow("", "app", "show", app)
+			appShowOut, err := env.DFlow("", "app", "show", app)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(appShowOut).To(
 				HaveATable(
@@ -952,12 +952,12 @@ var _ = Describe("Services", LService, func() {
 		})
 
 		It("unbinds the service", func() {
-			out, err := env.dFlow("", "service", "unbind", service, app)
+			out, err := env.DFlow("", "service", "unbind", service, app)
 			Expect(err).ToNot(HaveOccurred(), out)
 			Expect(out).ToNot(ContainSubstring("Available Commands:")) // Command should exist
 
 			By("verify unbinding")
-			appShowOut, err := env.dFlow("", "app", "show", app)
+			appShowOut, err := env.DFlow("", "app", "show", app)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(appShowOut).ToNot(
 				HaveATable(
@@ -967,7 +967,7 @@ var _ = Describe("Services", LService, func() {
 			)
 
 			By("verify unbinding /show")
-			out, err = env.dFlow("", "service", "show", service)
+			out, err = env.DFlow("", "service", "show", service)
 			Expect(err).ToNot(HaveOccurred(), out)
 			Expect(out).To(
 				HaveATable(
@@ -977,7 +977,7 @@ var _ = Describe("Services", LService, func() {
 			)
 
 			By("verify unbinding /list")
-			out, err = env.dFlow("", "service", "list")
+			out, err = env.DFlow("", "service", "list")
 			Expect(err).ToNot(HaveOccurred(), out)
 			Expect(out).ToNot(HaveATable(WithRow(service, WithDate(), "postgresql-dev", ".*", app)))
 			Expect(out).To(
@@ -988,7 +988,7 @@ var _ = Describe("Services", LService, func() {
 			)
 
 			By("verify unbinding /list-all")
-			out, err = env.dFlow("", "service", "list", "--all")
+			out, err = env.DFlow("", "service", "list", "--all")
 			Expect(err).ToNot(HaveOccurred(), out)
 			Expect(out).To(
 				HaveATable(
@@ -1009,12 +1009,12 @@ var _ = Describe("Services", LService, func() {
 			Expect(err).ToNot(HaveOccurred())
 
 			By("unbinding the service")
-			out, err := env.dFlow("", "service", "unbind", service, app)
+			out, err := env.DFlow("", "service", "unbind", service, app)
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			By("verifying service is unbound")
 			Eventually(func() string {
-				appShowOut, err := env.dFlow("", "app", "show", app)
+				appShowOut, err := env.DFlow("", "app", "show", app)
 				Expect(err).ToNot(HaveOccurred())
 				return appShowOut
 			}, "30s").ShouldNot(
@@ -1033,7 +1033,7 @@ var _ = Describe("Services", LService, func() {
 
 			By("verifying app is healthy after unbind")
 			Eventually(func() string {
-				out, err := env.dFlow("", "app", "show", app)
+				out, err := env.DFlow("", "app", "show", app)
 				Expect(err).ToNot(HaveOccurred())
 				return out
 			}, "1m").Should(
@@ -1047,37 +1047,37 @@ var _ = Describe("Services", LService, func() {
 		Context("command completion", func() {
 			// Needed because the outer BeforeEach does binding, and the tests do not unbind
 			AfterEach(func() {
-				out, err := env.dFlow("", "service", "unbind", service, app)
+				out, err := env.DFlow("", "service", "unbind", service, app)
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring("Available Commands:")) // Command should exist
 			})
 
 			It("matches empty service prefix", func() {
-				out, err := env.dFlow("", "__complete", "service", "unbind", "")
+				out, err := env.DFlow("", "__complete", "service", "unbind", "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring(service))
 			})
 
 			It("matches empty app prefix", func() {
-				out, err := env.dFlow("", "__complete", "service", "unbind", service, "")
+				out, err := env.DFlow("", "__complete", "service", "unbind", service, "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring(app))
 			})
 
 			It("does not match unknown service prefix", func() {
-				out, err := env.dFlow("", "__complete", "service", "unbind", "bogus")
+				out, err := env.DFlow("", "__complete", "service", "unbind", "bogus")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring("bogus"))
 			})
 
 			It("does not match unknown app prefix", func() {
-				out, err := env.dFlow("", "__complete", "service", "unbind", service, "bogus")
+				out, err := env.DFlow("", "__complete", "service", "unbind", service, "bogus")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring("bogus"))
 			})
 
 			It("does not match bogus arguments", func() {
-				out, err := env.dFlow("", "__complete", "service", "unbind", service, app, "")
+				out, err := env.DFlow("", "__complete", "service", "unbind", service, app, "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring(app))
 				Expect(out).ToNot(ContainSubstring(service))
@@ -1103,7 +1103,7 @@ var _ = Describe("Services", LService, func() {
 				servicePort = "443"
 			}
 
-			out, err := env.dFlow("", "service", "create",
+			out, err := env.DFlow("", "service", "create",
 				catalogService.Meta.Name, serviceName,
 				"--chart-value", "ingress.enabled=true",
 				"--chart-value", "ingress.hostname="+serviceHostname,
@@ -1158,7 +1158,7 @@ var _ = Describe("Services", LService, func() {
 			port := randomPort()
 			serviceName := catalog.NewServiceName()
 
-			out, err := env.dFlow("", "service", "port-forward", serviceName, port)
+			out, err := env.DFlow("", "service", "port-forward", serviceName, port)
 			Expect(err).To(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("error port forwarding to service: service '" + serviceName + "' does not exist"))
 		})
@@ -1237,30 +1237,30 @@ var _ = Describe("Services", LService, func() {
 			})
 
 			// logout
-			_, err = env.dFlow("", "logout", "--settings-file", tmpSettingsPath)
+			_, err = env.DFlow("", "logout", "--settings-file", tmpSettingsPath)
 			Expect(err).ToNot(HaveOccurred())
 
 			By("port-forward with logged out user, expect failure ...")
 
-			_, err = env.dFlow("", "service", "port-forward", serviceName, "8082", "--settings-file", tmpSettingsPath)
+			_, err = env.DFlow("", "service", "port-forward", serviceName, "8082", "--settings-file", tmpSettingsPath)
 			Expect(err).To(HaveOccurred())
 		})
 
 		Context("command completion", func() {
 			It("matches empty prefix", func() {
-				out, err := env.dFlow("", "__complete", "service", "port-forward", "")
+				out, err := env.DFlow("", "__complete", "service", "port-forward", "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring(serviceName))
 			})
 
 			It("does not match unknown prefix", func() {
-				out, err := env.dFlow("", "__complete", "service", "port-forward", "bogus")
+				out, err := env.DFlow("", "__complete", "service", "port-forward", "bogus")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring("bogus"))
 			})
 
 			It("does not match for more than one argument", func() {
-				out, err := env.dFlow("", "__complete", "service", "port-forward", "fake", "")
+				out, err := env.DFlow("", "__complete", "service", "port-forward", "fake", "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring(serviceName))
 			})
@@ -1297,7 +1297,7 @@ var _ = Describe("Services", LService, func() {
 			service = catalog.NewServiceName()
 
 			By("creating service instance: " + service)
-			out, err := env.dFlow("", "service", "create",
+			out, err := env.DFlow("", "service", "create",
 				catalogService.Meta.Name, service,
 				"--chart-value", "sequence=one",
 				"--chart-value", "nesting.here.hello=world",
@@ -1311,7 +1311,7 @@ var _ = Describe("Services", LService, func() {
 		})
 
 		It("keeps the untouched settings in the helm release", func() {
-			out, err := env.dFlow("", "service", "update", service,
+			out, err := env.DFlow("", "service", "update", service,
 				"--wait",
 				"--set", "nesting.here.hello=user",
 			)
@@ -1324,7 +1324,7 @@ var _ = Describe("Services", LService, func() {
 		})
 
 		It("removes unset settings from the helm release", func() {
-			out, err := env.dFlow("", "service", "update", service,
+			out, err := env.DFlow("", "service", "update", service,
 				"--wait",
 				"--unset", "sequence",
 			)
@@ -1380,7 +1380,7 @@ var _ = Describe("Services", LService, func() {
 			env.MakeContainerImageApp(appName, 1, containerImageURL)
 
 			By("creating service instance: " + service)
-			out, err := env.dFlow("", "service", "create", catalogService.Meta.Name, service,
+			out, err := env.DFlow("", "service", "create", catalogService.Meta.Name, service,
 				"--chart-value", "ingress.enabled=true",
 				"--chart-value", "ingress.hostname="+serviceHostname,
 				"--chart-value", "nesting.here.hello=world",
@@ -1388,7 +1388,7 @@ var _ = Describe("Services", LService, func() {
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			Eventually(func() string {
-				out, _ := env.dFlow("", "service", "show", service)
+				out, _ := env.DFlow("", "service", "show", service)
 				return out
 			}, ServiceDeployTimeout, ServiceDeployPollingInterval).Should(
 				And(
@@ -1397,12 +1397,12 @@ var _ = Describe("Services", LService, func() {
 				),
 			)
 
-			out, err = env.dFlow("", "service", "bind", service, appName)
+			out, err = env.DFlow("", "service", "bind", service, appName)
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			// Wait for the app restart from binding the service to settle
 			Eventually(func() string {
-				out, err := env.dFlow("", "app", "list")
+				out, err := env.DFlow("", "app", "list")
 				Expect(err).ToNot(HaveOccurred(), out)
 				return out
 			}, "5m").Should(
@@ -1415,7 +1415,7 @@ var _ = Describe("Services", LService, func() {
 
 		It("it edits the service, and restarts the app", func() {
 			By("editing instance: " + service)
-			out, err := env.dFlow("", "service", "update", service,
+			out, err := env.DFlow("", "service", "update", service,
 				"--wait",
 				"--unset", "ingress.enabled",
 				"--unset", "ingress.hostname",
@@ -1435,7 +1435,7 @@ var _ = Describe("Services", LService, func() {
 
 			// Confirm the changes ...
 			By("checking instance: " + service)
-			out, err = env.dFlow("", "service", "show", service)
+			out, err = env.DFlow("", "service", "show", service)
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			Expect(out).To(ContainSubstring("Showing Service"))
@@ -1450,7 +1450,7 @@ var _ = Describe("Services", LService, func() {
 			// Wait for app to resettle ...
 			By("waiting for app to resettle: " + appName)
 			Eventually(func() string {
-				out, err := env.dFlow("", "app", "list")
+				out, err := env.DFlow("", "app", "list")
 				Expect(err).ToNot(HaveOccurred(), out)
 				return out
 			}, "5m").Should(
@@ -1473,7 +1473,7 @@ var _ = Describe("Services", LService, func() {
 				Expect(err).ToNot(HaveOccurred())
 
 				By("updating service with --no-restart")
-				out, err := env.dFlow("", "service", "update", service,
+				out, err := env.DFlow("", "service", "update", service,
 					"--wait",
 					"--no-restart",
 					"--set", "nesting.here.hello=no-restart-value",
@@ -1482,7 +1482,7 @@ var _ = Describe("Services", LService, func() {
 				Expect(out).To(ContainSubstring("Service Changes Saved"))
 
 				By("verifying changes were applied")
-				out, err = env.dFlow("", "service", "show", service)
+				out, err = env.DFlow("", "service", "show", service)
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(
 					HaveATable(
@@ -1499,7 +1499,7 @@ var _ = Describe("Services", LService, func() {
 				}, "15s", "2s").Should(ContainElements(oldPodNames))
 
 				By("verifying app is still healthy")
-				out, err = env.dFlow("", "app", "show", appName)
+				out, err = env.DFlow("", "app", "show", appName)
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(
 					HaveATable(
@@ -1515,7 +1515,7 @@ var _ = Describe("Services", LService, func() {
 				Expect(err).ToNot(HaveOccurred())
 
 				By("updating service WITHOUT --no-restart (default behavior)")
-				out, err := env.dFlow("", "service", "update", service,
+				out, err := env.DFlow("", "service", "update", service,
 					"--wait",
 					"--set", "nesting.here.hello=restart-value",
 				)
@@ -1531,7 +1531,7 @@ var _ = Describe("Services", LService, func() {
 
 				By("verifying app is healthy after restart")
 				Eventually(func() string {
-					out, err := env.dFlow("", "app", "list")
+					out, err := env.DFlow("", "app", "list")
 					Expect(err).ToNot(HaveOccurred(), out)
 					return out
 				}, "2m").Should(

@@ -2,9 +2,58 @@
 
 dFlow runs on Kubernetes. The chart does not install a UI. `dflowUI.enabled` is false.
 
-The repository is public. Clone it, then run the installer from that checkout.
+## Known limits
+
+- The registry uses emptyDir storage, so images are lost when the pod restarts. `containerregistry.storage.emptyDir=false` uses a PVC.
+- local-path volumes are tied to one server.
+- There is no node replacement or backup procedure yet.
+- Builds run privileged.
+- Accepted CVEs: Reflector CVE-2026-70188 and CVE-2026-88092, kaniko CVE-2025-68121 and CVE-2026-33186.
+- The CLI is the only interface.
+- Apps must listen on 8080, or set `-v appListeningPort=<port>` (short for `--chart-value`) on `dflow push`, `dflow app create`, and `dflow app update`.
+- A push through the registry NodePort 30500 nginx returns 413 when the body exceeds 1 MB. That nginx has no `client_max_body_size`, so the 1 MB default applies. In-cluster builds are not affected.
+- The registry on NodePort 30500 is plain HTTP on the public IP.
+- `dflow app exec` needs bash in the image.
+- `dflow app port-forward` does not work yet.
+- App namespaces get no Pod Security labels, NetworkPolicy, or quotas, so there is no tenant isolation.
+- The chart seeds users `admin` and `dflow`. There is no user command and no sign-up command. An OIDC login can create a user by email.
+- `dflow upgrade` downloads a public GitHub release. The server step runs helm on a machine that can read the cluster kubeconfig. On the server that file is `/etc/rancher/k3s/k3s.yaml`.
+- `dflow login --oidc` opens a browser. The acceptance suite checks the authorization-code prompt against Dex, not that browser callback.
+
+## Install the CLI
+
+On macOS or Linux, with no clone:
+
+```bash
+curl -fsSL https://github.com/dflow-sh/kube-poc/releases/latest/download/install.sh | sh
+```
+
+The file in this repository is `scripts/cli/install.sh`. The release publishes that same file as `install.sh`. The download sends no token. The script selects `linux` or `darwin` and `amd64` or `arm64`, downloads `dflow-<os>-<arch>` from the same public release, and checks SHA256 against `checksums.txt`. A missing asset, a missing checksum line, or a checksum mismatch exits non-zero.
+
+```bash
+curl -fsSL https://github.com/dflow-sh/kube-poc/releases/latest/download/install.sh | sh -s -- --version vX.Y.Z
+curl -fsSL https://github.com/dflow-sh/kube-poc/releases/latest/download/install.sh | sh -s -- --install-dir "$HOME/.local/bin"
+```
+
+`--version` is a release tag, or `latest` (the default). `--install-dir` is the destination directory. `DFLOW_VERSION` and `DFLOW_INSTALL_DIR` set those same values when the flags are omitted.
+
+`/usr/local/bin` is used when that directory is writable or `sudo -n` succeeds. If it is not writable, passwordless sudo is unavailable, and `/dev/tty` can be read, the script asks before running sudo. The question and the sudo password are read from `/dev/tty`, which still works under `curl | sh`. Declining, or running with no terminal, installs to `~/.local/bin` and prints a PATH hint. A second run replaces the binary. If `dflow` on `PATH` is a different file from the one just installed, the script prints both paths.
+
+The script then runs `dflow version` and prints the next step, `dflow login`. `dflow login` requires the API URL. `-u` / `--user` and `-p` / `--password` set the admin user and password. `--trust-ca` trusts an unknown certificate:
+
+```bash
+dflow login -u admin -p '<password>' --trust-ca "https://dflow.<domain>"
+```
+
+Omit `--trust-ca` when the API certificate is already trusted. `dflow upgrade --cli-only` replaces the CLI from a later public release and does not change the cluster. `dflow upgrade` also accepts `--version`, `--server-only`, and `--dry-run`. Those flags are in this tree (`packages/dflow/cli/cmd/upgrade.go`). The published `v0.0.4` binary does not include `dflow upgrade`.
+
+`install.sh` is not on the `v0.0.4` release. The `releases/latest/download/install.sh` URL works once a release that contains this script is published. Until then, the four `dflow-<os>-<arch>` binaries and `checksums.txt` from `v0.0.4` are the public CLI download.
+
+From a checkout, `./scripts/install-cli.sh` still installs the CLI and, when `--api` is set, logs in and runs the sample push. See [scripts/install-cli.sh](#scriptsinstall-clish).
 
 ## One-shot install on Ubuntu
+
+The repository is public. Clone it, then run the installer from that checkout.
 
 The server is Ubuntu 22.04 or 24.04, with at least 8 GB RAM, a public IPv4 address, and root SSH.
 
@@ -62,11 +111,11 @@ The script is safe to run again after the first run on this checkout. It install
 
 k3s is started with `cluster-init: true` (embedded etcd). A server that was installed earlier with SQLite restarts k3s once on the next run so the datastore can migrate. After that config is in place, a re-run does not restart k3s. See [Grow from one server to three](#grow-from-one-server-to-three).
 
-When a GitHub Release exists, the script downloads the `dflow` CLI and the Helm chart package (`dflow-<version>.tgz`) from that release, and pulls the server image `ghcr.io/dflow-sh/dflow-server:<tag>`. The CLI download is checked against `checksums.txt`. A missing checksum, a checksum mismatch, a binary that does not run, or a server image that cannot be pulled exits non-zero. The script does not build this checkout in those cases. `--version v0.0.4` selects that release instead of the latest one. `--from-checkout` builds the CLI and tags the server image `dev-<git sha>`. That build reports `v0.0.0-dev`. CI also uploads CLI binaries and a server image archive as workflow artifacts. That is not a production deploy.
+When a GitHub Release exists, the script downloads the `dflow` CLI and the Helm chart package (`dflow-<version>.tgz`) from that release, and pulls the server image `ghcr.io/dflow-sh/dflow-server:<tag>`. The CLI download is checked against `checksums.txt`. A missing checksum, a checksum mismatch, a binary that does not run, or a server image that cannot be pulled exits non-zero. The script does not build this checkout in those cases. `--version vX.Y.Z` selects that release instead of the latest one. `--from-checkout` builds the CLI and tags the server image `dev-<git sha>`. That build reports `v0.0.0-dev`. CI also uploads CLI binaries and a server image archive as workflow artifacts. That is not a production deploy.
 
 The chart sets `server.defaultBuildMode` to `railpack`. A `dflow push` that omits `--build-mode` builds with Railpack (BuildKit in the staging job, image pushed to the in-cluster registry). `--build-mode buildpack` and `--build-mode dockerfile` stay explicit. `dflow app logs --staging` prints the staging pod name once, then left-aligned log lines. `--verbose` restores the pod and container prefix on every line.
 
-When the script finishes it prints the API URL, the `admin` password, and the login command. It has already logged in, pushed `traefik/whoami`, required HTTP 200 from the app URL, deleted the app, and deleted the `sample` namespace. If any of those steps fail, the script exits non-zero and prints the step that failed.
+When the script finishes it prints the API URL, the `admin` password, and the login command. It has already logged in, pushed `traefik/whoami` as `dflow-install-check`, required HTTP 200 from that app URL, deleted that app, and deleted the `dflow-install-check` namespace. If an app already uses that name, or an ingress already serves `dflow-install-check.<domain>`, the push is skipped and the existing app is left in place. If any other step fails, the script exits non-zero and prints the step that failed.
 
 Manual checks and uninstall: [docs/TESTING.md](TESTING.md).
 
@@ -186,7 +235,9 @@ User records and application objects already live in Kubernetes. That does not m
 
 The in-cluster registry is one pod (`packages/helm-chart/templates/container-registry/container-registry.yaml`). By default its storage is an `emptyDir`, which is deleted when the pod is rescheduled. Two registry pods would not replicate blobs. To keep images across a node loss, set `containerregistry.enabled` to false and set `global.registryURL`, `global.registryUsername`, `global.registryPassword`, and `global.registryNamespace` to an external registry.
 
-SeaweedFS is the S3 store for source uploads. The chart leaves master, volume, and filer at one replica. The upstream master pods already request hostname anti-affinity, and the masters need a majority to elect a leader, so raising `seaweedfs.master.replicas` on a one-node cluster leaves S3 down. After three servers are `Ready`, a Helm upgrade can set:
+SeaweedFS is the S3 store for source uploads. With `seaweedfsIngressPolicy.enabled` left at its default, the chart installs NetworkPolicies for the master, volume, filer, and S3 pods. Master, volume, and filer accept ingress only from other SeaweedFS pods in the release. The S3 API port accepts ingress from `dflow-server` and from staging pods that download source blobs. The filer gRPC port stays closed to those clients. The in-cluster registry stores images on its own volume and is not an S3 client. Set `seaweedfsIngressPolicy.enabled` to false to skip the policies. k3s applies them with its default network policy controller.
+
+The chart leaves master, volume, and filer at one replica. The upstream master pods already request hostname anti-affinity, and the masters need a majority to elect a leader, so raising `seaweedfs.master.replicas` on a one-node cluster leaves S3 down. After three servers are `Ready`, a Helm upgrade can set:
 
 ```yaml
 seaweedfs:
@@ -204,6 +255,15 @@ seaweedfs:
 
 `001` keeps one extra copy on another server. Master data in the upstream chart defaults to a hostPath. Give each master its own disk before raising the replica count. Do this only when three nodes can schedule the anti-affinity rule.
 
+### Pod Security
+
+Platform containers set resource requests and limits, `seccompProfile: RuntimeDefault`, and `capabilities.drop: [ALL]`. Dex, reflector, the registry (nginx and registry), helm-controller, dflow-server, the CRD upgrade Job, and dflow-ui (when enabled) also set `runAsNonRoot`, `allowPrivilegeEscalation: false`, and `readOnlyRootFilesystem: true`.
+
+Two exceptions stay in `packages/helm-chart/values.yaml`:
+
+- SeaweedFS master, volume, filer, and S3 keep hostPath volumes. hostPath fails PodSecurity baseline, so those pods are not baseline and not restricted. `runAsNonRoot` is omitted because the host directories are root-owned. `readOnlyRootFilesystem` is omitted because weed writes that data and those logs.
+- Staging builds are not platform containers. Railpack runs privileged because BuildKit's OCI worker needs nested containers. Buildpack runs as the application uid and gid. Dockerfile mode sets no security context. A restricted context on those jobs would break builds.
+
 ## macOS CLI
 
 Go 1.26 is required. From a checkout on the Mac:
@@ -212,10 +272,10 @@ Go 1.26 is required. From a checkout on the Mac:
 make dflow
 sudo install -m 0755 dist/dflow /usr/local/bin/dflow
 dflow version
-dflow login -u admin -p 'password' --trust-ca "https://dflow.<domain>"
+dflow login -u admin -p '<admin-password>' --trust-ca "https://dflow.<domain>"
 ```
 
-`<domain>` and the password are what `scripts/install.sh` printed. `password` is the default. Drop `--trust-ca` when the installer used Let's Encrypt production (`letsencrypt-production`). Keep it for `dflow-ca` and for `letsencrypt-staging`.
+`<domain>` and the admin password are what `scripts/install.sh` printed. The password is random unless you passed `--admin-password`. Read it again with `kubectl -n dflow get secret dflow-generated-passwords -o jsonpath='{.data.adminPassword}' | base64 -d`. Drop `--trust-ca` when the installer used Let's Encrypt production (`letsencrypt-production`). Keep it for `dflow-ca` and for `letsencrypt-staging`.
 
 The same push as the server self-test. `traefik/whoami` listens on `WHOAMI_PORT_NUMBER`, which defaults to 80. The app chart routes to port 8080, so the push sets that variable:
 
@@ -261,10 +321,40 @@ From a Mac or Linux checkout, this installs the matching binary to `/usr/local/b
 ./scripts/install-cli.sh \
   --api "https://dflow.<domain>" \
   --user admin \
-  --password 'password'
+  --password '<admin-password>'
 ```
 
-`<domain>` and the password are what `scripts/install.sh` printed on the server. The script downloads `dflow-darwin-arm64`, `dflow-darwin-amd64`, `dflow-linux-arm64`, or `dflow-linux-amd64` from the public GitHub Release and requires a matching line in `checksums.txt`. If that asset cannot be downloaded, the script exits non-zero. `--from-checkout` runs `go build` from the checkout (Go 1.26). `--version v0.0.4` selects that tag instead of the latest release.
+`<domain>` and the admin password are what `scripts/install.sh` printed on the server. `--user` and `--password` are `dflow login -u` and `-p`. The script downloads `dflow-darwin-arm64`, `dflow-darwin-amd64`, `dflow-linux-arm64`, or `dflow-linux-amd64` from the public GitHub Release and requires a matching line in `checksums.txt`. If that asset cannot be downloaded, the script exits non-zero. `--from-checkout` runs `go build` from the checkout (Go 1.26). `--version vX.Y.Z` selects that tag instead of the latest release.
+
+To check a release, download `checksums.txt` and `checksums.txt.sigstore.json`. Verify that signature, then check the chart tarball, `install.sh`, and the CLI binaries against `checksums.txt`. Those files do not have their own `.sigstore.json`. cosign 3.1.4 `verify-blob` takes `--bundle`, `--certificate-identity`, and `--certificate-oidc-issuer` (there is no separate certificate flag). The identity is this repository's release workflow at the tag, and the issuer is GitHub Actions OIDC:
+
+```bash
+tag=v0.1.0
+base="https://github.com/dflow-sh/kube-poc/releases/download/${tag}"
+curl -fsSL -o checksums.txt "${base}/checksums.txt"
+curl -fsSL -o checksums.txt.sigstore.json "${base}/checksums.txt.sigstore.json"
+cosign verify-blob \
+  --bundle checksums.txt.sigstore.json \
+  --certificate-identity "https://github.com/dflow-sh/kube-poc/.github/workflows/release.yml@refs/tags/${tag}" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  checksums.txt
+```
+
+That checks the signature on `checksums.txt`. The chart tarball and `install.sh` are lines in that file. They do not have their own `.sigstore.json`. After the signature check, use `sha256sum` on Linux or `shasum` on macOS:
+
+```bash
+sha256sum -c checksums.txt --ignore-missing
+shasum -a 256 -c checksums.txt --ignore-missing
+```
+
+Verify the server image with `cosign verify` (not `verify-blob`) and the same identity. `cosign sign` in the release workflow uses `--yes` and `--oidc-provider=github-actions` and signs `${artifact}@${digest}`. That signature exists only after the `v*` workflow runs, so the image check is proven when `v0.1.0` is tagged.
+
+```bash
+cosign verify \
+  --certificate-identity "https://github.com/dflow-sh/kube-poc/.github/workflows/release.yml@refs/tags/${tag}" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  "ghcr.io/dflow-sh/dflow-server:${tag}"
+```
 
 Without `--api` the binary is still installed and the script prints the login and push commands instead of running them.
 
@@ -288,7 +378,7 @@ sudo ./scripts/update.sh
 `dflow upgrade` downloads the CLI from the public release, checks SHA256, and replaces the running binary. A permission error prints a `sudo dflow upgrade` line and does not change the server. It then runs `helm upgrade --install dflow` with the chart package from that release (`dflow-<version>.tgz`), sets `image.dflow.tag`, imports `ghcr.io/dflow-sh/dflow-server:<tag>` when `docker` and `k3s` are on the machine, and waits until `dflow-server` is ready.
 
 ```bash
-sudo dflow upgrade --version v0.0.4
+sudo dflow upgrade --version vX.Y.Z
 sudo dflow upgrade --cli-only
 sudo dflow upgrade --server-only
 sudo dflow upgrade --dry-run
@@ -296,9 +386,9 @@ sudo dflow upgrade --dry-run
 
 `--dry-run` prints the asset URL and the helm command. `--cli-only` does not touch the cluster. `--server-only` does not replace the CLI.
 
-`dflow upgrade` does not install k3s, cert-manager, or Traefik, does not change the saved domain or admin password, and does not run the login and sample-push self-test. A machine that cannot read `/etc/rancher/k3s/k3s.yaml` (or `KUBECONFIG`) stops after the CLI step and tells you to run `sudo ./scripts/update.sh <tag>` on the server.
+`dflow upgrade` does not install k3s, cert-manager, or Traefik, and does not run the login and sample-push self-test. A saved admin password other than `password` or `changeme` is left unchanged. Those two old defaults are replaced. Dex is restarted, and the command prints the `kubectl` command that reads the new password from Secret `dflow-generated-passwords`. It does not print the password. When the Dex checksum annotation is missing, Dex is restarted so it loads the current password. A machine that cannot read `/etc/rancher/k3s/k3s.yaml` (or `KUBECONFIG`) stops after the CLI step and tells you to run `sudo ./scripts/update.sh <tag>` on the server.
 
-`scripts/update.sh` replaces `/usr/local/bin/dflow` from the same release, then runs the helm upgrade, waits until `dflow-server` is ready, and repeats the API health check and the CLI self-test (login, push `traefik/whoami`, curl expecting HTTP 200, delete, confirm the sample namespace is gone).
+`scripts/update.sh` replaces `/usr/local/bin/dflow` from the same release, then runs the helm upgrade, waits until `dflow-server` is ready, and repeats the API health check and the CLI self-test (login, push `traefik/whoami` as `dflow-install-check`, curl expecting HTTP 200, delete, confirm that namespace is gone). A saved admin password of `password` or `changeme` is replaced. The script prints the `kubectl` command that reads the new password from Secret `dflow-generated-passwords` and does not print the password. An existing app on another name, including `hello.<domain>`, is left in place. If `dflow-install-check` or its route is already in use, the smoke push is skipped and that app is left in place.
 
 ```bash
 sudo ./scripts/update.sh v0.0.4
@@ -321,20 +411,23 @@ git push origin v0.0.4
 
 The workflow then:
 
-- publishes `dflow-linux-amd64`, `dflow-linux-arm64`, `dflow-darwin-amd64`, and `dflow-darwin-arm64`, plus `checksums.txt`, as GitHub Release assets
+- publishes `install.sh`, `dflow-linux-amd64`, `dflow-linux-arm64`, `dflow-darwin-amd64`, and `dflow-darwin-arm64`, plus `checksums.txt`, as GitHub Release assets
+- fails the release job if `install.sh` cannot be downloaded with no token, or if those bytes differ from `scripts/cli/install.sh`
 - pushes `ghcr.io/dflow-sh/dflow-server:<tag>` and `ghcr.io/dflow-sh/dflow-server:latest`
 - packages the Helm chart and uploads `dflow-<version>.tgz` (tag `v0.0.4` uploads `dflow-0.0.4.tgz`) on the same release
 
 Actions uses the workflow `GITHUB_TOKEN` (`contents: write` and `packages: write`) to publish. Downloading those assets does not need a token.
 
 ```text
+https://github.com/dflow-sh/kube-poc/releases/latest/download/install.sh
+https://github.com/dflow-sh/kube-poc/releases/download/<tag>/install.sh
 https://github.com/dflow-sh/kube-poc/releases/download/<tag>/dflow-<os>-<arch>
 https://github.com/dflow-sh/kube-poc/releases/download/<tag>/checksums.txt
 ```
 
-For tag `v0.0.4` the linux/amd64 file is `dflow-linux-amd64`. `checksums.txt` is the sibling file. The lines look like `<sha256>  dflow-linux-amd64`.
+For tag `v0.0.4` the linux/amd64 file is `dflow-linux-amd64`. `checksums.txt` is the sibling file. The lines look like `<sha256>  dflow-linux-amd64`. That tag does not include `install.sh`. [Install the CLI](#install-the-cli) is the install path on a release that publishes it.
 
-A one-line `curl | bash` installer is not available. `scripts/install-cli.sh` sources `scripts/install.sh`, so fetching that one file from raw GitHub does not install the CLI. Use a checkout and `./scripts/install-cli.sh`, or download the asset and checksum yourself:
+The same binary and checksum can be checked by hand:
 
 ```bash
 curl -fsSL -o dflow-linux-amd64 \
@@ -382,7 +475,7 @@ sslip.io needs no DNS account. With the same IP and `--domain auto`:
 
 `sslip.io` answers for that name and for `*.203.0.113.10.sslip.io`.
 
-Change the default admin password before the host is reachable on the internet. The chart default user is `admin` / `password`.
+The installer generates the admin password and stores it in Secret `dflow-generated-passwords`. A second run keeps that value. A saved `ADMIN_PASSWORD` of `password` or `changeme` is an old default: `scripts/install.sh` and `scripts/update.sh` replace it, print a warning, and the old password stops working. Pass `--admin-password` to set or rotate it. The installer sets a checksum annotation on Dex to the sha256 of the admin password's bcrypt hash, so the Deployment rolls when that hash changes. The `dflow` user is the `dflowPassword` key in the same Secret. Dex users `admin@dflow.sh` and `dflow@dflow.sh` use those two passwords. The registry password is the `registryPassword` key in the same Secret. `changeme` is not a registry password. NodePort 30500 uses the generated value. Pass `--registry-password` to set or rotate it. `helm uninstall` leaves Secret `dflow-generated-passwords` in place.
 
 ## Tools on the machine
 
@@ -413,7 +506,7 @@ k3s ServiceLB (`svclb-traefik`) can fail to claim ports 80 and 443, so the Traef
 On the machine, from a checkout of this repository:
 
 ```bash
-# https://go.dev/dl/go1.26.0.linux-amd64.tar.gz
+# https://go.dev/dl/go1.26.10.linux-amd64.tar.gz
 export PATH=/usr/local/go/bin:$PATH
 CGO_ENABLED=0 go build -o apps/cli/dist/dflow ./apps/cli
 docker build -f images/Dockerfile -t ghcr.io/dflow-sh/dflow-server:v0.0.0-dev .
@@ -432,20 +525,20 @@ The chart installs, when you turn the switches on:
 - the container registry (`containerregistry.enabled`, default true)
 - S3-compatible storage via SeaweedFS (`seaweedfs.enabled`, default true)
 - railpack as the default builder (`server.defaultBuilderImage`, reported by `/info` as `default_builder_image`)
-- the Paketo builder image reference (`image.builder`, `paketobuildpacks/builder-jammy-full`), used when `--build-mode buildpack` passes a builder image
-- the Railpack BuildKit image (`image.railpack`, `moby/buildkit`), used when a push omits `--build-mode` (`server.defaultBuildMode: railpack`)
+- the Railpack BuildKit image (`image.railpack`), used when a push omits `--build-mode` (`server.defaultBuildMode: railpack`)
 
-s3gw is the other S3-compatible option and is off by default. MinIO is not installed by the chart. To use MinIO, set `seaweedfs.enabled=false`, `s3gw.enabled=false`, and set `s3.endpoint`, `s3.accessKeyID`, `s3.secretAccessKey`, and `s3.bucket`.
+No Paketo builder image is installed. Buildpack mode needs a builder image passed with the push. MinIO is not installed. To use another S3 store, set `seaweedfs.enabled=false` and set `s3.endpoint`, `s3.accessKeyID`, `s3.secretAccessKey`, and `s3.bucket`.
 
-Dex, the source unpacker, and the Dockerfile builder are published upstream images. See `NOTICE`. A container-image push does not pull the Paketo builder.
+Platform images are digest-pinned to their upstream registries. Development catalog entries still name Bitnami chart repositories. `install.sh` does not pull those.
 
-Install cert-manager from the chart bundled in this repo, then dFlow. The dFlow manifests include `Certificate` resources, so the cert-manager CRDs have to exist before that install.
+Install cert-manager from the chart bundled in this repo, then dFlow. The dFlow manifests include `Certificate` resources, so the cert-manager CRDs have to exist before that install. The cert-manager version is the dependency in `packages/helm-chart/Chart.yaml`. The checkout vendors one `charts/cert-manager-*.tgz`, and the commands below use that glob.
 
 ```bash
 export DOMAIN=203.0.113.10.sslip.io   # or apps.example.com
 
-helm upgrade --install cert-manager packages/helm-chart/charts/cert-manager-v1.19.3.tgz \
+helm upgrade --install cert-manager packages/helm-chart/charts/cert-manager-*.tgz \
   --namespace cert-manager --create-namespace \
+  --values packages/helm-chart/cert-manager-images.yaml \
   --set crds.enabled=true
 kubectl -n cert-manager rollout status deploy/cert-manager-webhook --timeout=10m
 
@@ -514,8 +607,9 @@ kubectl get nodes
 Then follow sections 2 through 5. Load the server image into every node that might run `dflow-server`, or push it to a registry the cluster can pull. Set `ingress.ingressClassName` if the cluster does not use the default ingress class.
 
 ```bash
-helm upgrade --install cert-manager packages/helm-chart/charts/cert-manager-v1.19.3.tgz \
+helm upgrade --install cert-manager packages/helm-chart/charts/cert-manager-*.tgz \
   --namespace cert-manager --create-namespace \
+  --values packages/helm-chart/cert-manager-images.yaml \
   --set crds.enabled=true
 kubectl -n cert-manager rollout status deploy/cert-manager-webhook --timeout=10m
 
