@@ -359,7 +359,7 @@ var _ = Describe("server memory limit", func() {
 		Expect(yaml.Unmarshal(raw, &doc)).To(Succeed())
 
 		got := resource.MustParse(doc.Server.Resources.Limits.Memory)
-		// helm repo add of charts.bitnami.com peaked at about 517MB.
+		// service create peaked near 702MB RSS while parsing the Bitnami index.
 		floor := resource.MustParse("1Gi")
 		Expect(got.Cmp(floor)).To(BeNumerically(">=", 0))
 	})

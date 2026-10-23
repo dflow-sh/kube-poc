@@ -164,8 +164,8 @@ server:
 
   # Platform container budget for dflow-server. Limits are ceilings.
   # service create loads a Helm repository index in this process. The Bitnami
-  # index is about 27MB of YAML and parsing it peaks near 520MB. A 512Mi limit
-  # OOM-kills the server (exit 137) with no panic log.
+  # index is about 27MB of YAML and parsing it peaked near 702MB RSS. A 512Mi
+  # limit OOM-kills the server (exit 137) with no panic log.
   resources:
     requests:
       cpu: 50m
