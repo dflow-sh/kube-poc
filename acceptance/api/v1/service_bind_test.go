@@ -158,7 +158,7 @@ var _ = Describe("ServiceBind Endpoint", LService, func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(response.StatusCode).To(Equal(http.StatusOK), string(bodyBytes))
 
-			appShowOut, err := env.dFlow("", "app", "show", app)
+			appShowOut, err := env.DFlow("", "app", "show", app)
 			Expect(err).ToNot(HaveOccurred())
 			matchString := fmt.Sprintf("Bound Configurations.*%s", chartName)
 			Expect(appShowOut).To(MatchRegexp(matchString))
@@ -211,7 +211,7 @@ var _ = Describe("ServiceBind Endpoint", LService, func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(response.StatusCode).To(Equal(http.StatusOK), string(bodyBytes))
 
-				appShowOut, err := env.dFlow("", "app", "show", app)
+				appShowOut, err := env.DFlow("", "app", "show", app)
 				Expect(err).ToNot(HaveOccurred())
 				matchString := fmt.Sprintf("Bound Configurations.*%s", chartName)
 				Expect(appShowOut).To(MatchRegexp(matchString))
@@ -262,7 +262,7 @@ var _ = Describe("ServiceBind Endpoint", LService, func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(response.StatusCode).To(Equal(http.StatusOK), string(bodyBytes))
 
-				appShowOut, err := env.dFlow("", "app", "show", app)
+				appShowOut, err := env.DFlow("", "app", "show", app)
 				Expect(err).ToNot(HaveOccurred())
 
 				Expect(appShowOut).To(MatchRegexp(chartName + "-mysql"))

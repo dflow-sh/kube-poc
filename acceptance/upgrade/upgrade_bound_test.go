@@ -32,7 +32,7 @@ var _ = Describe("<Upgrade2> dFlow upgrade with bound app and services", func() 
 		appName     string // Application created before upgrade
 		serviceName string // Service created after upgrade
 
-		dflowHelper dflow.dFlow
+		dflowHelper dflow.DFlow
 	)
 
 	BeforeEach(func() {
@@ -57,14 +57,14 @@ var _ = Describe("<Upgrade2> dFlow upgrade with bound app and services", func() 
 
 		// Create a service
 		By("Creating a service")
-		out, err := env.dFlow("", "service", "create", "mysql-dev", serviceName)
+		out, err := env.DFlow("", "service", "create", "mysql-dev", serviceName)
 		Expect(err).ToNot(HaveOccurred(), out)
 
 		By("Wait for deployment")
 		// Make outValue global variable as we'll need it later
 		var outValue string
 		Eventually(func() string {
-			outValue, _ = env.dFlow("", "service", "show", serviceName)
+			outValue, _ = env.DFlow("", "service", "show", serviceName)
 			return outValue
 		}, "2m", "5s").Should(
 			HaveATable(
@@ -96,7 +96,7 @@ var _ = Describe("<Upgrade2> dFlow upgrade with bound app and services", func() 
 		route := string(routeRegexp.Find([]byte(pushLog)))
 
 		Eventually(func() string {
-			out, err := env.dFlow("", "app", "list")
+			out, err := env.DFlow("", "app", "list")
 			Expect(err).ToNot(HaveOccurred(), out)
 			return out
 		}, "5m").Should(
@@ -107,11 +107,11 @@ var _ = Describe("<Upgrade2> dFlow upgrade with bound app and services", func() 
 		)
 
 		By("Bind it")
-		out, err = env.dFlow("", "service", "bind", serviceName, appName)
+		out, err = env.DFlow("", "service", "bind", serviceName, appName)
 		Expect(err).ToNot(HaveOccurred(), out)
 
 		By("Verify binding")
-		appShowOut, err := env.dFlow("", "app", "show", appName)
+		appShowOut, err := env.DFlow("", "app", "show", appName)
 		Expect(err).ToNot(HaveOccurred())
 
 		Expect(appShowOut).To(
@@ -144,7 +144,7 @@ var _ = Describe("<Upgrade2> dFlow upgrade with bound app and services", func() 
 
 		// Restarting app
 		By("Restarting app")
-		out, err = env.dFlow("", "app", "restart", appName)
+		out, err = env.DFlow("", "app", "restart", appName)
 		Expect(err).ToNot(HaveOccurred(), out)
 
 		// Check that the app is still reachable and expected page tile is reached

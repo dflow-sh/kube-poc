@@ -33,7 +33,7 @@ var _ = Describe("<Upgrade1> dFlow upgrade with running app", func() {
 		service   string // Service created after upgrade
 		appAfter  string // application created after upgrade
 
-		dflowHelper dflow.dFlow
+		dflowHelper dflow.DFlow
 	)
 
 	BeforeEach(func() {
@@ -86,12 +86,12 @@ var _ = Describe("<Upgrade1> dFlow upgrade with running app", func() {
 		// Check that we can create a service after the upgrade
 		By("Creating a service post-upgrade")
 
-		out, err := env.dFlow("", "service", "create", "mysql-dev", service)
+		out, err := env.DFlow("", "service", "create", "mysql-dev", service)
 		Expect(err).ToNot(HaveOccurred(), out)
 
 		By("wait for deployment")
 		Eventually(func() string {
-			out, _ := env.dFlow("", "service", "show", service)
+			out, _ := env.DFlow("", "service", "show", service)
 			return out
 		}, "2m", "5s").Should(
 			HaveATable(

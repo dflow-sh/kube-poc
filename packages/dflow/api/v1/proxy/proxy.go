@@ -25,8 +25,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
 	"github.com/dflow-sh/kube-poc/packages/dflow/cli/server/requestctx"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
 	"k8s.io/client-go/rest"
 
 	apierror "github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/errors"
@@ -137,12 +137,13 @@ func RunProxy(ctx context.Context, rw http.ResponseWriter, req *http.Request, de
 	httpClient := clientSetHTTP1.CoreV1().RESTClient().(*rest.RESTClient).Client
 
 	p := httputil.ReverseProxy{
-		Director: func(req *http.Request) {
-			req.URL = destination
-			req.Host = destination.Host
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			// Replace the outbound URL outright. SetURL would join the inbound path.
+			pr.Out.URL = destination
+			pr.Out.Host = destination.Host
 			// let kube authentication work
-			delete(req.Header, "Cookie")
-			delete(req.Header, "Authorization")
+			delete(pr.Out.Header, "Cookie")
+			delete(pr.Out.Header, "Authorization")
 		},
 		Transport:     httpClient.Transport,
 		FlushInterval: time.Millisecond * 100,

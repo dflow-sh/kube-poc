@@ -20,8 +20,8 @@ import (
 	"time"
 
 	"github.com/dflow-sh/kube-poc/acceptance/helpers/auth"
-	"github.com/dflow-sh/kube-poc/acceptance/helpers/proc"
 	. "github.com/dflow-sh/kube-poc/acceptance/helpers/matchers"
+	"github.com/dflow-sh/kube-poc/acceptance/helpers/proc"
 	"github.com/dflow-sh/kube-poc/acceptance/testenv"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -36,7 +36,7 @@ func ExpectGoodUserLogin(tmpSettingsPath, password, serverURL string) string {
 	var out string
 	Eventually(func() bool {
 		var err error
-		out, err = env.dFlow("", "login", "-u", "dflow", "-p", password,
+		out, err = env.DFlow("", "login", "-u", "dflow", "-p", password,
 			"--trust-ca", "--settings-file", tmpSettingsPath, loginURL)
 		if err == nil {
 			return true
@@ -126,7 +126,9 @@ func ExpectGoodTokenLogin(tmpSettingsPath, serverURL string) {
 	loginClient, err := auth.NewDexClient(fmt.Sprintf("%s://%s", u.Scheme, u.Host))
 	Expect(err).ToNot(HaveOccurred())
 
-	authCode, err := loginClient.Login(authURL, "admin@dflow.sh", "password")
+	adminPassword, err := testenv.GeneratedCredential("adminPassword")
+	Expect(err).NotTo(HaveOccurred())
+	authCode, err := loginClient.Login(authURL, "admin@dflow.sh", adminPassword)
 	Expect(err).ToNot(HaveOccurred())
 
 	By("Piping auth data into command")
@@ -198,7 +200,7 @@ func isTransientConnectFailure(out string) bool {
 func ExpectEmptySettings(tmpSettingsPath string) {
 	By("Check for empty settings")
 	// check that the settings are empty
-	settings, err := env.dFlow("", "settings", "show", "--settings-file", tmpSettingsPath)
+	settings, err := env.DFlow("", "settings", "show", "--settings-file", tmpSettingsPath)
 	Expect(err).ToNot(HaveOccurred(), settings)
 	Expect(settings).To(
 		HaveATable(
@@ -214,7 +216,7 @@ func ExpectEmptySettings(tmpSettingsPath string) {
 func ExpectNamespace(tmpSettingsPath, namespace string) {
 	By("Check for namespace `" + namespace + "`")
 	// check that the namespace is not set
-	settings, err := env.dFlow("", "settings", "show", "--settings-file", tmpSettingsPath)
+	settings, err := env.DFlow("", "settings", "show", "--settings-file", tmpSettingsPath)
 	Expect(err).ToNot(HaveOccurred(), settings)
 	Expect(settings).To(
 		HaveATable(
@@ -227,7 +229,7 @@ func ExpectNamespace(tmpSettingsPath, namespace string) {
 func ExpectUserPasswordSettings(tmpSettingsPath string) {
 	By("Check for user/pass settings")
 	// check that the settings contain user/assword authentication
-	settings, err := env.dFlow("", "settings", "show", "--settings-file", tmpSettingsPath)
+	settings, err := env.DFlow("", "settings", "show", "--settings-file", tmpSettingsPath)
 	Expect(err).ToNot(HaveOccurred(), settings)
 	Expect(settings).To(
 		HaveATable(
@@ -243,7 +245,7 @@ func ExpectUserPasswordSettings(tmpSettingsPath string) {
 func ExpectTokenSettings(tmpSettingsPath string) {
 	By("Check for token settings")
 	// check that the settings contain user/assword authentication
-	settings, err := env.dFlow("", "settings", "show", "--settings-file", tmpSettingsPath)
+	settings, err := env.DFlow("", "settings", "show", "--settings-file", tmpSettingsPath)
 	Expect(err).ToNot(HaveOccurred(), settings)
 	Expect(settings).To(
 		HaveATable(

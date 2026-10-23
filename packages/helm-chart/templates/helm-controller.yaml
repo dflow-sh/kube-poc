@@ -58,17 +58,40 @@ spec:
         app: helm-controller
     spec:
       serviceAccountName: helm-controller
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      volumes:
+        - name: tmp
+          emptyDir: {}
       containers:
         - name: helm-controller
           image: {{ include "dflow.imageRef" .Values.helmController.image | quote }}
           command: ["helm-controller"]
           env:
+            - name: HOME
+              value: /tmp
             - name: NODE_NAME
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
             - name: DEFAULT_JOB_IMAGE
               value: {{ include "dflow.imageRef" .Values.helmController.jobImage | quote }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
       {{- if .Values.helmController }}
           {{- with .Values.helmController.resources }}
           resources:

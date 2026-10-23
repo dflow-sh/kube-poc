@@ -111,6 +111,10 @@ spec:
     spec:
       restartPolicy: Never
       serviceAccountName: "dflow-crd-upgrade-{{ .Release.Name }}"
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
       # The kubectl image is shell-less, so each step is a direct kubectl
       # invocation: apply the CRDs, then wait for them to be established
       # before the main manifest (and its seed CRs) is applied.
@@ -118,17 +122,57 @@ spec:
         - name: apply
           image: {{ include "dflow.imageRef" .Values.image.kubectl | quote }}
           command: ["kubectl", "apply", "-f", "/crds/"]
+          env:
+            - name: HOME
+              value: /tmp
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          {{- with .Values.crdUpgrade.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           volumeMounts:
             - name: crds
               mountPath: /crds
+            - name: tmp
+              mountPath: /tmp
       containers:
         - name: wait-established
           image: {{ include "dflow.imageRef" .Values.image.kubectl | quote }}
           command: ["kubectl", "wait", "--for=condition=established", "--timeout=90s", "-f", "/crds/"]
+          env:
+            - name: HOME
+              value: /tmp
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          {{- with .Values.crdUpgrade.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           volumeMounts:
             - name: crds
               mountPath: /crds
+            - name: tmp
+              mountPath: /tmp
       volumes:
         - name: crds
           configMap:
             name: "dflow-crd-upgrade-{{ .Release.Name }}"
+        - name: tmp
+          emptyDir: {}

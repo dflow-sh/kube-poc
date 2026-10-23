@@ -20,6 +20,11 @@ spec:
         app.kubernetes.io/name: dflow-ui
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
       containers:
       - name: dflow-ui
         {{ $dflowUiImage := index .Values "image" "dflow-ui" -}}
@@ -96,6 +101,11 @@ spec:
           runAsNonRoot: true
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+              - ALL
+          seccompProfile:
+            type: RuntimeDefault
         livenessProbe:
           tcpSocket:
             port: {{ .Values.dflowUI.service.containerPort | default 8000 }}

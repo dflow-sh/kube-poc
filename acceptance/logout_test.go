@@ -43,7 +43,7 @@ var _ = Describe("Logout", LMisc, func() {
 		ExpectUserPasswordSettings(tmpSettingsPath)
 
 		// logout
-		_, err := env.dFlow("", "logout", "--settings-file", tmpSettingsPath)
+		_, err := env.DFlow("", "logout", "--settings-file", tmpSettingsPath)
 		Expect(err).ToNot(HaveOccurred())
 
 		// check that the settings are empty again
@@ -58,7 +58,7 @@ var _ = Describe("Logout", LMisc, func() {
 		ExpectGoodTokenLogin(tmpSettingsPath, serverURL)
 
 		// logout again
-		_, err := env.dFlow("", "logout", "--settings-file", tmpSettingsPath)
+		_, err := env.DFlow("", "logout", "--settings-file", tmpSettingsPath)
 		Expect(err).ToNot(HaveOccurred())
 
 		// check that the settings are empty again

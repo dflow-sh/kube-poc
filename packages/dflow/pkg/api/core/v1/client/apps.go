@@ -29,11 +29,14 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/pkg/errors"
 	"github.com/spf13/viper"
-	"k8s.io/apimachinery/pkg/util/httpstream"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/portforward"
 	"k8s.io/client-go/tools/remotecommand"
 	wsstream "k8s.io/client-go/transport/websocket"
+	// client-go portforward.NewOnAddresses still takes this Dialer.
+	// k8s.io/streaming/pkg/httpstream.Dialer is a different named type.
+	//lint:ignore SA1019 client-go portforward requires the apimachinery Dialer
+	"k8s.io/apimachinery/pkg/util/httpstream"
 
 	api "github.com/dflow-sh/kube-poc/packages/dflow/api/v1"
 	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes/tailer"

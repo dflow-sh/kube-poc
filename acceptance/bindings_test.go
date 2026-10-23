@@ -52,7 +52,7 @@ var _ = Describe("Bounds between Apps & Configurations", LApplication, func() {
 		})
 
 		It("shows the bound app for configurations list, and vice versa", func() {
-			out, err := env.dFlow("", "configuration", "list")
+			out, err := env.DFlow("", "configuration", "list")
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			Expect(out).To(
@@ -71,7 +71,7 @@ var _ = Describe("Bounds between Apps & Configurations", LApplication, func() {
 			// system to settle back into a normal state.
 
 			Eventually(func() string {
-				out, err := env.dFlow("", "app", "list")
+				out, err := env.DFlow("", "app", "list")
 				Expect(err).ToNot(HaveOccurred(), out)
 				return out
 			}, "5m").Should(

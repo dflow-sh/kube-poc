@@ -36,9 +36,13 @@ image.dflow.tag to the release, and waits until dflow-server is ready.
 When docker and k3s are on this machine it pulls
 ghcr.io/dflow-sh/dflow-server:<tag> and imports it into k3s first.
 
-This command does not install k3s, cert-manager, or Traefik, does not
-change the saved domain or admin password, and does not run the login
-and sample-push self-test. scripts/update.sh still does those.
+This command does not install k3s, cert-manager, or Traefik, and does
+not run the login and sample-push self-test. scripts/update.sh still
+does those. A saved admin password other than the old defaults is left
+unchanged. A saved admin password of password or changeme is replaced.
+Dex is restarted, and the command prints where to read the new password.
+It does not print the password. When the Dex checksum annotation is
+missing, Dex is restarted so it loads the current password.
 A machine that cannot read the cluster kubeconfig is told to run
 sudo ./scripts/update.sh <tag> on the server.
 

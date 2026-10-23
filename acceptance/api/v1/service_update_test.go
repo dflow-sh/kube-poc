@@ -79,12 +79,12 @@ var _ = Describe("ServiceUpdate Endpoint", LService, func() {
 		catalog.CreateService(serviceName, namespace, catalogService)
 
 		// Bind the service to the app
-		out, err := env.dFlow("", "service", "bind", serviceName, app)
+		out, err := env.DFlow("", "service", "bind", serviceName, app)
 		Expect(err).ToNot(HaveOccurred(), out)
 
 		// Wait for app to settle
 		Eventually(func() string {
-			out, err := env.dFlow("", "app", "show", app)
+			out, err := env.DFlow("", "app", "show", app)
 			Expect(err).ToNot(HaveOccurred())
 			return out
 		}, "2m").Should(ContainSubstring("1/1"))
@@ -137,7 +137,7 @@ var _ = Describe("ServiceUpdate Endpoint", LService, func() {
 			}, "15s", "2s").Should(ContainElements(oldPodNames), "ServiceUpdate restart=false: pod names should be unchanged; oldPodNames=%v", oldPodNames)
 
 			By("verifying app is still healthy")
-			out, err := env.dFlow("", "app", "show", app)
+			out, err := env.DFlow("", "app", "show", app)
 			Expect(err).ToNot(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("1/1"))
 		})
@@ -176,7 +176,7 @@ var _ = Describe("ServiceUpdate Endpoint", LService, func() {
 
 			By("verifying app is healthy after restart")
 			Eventually(func() string {
-				out, err := env.dFlow("", "app", "show", app)
+				out, err := env.DFlow("", "app", "show", app)
 				Expect(err).ToNot(HaveOccurred())
 				return out
 			}, "2m").Should(ContainSubstring("1/1"), "app show should report 1/1 after restart")
@@ -215,7 +215,7 @@ var _ = Describe("ServiceUpdate Endpoint", LService, func() {
 
 			By("verifying app is healthy after restart")
 			Eventually(func() string {
-				out, err := env.dFlow("", "app", "show", app)
+				out, err := env.DFlow("", "app", "show", app)
 				Expect(err).ToNot(HaveOccurred())
 				return out
 			}, "2m").Should(ContainSubstring("1/1"), "app show should report 1/1 after default restart")

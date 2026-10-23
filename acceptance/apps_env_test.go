@@ -62,7 +62,7 @@ var _ = Describe("apps env", LApplication, func() {
 
 	Describe("app without workload", func() {
 		BeforeEach(func() {
-			out, err := env.dFlow("", "apps", "create", appName)
+			out, err := env.DFlow("", "apps", "create", appName)
 			Expect(err).ToNot(HaveOccurred(), out)
 		})
 
@@ -72,14 +72,14 @@ var _ = Describe("apps env", LApplication, func() {
 
 		When("unsetting an environment variable", func() {
 			BeforeEach(func() {
-				out, err := env.dFlow("", "apps", "env", "set", appName, "MYVAR", "myvalue")
+				out, err := env.DFlow("", "apps", "env", "set", appName, "MYVAR", "myvalue")
 				Expect(err).ToNot(HaveOccurred(), out)
-				out, err = env.dFlow("", "apps", "env", "unset", appName, "MYVAR")
+				out, err = env.DFlow("", "apps", "env", "unset", appName, "MYVAR")
 				Expect(err).ToNot(HaveOccurred(), out)
 			})
 
 			It("is not shown in the environment listing", func() {
-				out, err := env.dFlow("", "apps", "env", "list", appName)
+				out, err := env.DFlow("", "apps", "env", "list", appName)
 				Expect(err).ToNot(HaveOccurred(), out)
 
 				// CLI shows either a VARIABLE/VALUE table (when vars exist) or
@@ -93,7 +93,7 @@ var _ = Describe("apps env", LApplication, func() {
 			})
 
 			It("is retrieved as empty string with show", func() {
-				out, err := env.dFlow("", "apps", "env", "show", appName, "MYVAR")
+				out, err := env.DFlow("", "apps", "env", "show", appName, "MYVAR")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring(`Variable: MYVAR`)) // Var name is shown, value is empty
 				Expect(out).ToNot(ContainSubstring(`myvalue`))
@@ -110,41 +110,41 @@ var _ = Describe("apps env", LApplication, func() {
 			Context("command completion", func() {
 				// MYVAX is intentionally different from MYVAR, to avoid possible clashes
 				BeforeEach(func() {
-					out, err := env.dFlow("", "apps", "env", "set", appName, "MYVAX", "myvalue")
+					out, err := env.DFlow("", "apps", "env", "set", appName, "MYVAX", "myvalue")
 					Expect(err).ToNot(HaveOccurred(), out)
 				})
 
 				AfterEach(func() {
-					out, err := env.dFlow("", "apps", "env", "unset", appName, "MYVAX")
+					out, err := env.DFlow("", "apps", "env", "unset", appName, "MYVAX")
 					Expect(err).ToNot(HaveOccurred(), out)
 				})
 
 				It("matches empty app prefix", func() {
-					out, err := env.dFlow("", "__complete", "app", "env", "unset", "")
+					out, err := env.DFlow("", "__complete", "app", "env", "unset", "")
 					Expect(err).ToNot(HaveOccurred(), out)
 					Expect(out).To(ContainSubstring(appName))
 				})
 
 				It("matches empty var prefix", func() {
-					out, err := env.dFlow("", "__complete", "app", "env", "unset", appName, "")
+					out, err := env.DFlow("", "__complete", "app", "env", "unset", appName, "")
 					Expect(err).ToNot(HaveOccurred(), out)
 					Expect(out).To(ContainSubstring("MYVAX"))
 				})
 
 				It("does not match unknown app prefix", func() {
-					out, err := env.dFlow("", "__complete", "app", "env", "unset", "bogus")
+					out, err := env.DFlow("", "__complete", "app", "env", "unset", "bogus")
 					Expect(err).ToNot(HaveOccurred(), out)
 					Expect(out).ToNot(ContainSubstring("bogus"))
 				})
 
 				It("does not match unknown var prefix", func() {
-					out, err := env.dFlow("", "__complete", "app", "env", "unset", appName, "bogus")
+					out, err := env.DFlow("", "__complete", "app", "env", "unset", appName, "bogus")
 					Expect(err).ToNot(HaveOccurred(), out)
 					Expect(out).ToNot(ContainSubstring("bogus"))
 				})
 
 				It("does not match bogus arguments", func() {
-					out, err := env.dFlow("", "__complete", "app", "env", "unset", appName, "MYVAX", "")
+					out, err := env.DFlow("", "__complete", "app", "env", "unset", appName, "MYVAX", "")
 					Expect(err).ToNot(HaveOccurred(), out)
 					Expect(out).ToNot(ContainSubstring(appName))
 					Expect(out).ToNot(ContainSubstring("MYVAX"))
@@ -154,7 +154,7 @@ var _ = Describe("apps env", LApplication, func() {
 
 		When("setting an environment variable", func() {
 			BeforeEach(func() {
-				out, err := env.dFlow("", "apps", "env", "set", appName, "MYVAR", "myvalue")
+				out, err := env.DFlow("", "apps", "env", "set", appName, "MYVAR", "myvalue")
 				Expect(err).ToNot(HaveOccurred(), out)
 			})
 
@@ -164,7 +164,7 @@ var _ = Describe("apps env", LApplication, func() {
 			})
 
 			It("is shown in the environment listing", func() {
-				out, err := env.dFlow("", "apps", "env", "list", appName)
+				out, err := env.DFlow("", "apps", "env", "list", appName)
 				Expect(err).ToNot(HaveOccurred(), out)
 
 				Expect(out).To(
@@ -177,19 +177,19 @@ var _ = Describe("apps env", LApplication, func() {
 
 			Context("list command completion", func() {
 				It("matches empty prefix", func() {
-					out, err := env.dFlow("", "__complete", "app", "env", "list", "")
+					out, err := env.DFlow("", "__complete", "app", "env", "list", "")
 					Expect(err).ToNot(HaveOccurred(), out)
 					Expect(out).To(ContainSubstring(appName))
 				})
 
 				It("does not match unknown prefix", func() {
-					out, err := env.dFlow("", "__complete", "app", "env", "list", "bogus")
+					out, err := env.DFlow("", "__complete", "app", "env", "list", "bogus")
 					Expect(err).ToNot(HaveOccurred(), out)
 					Expect(out).ToNot(ContainSubstring("bogus"))
 				})
 
 				It("does not match bogus arguments", func() {
-					out, err := env.dFlow("", "__complete", "app", "env", "list", appName, "")
+					out, err := env.DFlow("", "__complete", "app", "env", "list", appName, "")
 					Expect(err).ToNot(HaveOccurred(), out)
 					Expect(out).ToNot(ContainSubstring(appName))
 					Expect(out).ToNot(ContainSubstring("MYVAR"))
@@ -197,7 +197,7 @@ var _ = Describe("apps env", LApplication, func() {
 			})
 
 			It("is retrieved with show", func() {
-				out, err := env.dFlow("", "apps", "env", "show", appName, "MYVAR")
+				out, err := env.DFlow("", "apps", "env", "show", appName, "MYVAR")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring(`Variable: MYVAR`))
 				Expect(out).To(ContainSubstring(`Value: myvalue`))
@@ -205,31 +205,31 @@ var _ = Describe("apps env", LApplication, func() {
 
 			Context("show command completion", func() {
 				It("matches empty app prefix", func() {
-					out, err := env.dFlow("", "__complete", "app", "env", "show", "")
+					out, err := env.DFlow("", "__complete", "app", "env", "show", "")
 					Expect(err).ToNot(HaveOccurred(), out)
 					Expect(out).To(ContainSubstring(appName))
 				})
 
 				It("matches empty var prefix", func() {
-					out, err := env.dFlow("", "__complete", "app", "env", "show", appName, "")
+					out, err := env.DFlow("", "__complete", "app", "env", "show", appName, "")
 					Expect(err).ToNot(HaveOccurred(), out)
 					Expect(out).To(ContainSubstring("MYVAR"))
 				})
 
 				It("does not match unknown app prefix", func() {
-					out, err := env.dFlow("", "__complete", "app", "env", "show", "bogus")
+					out, err := env.DFlow("", "__complete", "app", "env", "show", "bogus")
 					Expect(err).ToNot(HaveOccurred(), out)
 					Expect(out).ToNot(ContainSubstring("bogus"))
 				})
 
 				It("does not match unknown var prefix", func() {
-					out, err := env.dFlow("", "__complete", "app", "env", "show", appName, "bogus")
+					out, err := env.DFlow("", "__complete", "app", "env", "show", appName, "bogus")
 					Expect(err).ToNot(HaveOccurred(), out)
 					Expect(out).ToNot(ContainSubstring("bogus"))
 				})
 
 				It("does not match bogus arguments", func() {
-					out, err := env.dFlow("", "__complete", "app", "env", "show", appName, "MYVAR", "")
+					out, err := env.DFlow("", "__complete", "app", "env", "show", appName, "MYVAR", "")
 					Expect(err).ToNot(HaveOccurred(), out)
 					Expect(out).ToNot(ContainSubstring(appName))
 					Expect(out).ToNot(ContainSubstring("MYVAR"))
@@ -245,19 +245,19 @@ var _ = Describe("apps env", LApplication, func() {
 
 			Context("command completion", func() {
 				It("matches empty prefix", func() {
-					out, err := env.dFlow("", "__complete", "app", "env", "set", "")
+					out, err := env.DFlow("", "__complete", "app", "env", "set", "")
 					Expect(err).ToNot(HaveOccurred(), out)
 					Expect(out).To(ContainSubstring(appName))
 				})
 
 				It("does not match unknown prefix", func() {
-					out, err := env.dFlow("", "__complete", "app", "env", "set", "bogus")
+					out, err := env.DFlow("", "__complete", "app", "env", "set", "bogus")
 					Expect(err).ToNot(HaveOccurred(), out)
 					Expect(out).ToNot(ContainSubstring("bogus"))
 				})
 
 				It("does not match bogus arguments", func() {
-					out, err := env.dFlow("", "__complete", "app", "env", "set", appName, "")
+					out, err := env.DFlow("", "__complete", "app", "env", "set", appName, "")
 					Expect(err).ToNot(HaveOccurred(), out)
 					Expect(out).ToNot(ContainSubstring(appName))
 					Expect(out).ToNot(ContainSubstring("MYVAR"))
@@ -279,7 +279,7 @@ var _ = Describe("apps env", LApplication, func() {
 
 		When("unsetting an environment variable", func() {
 			BeforeEach(func() {
-				out, err := env.dFlow("", "apps", "env", "set", appName, "MYVAR", "myvalue")
+				out, err := env.DFlow("", "apps", "env", "set", appName, "MYVAR", "myvalue")
 				Expect(err).ToNot(HaveOccurred(), out)
 
 				// Wait for variable to appear so that we can verify its proper
@@ -290,7 +290,7 @@ var _ = Describe("apps env", LApplication, func() {
 			})
 
 			It("modifies and restarts the app", func() {
-				out, err := env.dFlow("", "apps", "env", "unset", appName, "MYVAR")
+				out, err := env.DFlow("", "apps", "env", "unset", appName, "MYVAR")
 				Expect(err).ToNot(HaveOccurred(), out)
 
 				// The deployment is not expected to be immediately modified, and/or
@@ -305,7 +305,7 @@ var _ = Describe("apps env", LApplication, func() {
 
 		When("setting an environment variable", func() {
 			It("modifies and restarts the app", func() {
-				out, err := env.dFlow("", "apps", "env", "set", appName, "MYVAR", "myvalue")
+				out, err := env.DFlow("", "apps", "env", "set", appName, "MYVAR", "myvalue")
 				Expect(err).ToNot(HaveOccurred(), out)
 
 				// The deployment is not expected to be immediately modified, and/or
@@ -335,7 +335,7 @@ var _ = Describe("apps env", LApplication, func() {
 		})
 
 		It("merges envs by default when updating", func() {
-			out, err := env.dFlow("", "apps", "update", appName, "--env", "BAR=fromupdate")
+			out, err := env.DFlow("", "apps", "update", appName, "--env", "BAR=fromupdate")
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			Eventually(func() string {
@@ -344,7 +344,7 @@ var _ = Describe("apps env", LApplication, func() {
 		})
 
 		It("replaces envs when --env-replace is set", func() {
-			out, err := env.dFlow("", "apps", "update", appName, "--env-replace", "--env", "BAR=replaced")
+			out, err := env.DFlow("", "apps", "update", appName, "--env-replace", "--env", "BAR=replaced")
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			Eventually(func() string {

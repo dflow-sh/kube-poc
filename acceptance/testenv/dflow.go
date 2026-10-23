@@ -12,6 +12,7 @@
 package testenv
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
@@ -44,7 +45,7 @@ const (
 
 type DFlowEnv struct {
 	machine.Machine
-	nodeTmpDir       string
+	nodeTmpDir      string
 	DFlowUser       string
 	DFlowPassword   string
 	DFlowAdminToken string
@@ -53,12 +54,12 @@ type DFlowEnv struct {
 
 func New(nodeDir string, rootDir, username, password, adminToken, userToken string) DFlowEnv {
 	return DFlowEnv{
-		nodeTmpDir:       nodeDir,
+		nodeTmpDir:      nodeDir,
 		DFlowUser:       username,
 		DFlowPassword:   password,
 		DFlowAdminToken: adminToken,
 		DFlowUserToken:  userToken,
-		Machine:          machine.New(nodeDir, username, password, adminToken, userToken, root, DFlowBinaryPath()),
+		Machine:         machine.New(nodeDir, username, password, adminToken, userToken, root, DFlowBinaryPath()),
 	}
 }
 
@@ -77,6 +78,35 @@ func ServerBinaryName() string {
 func DFlowBinaryPath() string {
 	p, _ := filepath.Abs(filepath.Join(Root(), "dist", BinaryName()))
 	return p
+}
+
+// GeneratedCredential reads one key from Secret dflow-generated-passwords.
+// DFLOW_ADMIN_PASSWORD and DFLOW_USER_PASSWORD override the Secret.
+func GeneratedCredential(key string) (string, error) {
+	switch key {
+	case "adminPassword":
+		if v := os.Getenv("DFLOW_ADMIN_PASSWORD"); v != "" {
+			return v, nil
+		}
+	case "dflowPassword":
+		if v := os.Getenv("DFLOW_USER_PASSWORD"); v != "" {
+			return v, nil
+		}
+	default:
+		return "", fmt.Errorf("unknown generated credential %q", key)
+	}
+	out, err := proc.Kubectl("get", "secret", "-n", Namespace, "dflow-generated-passwords", "-o", "jsonpath={.data."+key+"}")
+	if err != nil {
+		return "", err
+	}
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(out))
+	if err != nil {
+		return "", err
+	}
+	if len(raw) == 0 {
+		return "", fmt.Errorf("secret dflow-generated-passwords key %s is empty", key)
+	}
+	return string(raw), nil
 }
 
 // DFlowYAML returns the absolute path to the dflow settings YAML

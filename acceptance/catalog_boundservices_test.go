@@ -63,10 +63,10 @@ var _ = Describe("Catalog Service BoundServices", LService, func() {
 
 		By("provisioning a service instance from the catalog service")
 		serviceName := catalog.NewServiceName()
-		out, err := env.dFlow("", "service", "create", catalogService.Meta.Name, serviceName, "--wait")
+		out, err := env.DFlow("", "service", "create", catalogService.Meta.Name, serviceName, "--wait")
 		Expect(err).ToNot(HaveOccurred(), out)
 		DeferCleanup(func() {
-			_, _ = env.dFlow("", "service", "delete", serviceName)
+			_, _ = env.DFlow("", "service", "delete", serviceName)
 		})
 
 		By("GET now reports BoundServices=true")

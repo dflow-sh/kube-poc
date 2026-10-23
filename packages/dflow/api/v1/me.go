@@ -17,13 +17,13 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	. "github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/errors"
+	apierror "github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/errors"
 	"github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/models"
 )
 
 // Me handles the API endpoint /me.
 // It returns some information about the current user
-func Me(c *gin.Context) APIErrors {
+func Me(c *gin.Context) apierror.APIErrors {
 	user := requestctx.User(c.Request.Context())
 
 	roles := []models.Role{}

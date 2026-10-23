@@ -38,36 +38,36 @@ import (
 )
 
 type Machine struct {
-	nodeTmpDir       string
-	user             string
-	password         string
-	adminToken       string
-	userToken        string
-	root             string
+	nodeTmpDir      string
+	user            string
+	password        string
+	adminToken      string
+	userToken       string
+	root            string
 	dflowBinaryPath string
 }
 
 func New(dir, user, password, adminToken, userToken, root, dflowBinaryPath string) Machine {
 	return Machine{
-		nodeTmpDir:       dir,
-		user:             user,
-		password:         password,
-		adminToken:       adminToken,
-		userToken:        userToken,
-		root:             root,
+		nodeTmpDir:      dir,
+		user:            user,
+		password:        password,
+		adminToken:      adminToken,
+		userToken:       userToken,
+		root:            root,
 		dflowBinaryPath: dflowBinaryPath,
 	}
 }
 
 func (m *Machine) ShowStagingLogs(app string) {
-	_, _ = m.dFlow("", "app", "logs", "--staging", app)
+	_, _ = m.DFlow("", "app", "logs", "--staging", app)
 }
 
-// dFlow invokes the `dflow` binary, running the specified command.
+// DFlow invokes the `dflow` binary, running the specified command.
 // It returns the command output and/or error.
 // dir parameter defines the directory from which the command should be run.
 // It defaults to the current dir if left empty.
-func (m *Machine) dFlow(dir, command string, arg ...string) (string, error) {
+func (m *Machine) DFlow(dir, command string, arg ...string) (string, error) {
 	var out string
 	var err error
 	args := append([]string{command}, arg...)
@@ -79,7 +79,7 @@ func (m *Machine) dFlow(dir, command string, arg ...string) (string, error) {
 		if !isTransientAPIError(out) || attempt == 5 {
 			break
 		}
-		_, _ = fmt.Fprintf(GinkgoWriter, "[dFlow] transient error retry %d/5 command=%s err=%v out=%s\n", attempt, command, err, out)
+		_, _ = fmt.Fprintf(GinkgoWriter, "[DFlow] transient error retry %d/5 command=%s err=%v out=%s\n", attempt, command, err, out)
 		time.Sleep(time.Duration(attempt) * time.Second)
 	}
 	return out, err
@@ -137,7 +137,7 @@ func (m *Machine) DFlowCmd(command string, arg ...string) *exec.Cmd {
 }
 
 func (m *Machine) Versions() {
-	out, err := m.dFlow("", "info")
+	out, err := m.DFlow("", "info")
 	Expect(err).ToNot(HaveOccurred(), out)
 	out = strings.ReplaceAll(out, "\n", " ")
 	out = strings.ReplaceAll(out, "    ", "")
@@ -246,7 +246,7 @@ func (m *Machine) SetupNamespace(namespace string) {
 		_, _ = fmt.Fprintf(GinkgoWriter, "[SetupNamespace] attempt %d namespace=%s\n", attempt, namespace)
 
 		t0 := time.Now()
-		out, err := m.dFlow(m.nodeTmpDir, "namespace", "create", namespace)
+		out, err := m.DFlow(m.nodeTmpDir, "namespace", "create", namespace)
 		elapsedCreate := time.Since(t0)
 		if err != nil && !strings.Contains(out, "already exists") {
 			_, _ = fmt.Fprintf(GinkgoWriter, "[SetupNamespace] namespace create failed namespace=%s err=%v elapsed=%v out=%s\n", namespace, err, elapsedCreate, out)
@@ -257,7 +257,7 @@ func (m *Machine) SetupNamespace(namespace string) {
 		}
 
 		t1 := time.Now()
-		out, err = m.dFlow(m.nodeTmpDir, "namespace", "show", namespace)
+		out, err = m.DFlow(m.nodeTmpDir, "namespace", "show", namespace)
 		elapsedShow := time.Since(t1)
 		if err != nil {
 			_, _ = fmt.Fprintf(GinkgoWriter, "[SetupNamespace] namespace show failed namespace=%s err=%v elapsed=%v out=%s\n", namespace, err, elapsedShow, out)
@@ -301,7 +301,7 @@ func (m *Machine) TargetNamespace(namespace string) {
 	// race under parallel CI load.
 	EventuallyWithOffset(1, func() error {
 		attempt++
-		out, err := m.dFlow(m.nodeTmpDir, "target", namespace)
+		out, err := m.DFlow(m.nodeTmpDir, "target", namespace)
 		lastOut = out
 		if err != nil {
 			_, _ = fmt.Fprintf(
@@ -317,7 +317,7 @@ func (m *Machine) TargetNamespace(namespace string) {
 		return nil
 	}, "6m", "5s").Should(Succeed(), "dflow target %s: out=%s", namespace, lastOut)
 
-	out, err := m.dFlow(m.nodeTmpDir, "target")
+	out, err := m.DFlow(m.nodeTmpDir, "target")
 	if err != nil {
 		_, _ = fmt.Fprintf(GinkgoWriter, "[TargetNamespace] dflow target (show) failed: err=%v out=%s\n", err, out)
 	}
@@ -335,7 +335,7 @@ func (m *Machine) DeleteNamespace(namespace string) {
 
 	By(fmt.Sprintf("deleting a namespace: %s", namespace))
 
-	out, err := m.dFlow(m.nodeTmpDir, "namespace", "delete", "-f", namespace)
+	out, err := m.DFlow(m.nodeTmpDir, "namespace", "delete", "-f", namespace)
 	Expect(err).ToNot(HaveOccurred(), out)
 
 	out, err = proc.Kubectl("get", "namespace", namespace)
@@ -345,7 +345,7 @@ func (m *Machine) DeleteNamespace(namespace string) {
 
 func (m *Machine) VerifyNamespaceNotExist(namespace string) {
 	EventuallyWithOffset(1, func() string {
-		out, err := m.dFlow(m.nodeTmpDir, "namespace", "list")
+		out, err := m.DFlow(m.nodeTmpDir, "namespace", "list")
 		ExpectWithOffset(1, err).ToNot(HaveOccurred(), out)
 		return out
 	}, "2m").ShouldNot(MatchRegexp(namespace))
@@ -412,11 +412,11 @@ func (m *Machine) GetSettings() (*settings.Settings, error) {
 // __Attention__: The created files and directory are __not cleaned up automatically__
 func (m *Machine) SaveApplicationSpec(appName string) {
 
-	out, err := m.dFlow("", "app", "manifest", appName,
+	out, err := m.DFlow("", "app", "manifest", appName,
 		filepath.Join(m.nodeTmpDir, appName+"-manifest.yaml"))
 	Expect(err).ToNot(HaveOccurred(), out)
 
-	out, err = m.dFlow("", "app", "export",
+	out, err = m.DFlow("", "app", "export",
 		filepath.Join(m.nodeTmpDir, appName, appName+"-helm"))
 	Expect(err).ToNot(HaveOccurred(), out)
 }

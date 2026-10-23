@@ -24,11 +24,12 @@ func SetupEnv() {
 	// this env var is for the patch-dflow-deployment target in the
 	// Makefile, which has the top level as root dir
 	if os.Getenv("DFLOW_BINARY_PATH") == "" {
-		setEnvError := os.Setenv(
-			"DFLOW_BINARY_PATH", 
+		err := os.Setenv(
+			"DFLOW_BINARY_PATH",
 			fmt.Sprintf("./dist/%s", ServerBinaryName()),
 		)
-
-		fmt.Sprintf("DFLOW_BINARY_PATH was not set correctly: %s", setEnvError)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "DFLOW_BINARY_PATH was not set correctly: %s\n", err)
+		}
 	}
 }
