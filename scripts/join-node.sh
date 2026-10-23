@@ -153,6 +153,7 @@ parse_args() {
     esac
   fi
   if [[ -z "$K3S_BIN_VERSION" ]]; then
+    # Matches the install.sh commit used below (3dd98cc, tag v1.36.5+k3s1).
     K3S_BIN_VERSION="v1.36.5+k3s1"
   fi
 }
@@ -381,7 +382,7 @@ install_agent() {
   log "install k3s agent for ${SERVER}"
   write_agent_config
   k3s_join_env
-  curl -sfL https://get.k3s.io | env "${K3S_JOIN_ENV[@]}" sh - \
+  curl -sfL https://raw.githubusercontent.com/k3s-io/k3s/3dd98cc58ec34991e7e59b93663eee2e26fc1f65/install.sh | env "${K3S_JOIN_ENV[@]}" sh - \
     || die "k3s agent install failed. The download or the installer exited non-zero."
   systemctl enable k3s-agent >/dev/null 2>&1 || true
   wait_for_unit k3s-agent
@@ -395,7 +396,7 @@ install_control_plane() {
   # joins embedded etcd instead. Do not pass cluster-init here: that flag
   # creates a new etcd, it does not join one.
   K3S_JOIN_ENV+=("INSTALL_K3S_EXEC=server")
-  curl -sfL https://get.k3s.io | env "${K3S_JOIN_ENV[@]}" sh - \
+  curl -sfL https://raw.githubusercontent.com/k3s-io/k3s/3dd98cc58ec34991e7e59b93663eee2e26fc1f65/install.sh | env "${K3S_JOIN_ENV[@]}" sh - \
     || die "k3s server install failed. The download or the installer exited non-zero."
   systemctl enable k3s >/dev/null 2>&1 || true
   wait_for_unit k3s

@@ -39,6 +39,7 @@ HELM_VERSION="${HELM_VERSION:-v3.22.1}"
 KUBECONFIG_PATH="${KUBECONFIG_PATH:-/etc/rancher/k3s/k3s.yaml}"
 # stable channel on 2026-10-23. latest is v1.37.1+k3s1 and is not this pin.
 INSTALL_K3S_VERSION="${INSTALL_K3S_VERSION:-v1.36.5+k3s1}"
+# install.sh from that tag (3dd98cc). get.k3s.io is a moving script.
 STATE_DIR="${STATE_DIR:-/var/lib/dflow}"
 
 ROOT=""
@@ -646,7 +647,7 @@ install_k3s() {
   fi
   if [[ "$NEED_K3S_INSTALL" -eq 1 ]]; then
     log "install k3s ${INSTALL_K3S_VERSION}"
-    curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="${INSTALL_K3S_VERSION}" sh - \
+    curl -sfL https://raw.githubusercontent.com/k3s-io/k3s/3dd98cc58ec34991e7e59b93663eee2e26fc1f65/install.sh | INSTALL_K3S_VERSION="${INSTALL_K3S_VERSION}" sh - \
       || die "k3s install failed"
   elif [[ "$CONFIG_CHANGED" -eq 1 ]]; then
     log "restart k3s to apply server config"
