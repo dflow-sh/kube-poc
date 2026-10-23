@@ -60,7 +60,7 @@ Binaries:
 
 Unreleased builds report `v0.0.0-dev` (`packages/dflow/version/version.go`). A release tag stamps the CLI, the server image, `/info`, Swagger, and the packaged chart from that tag. `scripts/check-version.sh` fails if those copies disagree.
 
-Install on a server: [docs/INSTALL.md](docs/INSTALL.md). Check it with [docs/TESTING.md](docs/TESTING.md).
+Install on a server: [docs/INSTALL.md](docs/INSTALL.md). Check it with [docs/TESTING.md](docs/TESTING.md). Limits of this tree: [Known limits](docs/INSTALL.md#known-limits).
 
 The CLI, `install.sh`, `checksums.txt`, and the Helm chart are public GitHub Release assets. No token is required:
 

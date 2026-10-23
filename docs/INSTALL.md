@@ -2,6 +2,20 @@
 
 dFlow runs on Kubernetes. The chart does not install a UI. `dflowUI.enabled` is false.
 
+## Known limits
+
+- The registry uses emptyDir storage, so images are lost when the pod restarts.
+- local-path volumes are tied to one server.
+- There is no node replacement or backup procedure yet.
+- Builds run privileged.
+- Accepted CVEs: Reflector CVE-2026-70188 and CVE-2026-88092, kaniko CVE-2025-68121 and CVE-2026-33186, klipper-helm CVE-2025-68121, CVE-2026-31789, and CVE-2026-33186.
+- The CLI is the only interface.
+- Apps must listen on 8080 or be pushed with `-v appListeningPort=80`. `-v` is `--chart-value`.
+- Large registry pushes fail with a 413.
+- The registry on NodePort 30500 is plain HTTP on the public IP.
+- `dflow app exec` needs bash in the image.
+- `dflow app port-forward` does not work yet.
+
 ## Install the CLI
 
 On macOS or Linux, with no clone:
@@ -488,7 +502,7 @@ k3s ServiceLB (`svclb-traefik`) can fail to claim ports 80 and 443, so the Traef
 On the machine, from a checkout of this repository:
 
 ```bash
-# https://go.dev/dl/go1.26.0.linux-amd64.tar.gz
+# https://go.dev/dl/go1.26.10.linux-amd64.tar.gz
 export PATH=/usr/local/go/bin:$PATH
 CGO_ENABLED=0 go build -o apps/cli/dist/dflow ./apps/cli
 docker build -f images/Dockerfile -t ghcr.io/dflow-sh/dflow-server:v0.0.0-dev .
