@@ -4,17 +4,21 @@ dFlow runs on Kubernetes. The chart does not install a UI. `dflowUI.enabled` is 
 
 ## Known limits
 
-- The registry uses emptyDir storage, so images are lost when the pod restarts.
+- The registry uses emptyDir storage, so images are lost when the pod restarts. `containerregistry.storage.emptyDir=false` uses a PVC.
 - local-path volumes are tied to one server.
 - There is no node replacement or backup procedure yet.
 - Builds run privileged.
 - Accepted CVEs: Reflector CVE-2026-70188 and CVE-2026-88092, kaniko CVE-2025-68121 and CVE-2026-33186, klipper-helm CVE-2025-68121, CVE-2026-31789, and CVE-2026-33186.
 - The CLI is the only interface.
-- Apps must listen on 8080 or be pushed with `-v appListeningPort=80`. `-v` is `--chart-value`.
-- Large registry pushes fail with a 413.
+- Apps must listen on 8080, or set `-v appListeningPort=<port>` (short for `--chart-value`) on `dflow push`, `dflow app create`, and `dflow app update`.
+- A push through the registry NodePort 30500 nginx returns 413 when the body exceeds 1 MB. That nginx has no `client_max_body_size`, so the 1 MB default applies. In-cluster builds are not affected.
 - The registry on NodePort 30500 is plain HTTP on the public IP.
 - `dflow app exec` needs bash in the image.
 - `dflow app port-forward` does not work yet.
+- App namespaces get no Pod Security labels, NetworkPolicy, or quotas, so there is no tenant isolation.
+- The chart seeds users `admin` and `dflow`. There is no user command and no sign-up command. An OIDC login can create a user by email.
+- `dflow upgrade` downloads a public GitHub release. The server step runs helm on a machine that can read the cluster kubeconfig. On the server that file is `/etc/rancher/k3s/k3s.yaml`.
+- `dflow login --oidc` opens a browser. The acceptance suite checks the authorization-code prompt against Dex, not that browser callback.
 
 ## Install the CLI
 
