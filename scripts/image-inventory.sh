@@ -5,11 +5,14 @@
 #   scripts/image-inventory.sh
 #   scripts/image-inventory.sh --check
 #   scripts/image-inventory.sh --resolve
+#   scripts/image-inventory.sh --scan
 #
 # --check fails on a floating tag, on latest, and on an image with no digest.
 # A registry other than one host is fine. The server image in the install
 # scripts may use a GitHub release tag; the rendered chart still needs a digest.
 # --resolve asks the registry for tag digests. Digest pins are already resolved.
+# --scan runs Trivy on every digest-pinned image. HIGH findings are printed.
+# A CRITICAL finding fails the run. trivy must be on PATH.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -17,11 +20,13 @@ cd "$ROOT"
 
 CHECK=0
 RESOLVE=0
+SCAN=0
 for arg in "$@"; do
   case "$arg" in
     --check) CHECK=1 ;;
     --resolve) RESOLVE=1 ;;
-    *) echo "usage: scripts/image-inventory.sh [--check] [--resolve]" >&2; exit 2 ;;
+    --scan) SCAN=1 ;;
+    *) echo "usage: scripts/image-inventory.sh [--check] [--resolve] [--scan]" >&2; exit 2 ;;
   esac
 done
 
@@ -74,6 +79,89 @@ helm template cert-manager "${cm_chart}" \
 export RENDER_DIR="$render_dir"
 export DO_CHECK="$CHECK"
 export DO_RESOLVE="$RESOLVE"
+export DO_SCAN="$SCAN"
+
+scan_pinned_images() {
+  local list="$1"
+  if ! command -v trivy >/dev/null 2>&1; then
+    echo "trivy is required for --scan" >&2
+    exit 1
+  fi
+  if [[ ! -s "$list" ]]; then
+    echo "image scan found no digest-pinned images" >&2
+    exit 1
+  fi
+  local fail=0
+  local count=0
+  local ref out ignore_file
+  while IFS= read -r ref; do
+    [[ -z "$ref" ]] && continue
+    count=$((count + 1))
+    out="$(mktemp)"
+    ignore_file=""
+    case "$ref" in
+      docker.io/emberstack/kubernetes-reflector@sha256:51dbd5880929dc26678f6e190c70abfbcccd3846679ff464e5815823fd782f1a|docker.io/emberstack/kubernetes-reflector:10.0.65@sha256:51dbd5880929dc26678f6e190c70abfbcccd3846679ff464e5815823fd782f1a)
+        ignore_file="${ROOT}/scripts/trivy-allow/kubernetes-reflector-10.0.65.trivyignore"
+        ;;
+      gcr.io/kaniko-project/executor@sha256:2562c4fe551399514277ffff7dcca9a3b1628c4ea38cb017d7286dc6ea52f4cd|gcr.io/kaniko-project/executor:v1.24.0-debug@sha256:2562c4fe551399514277ffff7dcca9a3b1628c4ea38cb017d7286dc6ea52f4cd)
+        ignore_file="${ROOT}/scripts/trivy-allow/kaniko-executor-v1.24.0-debug.trivyignore"
+        ;;
+    esac
+    echo "scan ${ref}"
+    if ! trivy image \
+      --quiet \
+      --scanners vuln \
+      --severity HIGH,CRITICAL \
+      --list-all-pkgs=false \
+      --exit-code 0 \
+      --format json \
+      --ignorefile "$ignore_file" \
+      --timeout 15m \
+      --output "$out" \
+      "$ref"
+    then
+      echo "scan failed: ${ref}" >&2
+      rm -f "$out"
+      fail=1
+      continue
+    fi
+    if ! python3 - "$out" "$ref" <<'PY'
+import json
+import sys
+
+path, ref = sys.argv[1], sys.argv[2]
+with open(path, encoding="utf-8") as handle:
+    data = json.load(handle)
+if "Results" not in data and "SchemaVersion" not in data:
+    print(f"scan report was not a Trivy result: {ref}", file=sys.stderr)
+    sys.exit(2)
+critical = {}
+high = 0
+for result in data.get("Results") or []:
+    for vuln in result.get("Vulnerabilities") or []:
+        severity = vuln.get("Severity")
+        if severity == "CRITICAL":
+            vid = vuln.get("VulnerabilityID") or "unknown"
+            critical.setdefault(vid, vuln.get("FixedVersion") or "")
+        elif severity == "HIGH":
+            high += 1
+print(f"{ref}\tcritical={len(critical)}\thigh={high}")
+for vid in sorted(critical):
+    fixed = critical[vid] or "none"
+    print(f"CRITICAL\t{vid}\tfixed={fixed}\t{ref}")
+sys.exit(1 if critical else 0)
+PY
+    then
+      fail=1
+    fi
+    rm -f "$out"
+  done < "$list"
+  echo "scanned ${count} pinned images"
+  if [[ "$fail" -ne 0 ]]; then
+    echo "image scan failed" >&2
+    exit 1
+  fi
+}
 
 python3 - <<'PY'
 import os
@@ -86,6 +174,7 @@ root = pathlib.Path(".").resolve()
 render_dir = pathlib.Path(os.environ["RENDER_DIR"])
 do_check = os.environ["DO_CHECK"] == "1"
 do_resolve = os.environ["DO_RESOLVE"] == "1"
+do_scan = os.environ["DO_SCAN"] == "1"
 
 tag_or_var = r"(?:[A-Za-z0-9._-]+|\$\{[A-Za-z0-9_]+\}|\$\([A-Za-z0-9_]+\))"
 ref_re = re.compile(
@@ -260,6 +349,22 @@ for ref in sorted(rows):
     if do_check and not allowed(ref):
         errors.append(f"not allowed: {ref} ({rows[ref]})")
 
+if do_scan:
+    seen_digests = set()
+    pinned = []
+    for ref in sorted(rows):
+        digest_match = re.search(r"@(sha256:[a-f0-9]{64})$", ref)
+        if not digest_match:
+            continue
+        digest = digest_match.group(1)
+        if digest in seen_digests:
+            continue
+        seen_digests.add(digest)
+        pinned.append(ref)
+    (render_dir / "pinned-images.txt").write_text(
+        "".join(f"{ref}\n" for ref in pinned)
+    )
+
 print("name\ttag\tdigest\treference")
 for image_name, tag, digest, ref in table:
     print(f"{image_name}\t{tag}\t{digest}\t{ref}")
@@ -270,3 +375,7 @@ if errors:
         print(f"  {item}", file=sys.stderr)
     sys.exit(1)
 PY
+
+if [[ "$SCAN" -eq 1 ]]; then
+  scan_pinned_images "${render_dir}/pinned-images.txt"
+fi
