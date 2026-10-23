@@ -111,7 +111,7 @@ var _ = Describe("Wordpress", func() {
 	})
 
 	AfterEach(func() {
-		out, err := env.dFlow("", "apps", "delete", wordpress.Name)
+		out, err := env.DFlow("", "apps", "delete", wordpress.Name)
 		Expect(err).ToNot(HaveOccurred(), out)
 
 		err = os.RemoveAll(wordpress.Dir)
@@ -127,7 +127,7 @@ var _ = Describe("Wordpress", func() {
 			"-e", "BP_PHP_SERVER=nginx")
 		Expect(err).ToNot(HaveOccurred(), out)
 
-		out, err = env.dFlow("", "app", "list")
+		out, err = env.DFlow("", "app", "list")
 		Expect(err).ToNot(HaveOccurred(), out)
 		Expect(out).To(MatchRegexp(wordpress.Name + `.*\|.*1\/1.*\|.*`))
 

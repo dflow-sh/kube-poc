@@ -49,7 +49,7 @@ var _ = Describe("ApplicationMatch Endpoint", LApplication, func() {
 			appName = catalog.NewAppName()
 
 			By("create it")
-			out, err := env.dFlow("", "app", "create", appName)
+			out, err := env.DFlow("", "app", "create", appName)
 			Expect(err).ToNot(HaveOccurred(), out)
 			Expect(out).To(MatchRegexp("Ok"))
 		})

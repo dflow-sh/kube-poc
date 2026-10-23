@@ -105,15 +105,15 @@ var _ = Describe("RubyOnRails", func() {
 		Expect(err).ToNot(HaveOccurred(), out)
 
 		// Create the app
-		out, err = env.dFlow("", "apps", "create", rails.Name)
+		out, err = env.DFlow("", "apps", "create", rails.Name)
 		Expect(err).ToNot(HaveOccurred(), out)
 
 		// Force node version used by buildpack to 16.x
-		out, err = env.dFlow("", "apps", "env", "set", rails.Name, "BP_NODE_VERSION", "20")
+		out, err = env.DFlow("", "apps", "env", "set", rails.Name, "BP_NODE_VERSION", "20")
 		Expect(err).ToNot(HaveOccurred(), out)
 
 		// Provide the expected RAILS_MASTER_KEY to buildpack and application
-		out, err = env.dFlow("", "apps", "env", "set", rails.Name, "RAILS_MASTER_KEY", rails.MasterKey)
+		out, err = env.DFlow("", "apps", "env", "set", rails.Name, "RAILS_MASTER_KEY", rails.MasterKey)
 		Expect(err).ToNot(HaveOccurred(), out)
 
 		// Create a custom service catalog
@@ -127,20 +127,20 @@ var _ = Describe("RubyOnRails", func() {
 		Expect(err).ToNot(HaveOccurred(), out)
 
 		// Create a database for Rails
-		out, err = env.dFlow("", "service", "create", catalogName, serviceName)
+		out, err = env.DFlow("", "service", "create", catalogName, serviceName)
 		Expect(err).ToNot(HaveOccurred(), out)
 
 		Eventually(func() string {
-			out, _ := env.dFlow("", "service", "show", serviceName)
+			out, _ := env.DFlow("", "service", "show", serviceName)
 			return out
 		}, "2m", "5s").Should(MatchRegexp("Status.*\\|.*deployed"))
 
 		// Bind the database to app
-		out, err = env.dFlow("", "service", "bind", serviceName, rails.Name)
+		out, err = env.DFlow("", "service", "bind", serviceName, rails.Name)
 		Expect(err).ToNot(HaveOccurred(), out)
 
 		// See the configuration
-		out, err = env.dFlow("", "configurations", "list")
+		out, err = env.DFlow("", "configurations", "list")
 		Expect(err).ToNot(HaveOccurred(), out)
 
 		// Update the configuration
@@ -148,7 +148,7 @@ var _ = Describe("RubyOnRails", func() {
 			names.ServiceReleaseName(serviceName))
 		newHost = fmt.Sprintf("%s.%s.svc.cluster.local", configurationName, rails.Namespace)
 
-		out, err = env.dFlow("", "configurations", "update", configurationName,
+		out, err = env.DFlow("", "configurations", "update", configurationName,
 			"--set", "host="+newHost,
 			"--set", "port=5432",
 			"--set", "username=myuser")
@@ -163,10 +163,9 @@ var _ = Describe("RubyOnRails", func() {
 	})
 
 	AfterEach(func() {
-		// Delete my custom service catalog
-		out, err := proc.Kubectl("delete", "-f", testenv.TestAssetPath("my-postgresql-custom-svc.yaml"))
-		//Expect(err).ToNot(HaveOccurred(), out)
-		out, err = proc.RunW("sed", "-i", "-e", fmt.Sprintf("s/%s/myname/", catalogName), testenv.TestAssetPath("my-postgresql-custom-svc.yaml"))
+		// Best-effort cleanup. The catalog entry may already be gone.
+		_, _ = proc.Kubectl("delete", "-f", testenv.TestAssetPath("my-postgresql-custom-svc.yaml"))
+		out, err := proc.RunW("sed", "-i", "-e", fmt.Sprintf("s/%s/myname/", catalogName), testenv.TestAssetPath("my-postgresql-custom-svc.yaml"))
 		Expect(err).ToNot(HaveOccurred(), out)
 
 		env.DeleteApp(rails.Name)

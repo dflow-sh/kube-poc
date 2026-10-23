@@ -29,7 +29,7 @@ import (
 var _ = Describe("<Scenario3> RKE, Private CA, Configuration, on External Registry", func() {
 	var (
 		flags             []string
-		dflowHelper      dflow.dFlow
+		dflowHelper       dflow.DFlow
 		configurationName = catalog.NewConfigurationName()
 		appName           string
 		loadbalancer      string

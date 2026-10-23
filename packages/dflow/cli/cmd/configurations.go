@@ -155,7 +155,7 @@ func NewConfigurationCreateCmd(client ConfigurationService) *cobra.Command {
 				return err
 			}
 			if len(cfg.kvFromFiles) > 0 {
-				err, kvFiles := assignmentsFromFiles(cfg.kvFromFiles)
+				kvFiles, err := assignmentsFromFiles(cfg.kvFromFiles)
 				if err != nil {
 					return err
 				}
@@ -354,7 +354,7 @@ func parseAssignments(args []string) ([]string, error) {
 	return assignments, nil
 }
 
-func assignmentsFromFiles(fromFileSpecs []string) (error, []string) {
+func assignmentsFromFiles(fromFileSpecs []string) ([]string, error) {
 	results := []string{}
 	for _, spec := range fromFileSpecs {
 		var key string
@@ -374,11 +374,11 @@ func assignmentsFromFiles(fromFileSpecs []string) (error, []string) {
 
 		content, err := os.ReadFile(valuefile)
 		if err != nil {
-			return errors.Wrapf(err, "filesystem error"), nil
+			return nil, errors.Wrapf(err, "filesystem error")
 		}
 
 		results = append(results, key, string(content))
 	}
 
-	return nil, results
+	return results, nil
 }

@@ -53,7 +53,7 @@ var _ = Describe("Configurations", LConfiguration, func() {
 		})
 
 		It("shows all created configurations", func() {
-			out, err := env.dFlow("", "configuration", "list")
+			out, err := env.DFlow("", "configuration", "list")
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			Expect(out).To(
@@ -66,7 +66,7 @@ var _ = Describe("Configurations", LConfiguration, func() {
 		})
 
 		It("lists configurations in JSON format", func() {
-			out, err := env.dFlow("", "configuration", "list", "--output", "json")
+			out, err := env.DFlow("", "configuration", "list", "--output", "json")
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			configurations := models.ConfigurationResponseList{}
@@ -113,7 +113,7 @@ var _ = Describe("Configurations", LConfiguration, func() {
 		It("lists all configurations belonging to all namespaces", func() {
 			// But we care only about the three we know about from the setup.
 
-			out, err := env.dFlow("", "configuration", "list", "--all")
+			out, err := env.DFlow("", "configuration", "list", "--all")
 			Expect(err).ToNot(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("Listing all configurations"))
 			Expect(out).To(
@@ -136,16 +136,16 @@ var _ = Describe("Configurations", LConfiguration, func() {
 		})
 
 		It("creates an empty configuration", func() {
-			out, err := env.dFlow("", "configuration", "create", configurationName1)
+			out, err := env.DFlow("", "configuration", "create", configurationName1)
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			// Check presence
-			out, err = env.dFlow("", "configuration", "list")
+			out, err = env.DFlow("", "configuration", "list")
 			Expect(err).ToNot(HaveOccurred(), out)
 			Expect(out).To(MatchRegexp(configurationName1))
 
 			// No parameter
-			out, err = env.dFlow("", "configuration", "show", configurationName1)
+			out, err = env.DFlow("", "configuration", "show", configurationName1)
 			Expect(err).ToNot(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("Configuration Details"))
 			Expect(out).To(ContainSubstring("No parameters"))
@@ -156,12 +156,12 @@ var _ = Describe("Configurations", LConfiguration, func() {
 			// the separator of the single-argument `KEY=VALUE` assignment form.
 			secret := "HTBCcNaoiW+piphiHQZSVq+JelIp3F6W4/FV1rfWdQI="
 
-			out, err := env.dFlow("", "configuration", "create", configurationName1,
+			out, err := env.DFlow("", "configuration", "create", configurationName1,
 				"PAIRED", secret,
 				"JOINED="+secret)
 			Expect(err).ToNot(HaveOccurred(), out)
 
-			out, err = env.dFlow("", "configuration", "show", configurationName1, "--output", "json")
+			out, err = env.DFlow("", "configuration", "show", configurationName1, "--output", "json")
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			configuration := models.ConfigurationResponse{}
@@ -176,43 +176,43 @@ var _ = Describe("Configurations", LConfiguration, func() {
 
 	Describe("configuration create failures", func() {
 		It("rejects names not fitting kubernetes requirements", func() {
-			out, err := env.dFlow("", "configuration", "create", "BOGUS", "dummy", "value")
+			out, err := env.DFlow("", "configuration", "create", "BOGUS", "dummy", "value")
 			Expect(err).To(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("name must consist of lower case alphanumeric"))
 		})
 
 		It("fails for missing arguments, not enough, no files", func() {
-			out, err := env.dFlow("", "configuration", "create")
+			out, err := env.DFlow("", "configuration", "create")
 			Expect(err).To(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("Not enough arguments, expected name"))
 		})
 
 		It("fails for missing arguments, not enough, with files", func() {
-			out, err := env.dFlow("", "configuration", "create", "--from-file", "dummy")
+			out, err := env.DFlow("", "configuration", "create", "--from-file", "dummy")
 			Expect(err).To(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("Not enough arguments, expected name"))
 		})
 
 		It("fails for missing arguments, key without value", func() {
-			out, err := env.dFlow("", "configuration", "create", "foo", "a")
+			out, err := env.DFlow("", "configuration", "create", "foo", "a")
 			Expect(err).To(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("Last Key has no value"))
 		})
 
 		It("fails for missing arguments, trailing key without value", func() {
-			out, err := env.dFlow("", "configuration", "create", "foo", "a=b", "c")
+			out, err := env.DFlow("", "configuration", "create", "foo", "a=b", "c")
 			Expect(err).To(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("Last Key has no value"))
 		})
 
 		It("rejects keys not fitting kubernetes requirements", func() {
-			out, err := env.dFlow("", "configuration", "create", "foo", "BAD KEY", "value")
+			out, err := env.DFlow("", "configuration", "create", "foo", "BAD KEY", "value")
 			Expect(err).To(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("invalid configuration key `BAD KEY`"))
 		})
 
 		It("fails for a missing path", func() {
-			out, err := env.dFlow("", "configuration", "create", "foo", "--from-file", "MISSING")
+			out, err := env.DFlow("", "configuration", "create", "foo", "--from-file", "MISSING")
 			Expect(err).To(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("filesystem error: open MISSING: no such file or directory"))
 		})
@@ -232,7 +232,7 @@ var _ = Describe("Configurations", LConfiguration, func() {
 			})
 
 			It("fails for a directory", func() {
-				out, err := env.dFlow("", "configuration", "create", "foo", "--from-file", tmpDir)
+				out, err := env.DFlow("", "configuration", "create", "foo", "--from-file", tmpDir)
 				Expect(err).To(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring("filesystem error: read %s: is a directory", tmpDir))
 			})
@@ -259,7 +259,7 @@ var _ = Describe("Configurations", LConfiguration, func() {
 			env.MakeContainerImageApp(appName, 1, containerImageURL)
 			env.BindAppConfiguration(appName, configurationName1, namespace)
 
-			out, err := env.dFlow("", "configuration", "delete", configurationName1)
+			out, err := env.DFlow("", "configuration", "delete", configurationName1)
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			Expect(out).To(ContainSubstring("Unable to delete configuration. It is still used by"))
@@ -275,7 +275,7 @@ var _ = Describe("Configurations", LConfiguration, func() {
 
 			// Delete again, and force unbind
 
-			out, err = env.dFlow("", "configuration", "delete", "--unbind", configurationName1)
+			out, err = env.DFlow("", "configuration", "delete", "--unbind", configurationName1)
 			Expect(err).ToNot(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("Configurations Removed"))
 
@@ -283,7 +283,7 @@ var _ = Describe("Configurations", LConfiguration, func() {
 
 			// And check non-presence
 			Eventually(func() string {
-				out, err = env.dFlow("", "configuration", "list")
+				out, err = env.DFlow("", "configuration", "list")
 				Expect(err).ToNot(HaveOccurred(), out)
 				return out
 			}, "2m").ShouldNot(
@@ -306,13 +306,13 @@ var _ = Describe("Configurations", LConfiguration, func() {
 			})
 
 			It("matches empty prefix", func() {
-				out, err := env.dFlow("", "__complete", "configuration", "delete", "")
+				out, err := env.DFlow("", "__complete", "configuration", "delete", "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring(configurationName1))
 			})
 
 			It("does not match unknown prefix", func() {
-				out, err := env.dFlow("", "__complete", "configuration", "delete", "bogus")
+				out, err := env.DFlow("", "__complete", "configuration", "delete", "bogus")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring("bogus"))
 			})
@@ -321,11 +321,11 @@ var _ = Describe("Configurations", LConfiguration, func() {
 				// Completion behavior can vary slightly between shells/versions, so keep this
 				// as a smoke test that both configuration names are offered at the right time
 				// instead of asserting on exact filtering semantics.
-				out, err := env.dFlow("", "__complete", "configuration", "delete", configurationName1, "")
+				out, err := env.DFlow("", "__complete", "configuration", "delete", configurationName1, "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring(configurationName2))
 
-				out, err = env.dFlow("", "__complete", "configuration", "delete", configurationName2, "")
+				out, err = env.DFlow("", "__complete", "configuration", "delete", configurationName2, "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring(configurationName1))
 			})
@@ -348,31 +348,31 @@ var _ = Describe("Configurations", LConfiguration, func() {
 
 		Context("command completion", func() {
 			It("matches empty configuration prefix", func() {
-				out, err := env.dFlow("", "__complete", "configuration", "bind", "")
+				out, err := env.DFlow("", "__complete", "configuration", "bind", "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring(configurationName1))
 			})
 
 			It("matches empty app prefix", func() {
-				out, err := env.dFlow("", "__complete", "configuration", "bind", configurationName1, "")
+				out, err := env.DFlow("", "__complete", "configuration", "bind", configurationName1, "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring(appName))
 			})
 
 			It("does not match unknown configuration prefix", func() {
-				out, err := env.dFlow("", "__complete", "configuration", "bind", "bogus")
+				out, err := env.DFlow("", "__complete", "configuration", "bind", "bogus")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring("bogus"))
 			})
 
 			It("does not match unknown app prefix", func() {
-				out, err := env.dFlow("", "__complete", "configuration", "bind", configurationName1, "bogus")
+				out, err := env.DFlow("", "__complete", "configuration", "bind", configurationName1, "bogus")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring("bogus"))
 			})
 
 			It("does not match bogus arguments", func() {
-				out, err := env.dFlow("", "__complete", "configuration", "bind", configurationName1, appName, "")
+				out, err := env.DFlow("", "__complete", "configuration", "bind", configurationName1, appName, "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring(appName))
 				Expect(out).ToNot(ContainSubstring(configurationName1))
@@ -397,31 +397,31 @@ var _ = Describe("Configurations", LConfiguration, func() {
 
 		Context("command completion", func() {
 			It("matches empty configuration prefix", func() {
-				out, err := env.dFlow("", "__complete", "configuration", "unbind", "")
+				out, err := env.DFlow("", "__complete", "configuration", "unbind", "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring(configurationName1))
 			})
 
 			It("matches empty app prefix", func() {
-				out, err := env.dFlow("", "__complete", "configuration", "unbind", configurationName1, "")
+				out, err := env.DFlow("", "__complete", "configuration", "unbind", configurationName1, "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring(appName))
 			})
 
 			It("does not match unknown configuration prefix", func() {
-				out, err := env.dFlow("", "__complete", "configuration", "unbind", "bogus")
+				out, err := env.DFlow("", "__complete", "configuration", "unbind", "bogus")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring("bogus"))
 			})
 
 			It("does not match unknown app prefix", func() {
-				out, err := env.dFlow("", "__complete", "configuration", "unbind", configurationName1, "bogus")
+				out, err := env.DFlow("", "__complete", "configuration", "unbind", configurationName1, "bogus")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring("bogus"))
 			})
 
 			It("does not match bogus arguments", func() {
-				out, err := env.dFlow("", "__complete", "configuration", "unbind", configurationName1, appName, "")
+				out, err := env.DFlow("", "__complete", "configuration", "unbind", configurationName1, appName, "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring(appName))
 				Expect(out).ToNot(ContainSubstring(configurationName1))
@@ -434,7 +434,7 @@ var _ = Describe("Configurations", LConfiguration, func() {
 		It("shows configuration details", func() {
 			env.MakeConfiguration(configurationName1)
 
-			out, err := env.dFlow("", "configuration", "show", configurationName1)
+			out, err := env.DFlow("", "configuration", "show", configurationName1)
 			Expect(err).ToNot(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("Configuration Details"))
 
@@ -454,7 +454,7 @@ var _ = Describe("Configurations", LConfiguration, func() {
 		It("shows a configuration in JSON format", func() {
 			env.MakeConfiguration(configurationName1)
 
-			out, err := env.dFlow("", "configuration", "show", configurationName1, "--output", "json")
+			out, err := env.DFlow("", "configuration", "show", configurationName1, "--output", "json")
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			configuration := models.ConfigurationResponse{}
@@ -466,7 +466,7 @@ var _ = Describe("Configurations", LConfiguration, func() {
 		It("reads from files, and truncates large configuration details", func() {
 			env.MakeConfigurationFromFiles(configurationName1, testenv.TestAssetPath("config.yaml"))
 
-			out, err := env.dFlow("", "configuration", "show", configurationName1)
+			out, err := env.DFlow("", "configuration", "show", configurationName1)
 			Expect(err).ToNot(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("Configuration Details"))
 
@@ -487,19 +487,19 @@ var _ = Describe("Configurations", LConfiguration, func() {
 			})
 
 			It("matches empty prefix", func() {
-				out, err := env.dFlow("", "__complete", "configuration", "show", "")
+				out, err := env.DFlow("", "__complete", "configuration", "show", "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring(configurationName1))
 			})
 
 			It("does not match unknown prefix", func() {
-				out, err := env.dFlow("", "__complete", "configuration", "show", "bogus")
+				out, err := env.DFlow("", "__complete", "configuration", "show", "bogus")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring("bogus"))
 			})
 
 			It("does not match bogus arguments", func() {
-				out, err := env.dFlow("", "__complete", "configuration", "show", configurationName1, "")
+				out, err := env.DFlow("", "__complete", "configuration", "show", configurationName1, "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring(configurationName1))
 			})
@@ -518,7 +518,7 @@ var _ = Describe("Configurations", LConfiguration, func() {
 
 			// Wait for the app restart from binding the configuration to settle
 			Eventually(func() string {
-				out, err := env.dFlow("", "app", "list")
+				out, err := env.DFlow("", "app", "list")
 				Expect(err).ToNot(HaveOccurred(), out)
 				return out
 			}, "5m").Should(
@@ -532,7 +532,7 @@ var _ = Describe("Configurations", LConfiguration, func() {
 		It("it edits the configuration, and restarts the app", func() {
 			// edit the configuration ...
 
-			out, err := env.dFlow("", "configuration", "update", configurationName1,
+			out, err := env.DFlow("", "configuration", "update", configurationName1,
 				"--unset", "username",
 				"--set", "user=ci/cd",
 			)
@@ -550,7 +550,7 @@ var _ = Describe("Configurations", LConfiguration, func() {
 
 			// Confirm the changes ...
 
-			out, err = env.dFlow("", "configuration", "show", configurationName1)
+			out, err = env.DFlow("", "configuration", "show", configurationName1)
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			Expect(out).To(ContainSubstring("Configuration Details"))
@@ -564,7 +564,7 @@ var _ = Describe("Configurations", LConfiguration, func() {
 			// Wait for app to resettle ...
 
 			Eventually(func() string {
-				out, err := env.dFlow("", "app", "list")
+				out, err := env.DFlow("", "app", "list")
 				Expect(err).ToNot(HaveOccurred(), out)
 				return out
 			}, "5m").Should(
@@ -596,7 +596,7 @@ var _ = Describe("Configurations", LConfiguration, func() {
 				Expect(err).ToNot(HaveOccurred())
 
 				By("updating configuration with --no-restart")
-				out, err := env.dFlow("", "configuration", "update", configurationName1,
+				out, err := env.DFlow("", "configuration", "update", configurationName1,
 					"--no-restart",
 					"--set", "newkey=newvalue",
 				)
@@ -604,7 +604,7 @@ var _ = Describe("Configurations", LConfiguration, func() {
 				Expect(out).To(ContainSubstring("Configuration Changes Saved"))
 
 				By("verifying changes were applied")
-				out, err = env.dFlow("", "configuration", "show", configurationName1)
+				out, err = env.DFlow("", "configuration", "show", configurationName1)
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring("Configuration Details"))
 				Expect(out).To(ContainSubstring("newkey"))
@@ -617,7 +617,7 @@ var _ = Describe("Configurations", LConfiguration, func() {
 				}, "15s", "2s").Should(ContainElements(oldPodNames))
 
 				By("verifying app is still healthy")
-				out, err = env.dFlow("", "app", "show", appName)
+				out, err = env.DFlow("", "app", "show", appName)
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(
 					HaveATable(
@@ -633,7 +633,7 @@ var _ = Describe("Configurations", LConfiguration, func() {
 				Expect(err).ToNot(HaveOccurred())
 
 				By("updating configuration WITHOUT --no-restart (default behavior)")
-				out, err := env.dFlow("", "configuration", "update", configurationName1,
+				out, err := env.DFlow("", "configuration", "update", configurationName1,
 					"--set", "anotherkey=anothervalue",
 				)
 				Expect(err).ToNot(HaveOccurred(), out)
@@ -648,7 +648,7 @@ var _ = Describe("Configurations", LConfiguration, func() {
 
 				By("verifying app is healthy after restart")
 				Eventually(func() string {
-					out, err := env.dFlow("", "app", "list")
+					out, err := env.DFlow("", "app", "list")
 					Expect(err).ToNot(HaveOccurred(), out)
 					return out
 				}, "2m").Should(
@@ -669,12 +669,12 @@ var _ = Describe("Configurations", LConfiguration, func() {
 			service = catalog.NewServiceName()
 
 			By("make service instance: " + service)
-			out, err := env.dFlow("", "service", "create", "postgresql-dev", service)
+			out, err := env.DFlow("", "service", "create", "postgresql-dev", service)
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			By("wait for deployment")
 			Eventually(func() string {
-				out, _ := env.dFlow("", "service", "show", service)
+				out, _ := env.DFlow("", "service", "show", service)
 				return out
 			}, ServiceDeployTimeout, ServiceDeployPollingInterval).Should(
 				HaveATable(WithRow("Status", "deployed")),
@@ -694,12 +694,12 @@ var _ = Describe("Configurations", LConfiguration, func() {
 
 			By("bind service: " + service)
 
-			out, err = env.dFlow("", "service", "bind", service, appName)
+			out, err = env.DFlow("", "service", "bind", service, appName)
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			By("wait for bound")
 			Eventually(func() string {
-				out, _ := env.dFlow("", "app", "show", appName)
+				out, _ := env.DFlow("", "app", "show", appName)
 				return out
 			}, "2m", "5s").Should(HaveATable(WithRow("Bound Configurations", config)))
 
@@ -707,13 +707,13 @@ var _ = Describe("Configurations", LConfiguration, func() {
 		})
 
 		It("doesn't unbind a service-owned configuration", func() {
-			out, err := env.dFlow("", "configuration", "unbind", config, appName)
+			out, err := env.DFlow("", "configuration", "unbind", config, appName)
 			Expect(err).To(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("Configuration '%s' belongs to service", config))
 		})
 
 		It("doesn't delete a bound service-owned configuration", func() {
-			out, err := env.dFlow("", "configuration", "delete", config)
+			out, err := env.DFlow("", "configuration", "delete", config)
 			Expect(err).To(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("Configuration '%s' belongs to service", config))
 		})
@@ -721,16 +721,16 @@ var _ = Describe("Configurations", LConfiguration, func() {
 		It("doesn't delete any service-owned configuration", func() {
 			By("unbind service: " + appName)
 
-			out, err := env.dFlow("", "service", "unbind", service, appName)
+			out, err := env.DFlow("", "service", "unbind", service, appName)
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			By("wait for unbound")
 			Eventually(func() string {
-				out, _ := env.dFlow("", "app", "show", appName)
+				out, _ := env.DFlow("", "app", "show", appName)
 				return out
 			}, "2m", "5s").ShouldNot(HaveATable(WithRow("Bound Configurations", config)))
 
-			out, err = env.dFlow("", "configuration", "delete", config)
+			out, err = env.DFlow("", "configuration", "delete", config)
 			Expect(err).To(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("Configuration '%s' belongs to service", config))
 		})
@@ -742,17 +742,17 @@ var _ = Describe("Configurations", LConfiguration, func() {
 			var out string
 			var err error
 			Eventually(func() bool {
-				out, err = env.dFlow("", "service", "unbind", service, appName)
+				out, err = env.DFlow("", "service", "unbind", service, appName)
 				return err == nil
 			}, "2m", "10s").Should(BeTrue(), "service unbind should succeed; last out: %s", out)
 
 			By("wait for unbound")
 			Eventually(func() string {
-				out, _ := env.dFlow("", "app", "show", appName)
+				out, _ := env.DFlow("", "app", "show", appName)
 				return out
 			}, "2m", "5s").ShouldNot(HaveATable(WithRow("Bound Configurations", config)))
 
-			out, err = env.dFlow("", "configuration", "delete", config)
+			out, err = env.DFlow("", "configuration", "delete", config)
 			Expect(err).To(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("Configuration '%s' belongs to service", config))
 
@@ -764,12 +764,12 @@ var _ = Describe("Configurations", LConfiguration, func() {
 
 			By("remove service instance: " + service)
 
-			out, err = env.dFlow("", "service", "delete", service)
+			out, err = env.DFlow("", "service", "delete", service)
 			Expect(err).ToNot(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("Services Removed"))
 
 			Eventually(func() string {
-				out, _ := env.dFlow("", "service", "delete", service)
+				out, _ := env.DFlow("", "service", "delete", service)
 				return out
 			}, "1m", "5s").Should(ContainSubstring("service '%s' does not exist", service))
 

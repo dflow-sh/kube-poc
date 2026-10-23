@@ -21,7 +21,7 @@ import (
 
 var _ = Describe("Info", LMisc, func() {
 	It("succeeds", func() {
-		out, err := env.dFlow("", "info")
+		out, err := env.DFlow("", "info")
 		Expect(err).ToNot(HaveOccurred(), out)
 		Expect(out).To(ContainSubstring(`dFlow Environment`))
 		Expect(out).To(ContainSubstring(`Platform: `))
@@ -32,7 +32,7 @@ var _ = Describe("Info", LMisc, func() {
 	})
 
 	It("succeeds with JSON", func() {
-		out, err := env.dFlow("", "info", "--output", "json")
+		out, err := env.DFlow("", "info", "--output", "json")
 		Expect(err).ToNot(HaveOccurred(), out)
 
 		info := &models.InfoResponse{}

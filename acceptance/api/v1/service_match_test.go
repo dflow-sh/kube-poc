@@ -63,17 +63,17 @@ var _ = Describe("ServiceMatch Endpoint", LService, func() {
 			serviceName = catalog.NewServiceName()
 
 			By("create it")
-			out, err := env.dFlow("", "service", "create", catalogService.Meta.Name, serviceName)
+			out, err := env.DFlow("", "service", "create", catalogService.Meta.Name, serviceName)
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			By("show it")
-			out, err = env.dFlow("", "service", "show", serviceName)
+			out, err = env.DFlow("", "service", "show", serviceName)
 			Expect(err).ToNot(HaveOccurred(), out)
 			Expect(out).To(MatchRegexp(fmt.Sprintf("Name.*\\|.*%s", serviceName)))
 
 			By("wait for deployment")
 			Eventually(func() string {
-				out, _ := env.dFlow("", "service", "show", serviceName)
+				out, _ := env.DFlow("", "service", "show", serviceName)
 				return out
 			}, "2m", "5s").Should(MatchRegexp("Status.*\\|.*deployed"))
 

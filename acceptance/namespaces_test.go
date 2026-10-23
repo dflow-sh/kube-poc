@@ -24,7 +24,7 @@ import (
 
 var _ = Describe("Namespaces", LNamespace, func() {
 	It("has a default namespace", func() {
-		out, err := env.dFlow("", "namespace", "list")
+		out, err := env.DFlow("", "namespace", "list")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(out).To(
 			HaveATable(
@@ -48,7 +48,7 @@ var _ = Describe("Namespaces", LNamespace, func() {
 		It("creates and targets an namespace", func() {
 			env.SetupAndTargetNamespace(namespaceName)
 			By("switching namespace back to default")
-			out, err := env.dFlow("", "target", "workspace")
+			out, err := env.DFlow("", "target", "workspace")
 			Expect(err).ToNot(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("Name: workspace"))
 			Expect(out).To(ContainSubstring("Namespace targeted."))
@@ -56,7 +56,7 @@ var _ = Describe("Namespaces", LNamespace, func() {
 
 		It("rejects creating an existing namespace", func() {
 			env.SetupAndTargetNamespace(namespaceName)
-			out, err := env.dFlow("", "namespace", "create", namespaceName)
+			out, err := env.DFlow("", "namespace", "create", namespaceName)
 			Expect(err).To(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("namespace '%s' already exists", namespaceName))
 		})
@@ -65,7 +65,7 @@ var _ = Describe("Namespaces", LNamespace, func() {
 	Describe("namespace create failures", func() {
 		It("rejects names not fitting kubernetes requirements", func() {
 			namespaceName := "BOGUS"
-			out, err := env.dFlow("", "namespace", "create", namespaceName)
+			out, err := env.DFlow("", "namespace", "create", namespaceName)
 			Expect(err).To(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("name must consist of lower case alphanumeric"))
 		})
@@ -84,7 +84,7 @@ var _ = Describe("Namespaces", LNamespace, func() {
 			env.MakeConfiguration(configurationName)
 
 			appName = catalog.NewAppName()
-			out, err := env.dFlow("", "app", "create", appName)
+			out, err := env.DFlow("", "app", "create", appName)
 			Expect(err).ToNot(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("Ok"))
 		})
@@ -94,7 +94,7 @@ var _ = Describe("Namespaces", LNamespace, func() {
 		})
 
 		It("lists namespaces", func() {
-			out, err := env.dFlow("", "namespace", "list")
+			out, err := env.DFlow("", "namespace", "list")
 			Expect(err).ToNot(HaveOccurred(), out)
 			Expect(out).To(
 				HaveATable(
@@ -105,7 +105,7 @@ var _ = Describe("Namespaces", LNamespace, func() {
 		})
 
 		It("lists namespaces in JSON format", func() {
-			out, err := env.dFlow("", "namespace", "list", "--output", "json")
+			out, err := env.DFlow("", "namespace", "list", "--output", "json")
 			Expect(err).ToNot(HaveOccurred(), out)
 
 			namespaces := models.NamespaceList{}
@@ -117,7 +117,7 @@ var _ = Describe("Namespaces", LNamespace, func() {
 
 	Describe("namespace show", func() {
 		It("rejects showing an unknown namespace", func() {
-			out, err := env.dFlow("", "namespace", "show", "missing-namespace")
+			out, err := env.DFlow("", "namespace", "show", "missing-namespace")
 			Expect(err).To(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("namespace 'missing-namespace' does not exist"))
 		})
@@ -135,19 +135,19 @@ var _ = Describe("Namespaces", LNamespace, func() {
 			})
 
 			It("matches empty prefix", func() {
-				out, err := env.dFlow("", "__complete", "namespace", "show", "")
+				out, err := env.DFlow("", "__complete", "namespace", "show", "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring(namespaceName))
 			})
 
 			It("does not match unknown prefix", func() {
-				out, err := env.dFlow("", "__complete", "namespace", "show", "bogus")
+				out, err := env.DFlow("", "__complete", "namespace", "show", "bogus")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring("bogus"))
 			})
 
 			It("does not match bogus arguments", func() {
-				out, err := env.dFlow("", "__complete", "namespace", "show", namespaceName, "")
+				out, err := env.DFlow("", "__complete", "namespace", "show", namespaceName, "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring(namespaceName))
 			})
@@ -166,7 +166,7 @@ var _ = Describe("Namespaces", LNamespace, func() {
 				env.MakeConfiguration(configurationName)
 
 				appName = catalog.NewAppName()
-				out, err := env.dFlow("", "app", "create", appName)
+				out, err := env.DFlow("", "app", "create", appName)
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring("Ok"))
 			})
@@ -176,7 +176,7 @@ var _ = Describe("Namespaces", LNamespace, func() {
 			})
 
 			It("shows a namespace", func() {
-				out, err := env.dFlow("", "namespace", "show", namespaceName)
+				out, err := env.DFlow("", "namespace", "show", namespaceName)
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(
 					HaveATable(
@@ -190,7 +190,7 @@ var _ = Describe("Namespaces", LNamespace, func() {
 			})
 
 			It("shows a namespace in JSON format", func() {
-				out, err := env.dFlow("", "namespace", "show", namespaceName, "--output", "json")
+				out, err := env.DFlow("", "namespace", "show", namespaceName, "--output", "json")
 				Expect(err).ToNot(HaveOccurred(), out)
 
 				namespace := models.Namespace{}
@@ -210,7 +210,7 @@ var _ = Describe("Namespaces", LNamespace, func() {
 		})
 
 		It("deletes an namespace", func() {
-			out, err := env.dFlow("", "namespace", "delete", "-f", namespaceName)
+			out, err := env.DFlow("", "namespace", "delete", "-f", namespaceName)
 			Expect(err).ToNot(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("Namespaces: %s", namespaceName))
 			Expect(out).To(ContainSubstring("Namespaces deleted."))
@@ -222,19 +222,19 @@ var _ = Describe("Namespaces", LNamespace, func() {
 			})
 
 			It("matches empty prefix", func() {
-				out, err := env.dFlow("", "__complete", "namespace", "delete", "")
+				out, err := env.DFlow("", "__complete", "namespace", "delete", "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring(namespaceName))
 			})
 
 			It("does not match unknown prefix", func() {
-				out, err := env.dFlow("", "__complete", "namespace", "delete", "bogus")
+				out, err := env.DFlow("", "__complete", "namespace", "delete", "bogus")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring("bogus"))
 			})
 
 			It("does not match bogus arguments", func() {
-				out, err := env.dFlow("", "__complete", "namespace", "delete", namespaceName, "")
+				out, err := env.DFlow("", "__complete", "namespace", "delete", namespaceName, "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring(namespaceName))
 			})
@@ -243,7 +243,7 @@ var _ = Describe("Namespaces", LNamespace, func() {
 
 	Describe("namespace target", func() {
 		It("rejects targeting an unknown namespace", func() {
-			out, err := env.dFlow("", "target", "missing-namespace")
+			out, err := env.DFlow("", "target", "missing-namespace")
 			Expect(err).To(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("namespace 'missing-namespace' does not exist"))
 		})
@@ -261,7 +261,7 @@ var _ = Describe("Namespaces", LNamespace, func() {
 			})
 
 			It("shows a namespace", func() {
-				out, err := env.dFlow("", "target", namespaceName)
+				out, err := env.DFlow("", "target", namespaceName)
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring("Name: %s", namespaceName))
 				Expect(out).To(ContainSubstring("Namespace targeted."))
@@ -281,19 +281,19 @@ var _ = Describe("Namespaces", LNamespace, func() {
 			})
 
 			It("matches empty prefix", func() {
-				out, err := env.dFlow("", "__complete", "target", "")
+				out, err := env.DFlow("", "__complete", "target", "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).To(ContainSubstring(namespaceName))
 			})
 
 			It("does not match unknown prefix", func() {
-				out, err := env.dFlow("", "__complete", "target", "bogus")
+				out, err := env.DFlow("", "__complete", "target", "bogus")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring("bogus"))
 			})
 
 			It("does not match bogus arguments", func() {
-				out, err := env.dFlow("", "__complete", "target", namespaceName, "")
+				out, err := env.DFlow("", "__complete", "target", namespaceName, "")
 				Expect(err).ToNot(HaveOccurred(), out)
 				Expect(out).ToNot(ContainSubstring(namespaceName))
 			})

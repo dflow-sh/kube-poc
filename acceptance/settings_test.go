@@ -40,11 +40,11 @@ var _ = Describe("Settings", LMisc, func() {
 
 	Describe("Colors", func() {
 		It("changes the settings when disabling colors", func() {
-			settings, err := env.dFlow("", "settings", "colors", "0", "--settings-file", tmpSettingsPath)
+			settings, err := env.DFlow("", "settings", "colors", "0", "--settings-file", tmpSettingsPath)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(settings).To(ContainSubstring(`Colors: false`))
 
-			settings, err = env.dFlow("", "settings", "show", "--settings-file", tmpSettingsPath)
+			settings, err = env.DFlow("", "settings", "show", "--settings-file", tmpSettingsPath)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(settings).To(
 				HaveATable(
@@ -55,11 +55,11 @@ var _ = Describe("Settings", LMisc, func() {
 		})
 
 		It("changes the settings when enabling colors", func() {
-			settings, err := env.dFlow("", "settings", "colors", "1", "--settings-file", tmpSettingsPath)
+			settings, err := env.DFlow("", "settings", "colors", "1", "--settings-file", tmpSettingsPath)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(settings).To(ContainSubstring(`Colors: true`))
 
-			settings, err = env.dFlow("", "settings", "show", "--settings-file", tmpSettingsPath)
+			settings, err = env.DFlow("", "settings", "show", "--settings-file", tmpSettingsPath)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(settings).To(
 				HaveATable(
@@ -72,7 +72,7 @@ var _ = Describe("Settings", LMisc, func() {
 
 	Describe("Show", func() {
 		It("shows the settings", func() {
-			settings, err := env.dFlow("", "settings", "show")
+			settings, err := env.DFlow("", "settings", "show")
 			Expect(err).ToNot(HaveOccurred())
 			Expect(settings).To(
 				HaveATable(
@@ -91,7 +91,7 @@ var _ = Describe("Settings", LMisc, func() {
 		})
 
 		It("shows empty settings", func() {
-			settings, err := env.dFlow("", "settings", "show", "--settings-file", "/tmp/empty")
+			settings, err := env.DFlow("", "settings", "show", "--settings-file", "/tmp/empty")
 			Expect(err).ToNot(HaveOccurred())
 			Expect(settings).To(
 				HaveATable(
@@ -110,7 +110,7 @@ var _ = Describe("Settings", LMisc, func() {
 		})
 
 		It("shows the settings with the password in plaintext", func() {
-			settings, err := env.dFlow("", "settings", "show", "--show-password", "--show-token")
+			settings, err := env.DFlow("", "settings", "show", "--show-password", "--show-token")
 
 			Expect(err).ToNot(HaveOccurred())
 			Expect(settings).To(
@@ -151,10 +151,10 @@ var _ = Describe("Settings", LMisc, func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(newSettings.Certs).To(BeEmpty())
 
-			out, err := env.dFlow("", "info", "--settings-file", tmpSettingsPath)
+			out, err := env.DFlow("", "info", "--settings-file", tmpSettingsPath)
 			Expect(err).To(HaveOccurred(), out)
 
-			out, err = env.dFlow("", "settings", "update-ca", "--settings-file", tmpSettingsPath)
+			out, err = env.DFlow("", "settings", "update-ca", "--settings-file", tmpSettingsPath)
 			Expect(err).ToNot(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring(`Updating CA in the stored credentials`))
 
@@ -181,7 +181,7 @@ var _ = Describe("Settings", LMisc, func() {
 
 	Describe("Without settings", func() {
 		It("fails accessing the server", func() {
-			out, err := env.dFlow("", "info", "--settings-file", "/tmp/bogus")
+			out, err := env.DFlow("", "info", "--settings-file", "/tmp/bogus")
 			Expect(err).To(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("Client settings not found. Please ensure that the cluster is running, dFlow is installed, and the client is logged in."))
 		})
@@ -196,7 +196,7 @@ var _ = Describe("Settings", LMisc, func() {
 		})
 
 		It("fails accessing the server", func() {
-			out, err := env.dFlow("", "info", "--settings-file", tmpSettingsPath)
+			out, err := env.DFlow("", "info", "--settings-file", tmpSettingsPath)
 			Expect(err).To(HaveOccurred(), out)
 			Expect(out).To(ContainSubstring("No dFlow server found in settings. Please ensure that the cluster is running, dFlow is installed, and the client is logged in."))
 		})

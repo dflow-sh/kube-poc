@@ -4,7 +4,14 @@
 
 GO ?= go
 
-.PHONY: dflow dflow-darwin dflow-linux
+.PHONY: dflow dflow-darwin dflow-linux vet
+
+# go vet and staticcheck. staticcheck is 2026.2.2.
+STATICCHECK_VERSION ?= v0.8.2
+
+vet:
+	$(GO) vet ./...
+	$(GO) run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) ./...
 
 dflow:
 	mkdir -p dist

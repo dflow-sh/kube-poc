@@ -12,19 +12,19 @@
 package v1
 
 import (
-	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/authtoken"
 	"github.com/dflow-sh/kube-poc/packages/dflow/api/v1/response"
 	"github.com/dflow-sh/kube-poc/packages/dflow/cli/server/requestctx"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/authtoken"
 	"github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/models"
 
 	"github.com/gin-gonic/gin"
 
-	. "github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/errors"
+	apierror "github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/errors"
 )
 
 // AuthToken handles the API endpoint /auth-token.  It returns a JWT
 // token for further logins
-func AuthToken(c *gin.Context) APIErrors {
+func AuthToken(c *gin.Context) apierror.APIErrors {
 	requestContext := c.Request.Context()
 	user := requestctx.User(requestContext).Username
 

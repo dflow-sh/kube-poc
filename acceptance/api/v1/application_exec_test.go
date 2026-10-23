@@ -21,7 +21,7 @@ import (
 	"github.com/dflow-sh/kube-poc/acceptance/helpers/proc"
 	v1 "github.com/dflow-sh/kube-poc/packages/dflow/api/v1"
 	"github.com/gorilla/websocket"
-	"k8s.io/apimachinery/pkg/util/httpstream/wsstream"
+	"k8s.io/streaming/pkg/httpstream/wsstream"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"

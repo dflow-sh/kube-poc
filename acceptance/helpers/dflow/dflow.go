@@ -23,7 +23,7 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-type dFlow struct {
+type DFlow struct {
 	DFlowBinaryPath string
 }
 
@@ -41,13 +41,13 @@ func localChartPath() string {
 	return "helm-charts/chart/dflow"
 }
 
-func NewdFlowHelper(dflowBinaryPath string) dFlow {
-	return dFlow{
+func NewdFlowHelper(dflowBinaryPath string) DFlow {
+	return DFlow{
 		DFlowBinaryPath: dflowBinaryPath,
 	}
 }
 
-func (e *dFlow) Run(cmd string, args ...string) (string, error) {
+func (e *DFlow) Run(cmd string, args ...string) (string, error) {
 	out, err := proc.RunW(e.DFlowBinaryPath, append([]string{cmd}, args...)...)
 	if err != nil {
 		return out, err
@@ -55,7 +55,7 @@ func (e *dFlow) Run(cmd string, args ...string) (string, error) {
 	return out, nil
 }
 
-func (e *dFlow) Upgrade() {
+func (e *DFlow) Upgrade() {
 	// Redundant, done by prepare_environment_k3d in flow setup (upgrade.yml)
 	// Build image with latest dflow-server binary
 	By("Upgrading ...")
@@ -139,7 +139,7 @@ func (e *dFlow) Upgrade() {
 	By("... Upgrade complete")
 }
 
-func (e *dFlow) Install(args ...string) (string, error) {
+func (e *DFlow) Install(args ...string) (string, error) {
 
 	// Default is install from local chart
 	chart := localChartPath()
@@ -188,7 +188,7 @@ func (e *dFlow) Install(args ...string) (string, error) {
 	return out, nil
 }
 
-func (e *dFlow) Uninstall() (string, error) {
+func (e *DFlow) Uninstall() (string, error) {
 	out, err := proc.RunW("helm", "uninstall", "-n", "dflow", "dflow")
 	if err != nil {
 		return out, err
