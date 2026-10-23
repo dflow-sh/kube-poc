@@ -6,11 +6,13 @@
 | --- | --- |
 | v0.1.x | Yes |
 
-v0.1.0 is the next release. Fixes are issued for the v0.1.x line. Older tags are not supported.
+v0.1.0 is the first supported release. Fixes are issued for the v0.1.x line. Older tags are not supported.
 
 ## Reporting a vulnerability
 
 Report a vulnerability privately through a [GitHub security advisory](https://github.com/dflow-sh/kube-poc/security/advisories/new).
+
+Private vulnerability reporting may be off. If the advisory form is unavailable, contact the repository owner [@akhil-naidu](https://github.com/akhil-naidu) on GitHub.
 
 Do not open a public issue for a vulnerability.
 
