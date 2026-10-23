@@ -111,8 +111,8 @@ changelog:
   filters:
     exclude:
       - '^Merge '
-      - '^ci: retrigger'
-      - '^ci: rerun'
+      - '^ci: retrigger checks$'
+      - '^ci: rerun the image mirror$'
 
 release:
   extra_files:
