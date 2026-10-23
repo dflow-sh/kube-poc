@@ -163,13 +163,16 @@ server:
     #   effect: "NoSchedule"
 
   # Platform container budget for dflow-server. Limits are ceilings.
+  # service create loads a Helm repository index in this process. The Bitnami
+  # index is about 27MB of YAML and parsing it peaked near 702MB RSS. A 512Mi
+  # limit OOM-kills the server (exit 137) with no panic log.
   resources:
     requests:
       cpu: 50m
       memory: 128Mi
     limits:
       cpu: 500m
-      memory: 512Mi
+      memory: 1Gi
   # Must stay 1. A second pod cannot mount image-export-pvc (ReadWriteOnce),
   # websocket JWTs are signed with a key generated in each process, and the
   # Helm client lock is per process. The chart rejects a higher count.

@@ -19,6 +19,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,6 +40,7 @@ import (
 	"github.com/dflow-sh/kube-poc/packages/dflow/urlcache"
 	hc "github.com/mittwald/go-helm-client"
 	"github.com/spf13/viper"
+	"go.uber.org/zap"
 	"gopkg.in/yaml.v2"
 	"helm.sh/helm/v3/pkg/action"
 	"helm.sh/helm/v3/pkg/chart/loader"
@@ -134,9 +136,39 @@ func RemoveService(
 	return errors.Wrap(err, "deleting release")
 }
 
+// serviceSetupFields is the log context for a service deploy. It deliberately
+// omits Cluster (REST config WrapTransport is not JSON) and PostDeployHook.
+func serviceSetupFields(parameters ServiceParameters) []any {
+	return []any{
+		"namespace", parameters.Namespace,
+		"service", parameters.Name,
+		"chart", parameters.CatalogService.HelmChart,
+		"version", parameters.CatalogService.ChartVersion,
+		"repo", parameters.CatalogService.HelmRepo.URL,
+		"wait", parameters.Wait,
+	}
+}
+
+// recoverServiceGoroutine stops a panic in the async service deploy from
+// killing the process. The HTTP handler has already returned, so gin's
+// recovery middleware does not cover this goroutine.
+func recoverServiceGoroutine(logger *zap.SugaredLogger) {
+	recovered := recover()
+	if recovered == nil {
+		return
+	}
+	logger.Errorw("service deployment panicked",
+		"panic", fmt.Sprint(recovered),
+		"stack", string(debug.Stack()),
+	)
+}
+
 func DeployService(ctx context.Context, parameters ServiceParameters) error {
 	logger := helpers.Logger.With("component", "helm-service")
-	logger.Infow("service helm setup", "parameters", parameters)
+	// Log field values only. ServiceParameters contains the cluster REST
+	// config, whose WrapTransport is a function, and the post-deploy hook.
+	// encoding/json rejects both, which is the parametersError on this line.
+	logger.Infow("service helm setup", serviceSetupFields(parameters)...)
 
 	client, err := GetHelmClient(
 		parameters.Cluster.RestConfig,
@@ -181,7 +213,8 @@ func DeployService(ctx context.Context, parameters ServiceParameters) error {
 		// is linked to the request. We will get a `context canceled` error. To avoid this a
 		// background context is used instead.
 		go func() { //nolint:gosec // Intentional background context
-			err = installOrUpgradeChartWithRetry(context.Background(), client, &chartSpec)
+			defer recoverServiceGoroutine(logger)
+			err := installOrUpgradeChartWithRetry(context.Background(), client, &chartSpec)
 			if err != nil {
 				logger.Errorw("installing or upgrading service ASYNC", "error", err)
 				return
@@ -352,7 +385,11 @@ type ChartParam struct {
 
 func Deploy(parameters ChartParameters) error {
 	logger := helpers.Logger.With("component", "helm-deploy")
-	logger.Infow("deploy app", "parameters", parameters)
+	logger.Infow("deploy app",
+		"namespace", parameters.Namespace,
+		"app", parameters.Name,
+		"chart", parameters.Chart,
+	)
 
 	// Find the app chart to use for the deployment.
 	appChartClient, clientError := parameters.Cluster.ClientAppChart()
