@@ -438,12 +438,12 @@ No Paketo builder image is installed. Buildpack mode needs a builder image passe
 
 Platform images are digest-pinned to their upstream registries. Development catalog entries still name Bitnami chart repositories. `install.sh` does not pull those.
 
-Install cert-manager from the chart bundled in this repo, then dFlow. The dFlow manifests include `Certificate` resources, so the cert-manager CRDs have to exist before that install.
+Install cert-manager from the chart bundled in this repo, then dFlow. The dFlow manifests include `Certificate` resources, so the cert-manager CRDs have to exist before that install. The cert-manager version is the dependency in `packages/helm-chart/Chart.yaml`. The checkout vendors one `charts/cert-manager-*.tgz`, and the commands below use that glob.
 
 ```bash
 export DOMAIN=203.0.113.10.sslip.io   # or apps.example.com
 
-helm upgrade --install cert-manager packages/helm-chart/charts/cert-manager-v1.19.6.tgz \
+helm upgrade --install cert-manager packages/helm-chart/charts/cert-manager-*.tgz \
   --namespace cert-manager --create-namespace \
   --values packages/helm-chart/cert-manager-images.yaml \
   --set crds.enabled=true
@@ -514,7 +514,7 @@ kubectl get nodes
 Then follow sections 2 through 5. Load the server image into every node that might run `dflow-server`, or push it to a registry the cluster can pull. Set `ingress.ingressClassName` if the cluster does not use the default ingress class.
 
 ```bash
-helm upgrade --install cert-manager packages/helm-chart/charts/cert-manager-v1.19.6.tgz \
+helm upgrade --install cert-manager packages/helm-chart/charts/cert-manager-*.tgz \
   --namespace cert-manager --create-namespace \
   --values packages/helm-chart/cert-manager-images.yaml \
   --set crds.enabled=true

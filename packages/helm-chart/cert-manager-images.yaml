@@ -1,22 +1,23 @@
 # Digest pins for the bundled cert-manager chart.
+# The chart version is the cert-manager dependency in Chart.yaml.
 # install.sh and the image inventory render pass this file.
-# The chart prints repository@digest when digest is set.
+# The chart prints repository:tag@digest when both tag and digest are set.
 image:
   repository: quay.io/jetstack/cert-manager-controller
-  digest: sha256:c6a328f6095a02731e943c95d5e61bdc3b87373cc9fbd915f73d8615cda766f9
+  digest: sha256:70f532fd9cfde0b09d55687200942399d89838bc2d5d5b45152eb799a15912b8
 webhook:
   image:
     repository: quay.io/jetstack/cert-manager-webhook
-    digest: sha256:c4b7103d6c1edb196ee448660835b9a5d0fb3f9064019d881fd56e94859df288
+    digest: sha256:a60e2dac46dbb8a7f3df95c54ce941012f54c2fe022f0ee55aaa1ab40ed957ae
 cainjector:
   image:
     repository: quay.io/jetstack/cert-manager-cainjector
-    digest: sha256:f7ce571e372f28229cab2e07c803e2dc0b37c5642818a097ab42a19af182a329
+    digest: sha256:c85268c64f2e0e76684bf5fe8906caff34b82523561c6affe0fae3546bd87562
 acmesolver:
   image:
     repository: quay.io/jetstack/cert-manager-acmesolver
-    digest: sha256:a43400e59456cd55b0b327cc38bb3ff0a55d5e6011f0301ec9c82c800285da0c
+    digest: sha256:699b40d622211ab7accad8a21b04c5fbaa1841ef7a12621e8de492dbe27b2503
 startupapicheck:
   image:
     repository: quay.io/jetstack/cert-manager-startupapicheck
-    digest: sha256:20bc1106514032737873e8d46afacfbcc61d6ffe0e29f47b9d914b28e18ad521
+    digest: sha256:46e75b6866359ffb5d82624f41e3ed1c70b2994982702ced547ce5edb418a8f5
