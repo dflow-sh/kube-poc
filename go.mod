@@ -37,7 +37,7 @@ require (
 	github.com/mholt/archives v0.1.5
 	github.com/mittwald/go-helm-client v0.12.18
 	github.com/novln/docker-parser v1.0.0
-	github.com/olekukonko/tablewriter v0.0.5
+	github.com/olekukonko/tablewriter v1.1.5
 	github.com/onsi/ginkgo/v2 v2.28.3
 	github.com/onsi/gomega v1.42.1
 	github.com/paketo-buildpacks/ca-certificates/v3 v3.12.5
@@ -111,6 +111,8 @@ require (
 	github.com/cenkalti/backoff/v5 v5.0.2 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/chai2010/gettext-go v1.0.2 // indirect
+	github.com/clipperhouse/displaywidth v0.10.0 // indirect
+	github.com/clipperhouse/uax29/v2 v2.6.0 // indirect
 	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect
 	github.com/containerd/containerd v1.7.33 // indirect
@@ -178,7 +180,7 @@ require (
 	github.com/liggitt/tabwriter v0.0.0-20181228230101-89fcab3d43de // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/mattn/go-colorable v0.1.15 // indirect
-	github.com/mattn/go-runewidth v0.0.16 // indirect
+	github.com/mattn/go-runewidth v0.0.19 // indirect
 	github.com/mikelolasagasti/xz v1.0.1 // indirect
 	github.com/minio/minlz v1.0.1 // indirect
 	github.com/mitchellh/colorstring v0.0.0-20190213212951-d06e56a500db // indirect
@@ -194,6 +196,9 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/mxk/go-flowrate v0.0.0-20140419014527-cca7078d478f // indirect
 	github.com/nwaples/rardecode/v2 v2.2.0 // indirect
+	github.com/olekukonko/cat v0.0.0-20250911104152-50322a0618f6 // indirect
+	github.com/olekukonko/errors v1.2.0 // indirect
+	github.com/olekukonko/ll v0.1.6 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
 	github.com/paketo-buildpacks/libpak v1.73.0 // indirect
