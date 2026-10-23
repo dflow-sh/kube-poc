@@ -373,9 +373,6 @@ func handleError(logger logr.Logger, response *http.Response) error {
 
 	bodyBytes, err := io.ReadAll(response.Body)
 
-	// Always log the body for debugging
-	logger = logger.WithValues("body", string(bodyBytes))
-
 	if err != nil {
 		logger.Error(err, "failed to read response body")
 		return errors.Wrap(err, "reading response body")
@@ -389,10 +386,7 @@ func handleError(logger logr.Logger, response *http.Response) error {
 	if len(bodyBytes) > 0 {
 		err = json.Unmarshal(bodyBytes, dflowError.Err)
 		if err != nil {
-			// A proxy 502 is plain text or HTML, not an API error document.
-			// Printing the body and the JSON error dumps a stack into the CLI.
-			logger.V(1).Info("non-JSON error response", "status", response.StatusCode)
-			return errors.Errorf("server unavailable (HTTP %d)", response.StatusCode)
+			return plainBodyError(logger, response.StatusCode, bodyBytes)
 		}
 
 		bodyStr := strings.TrimSpace(string(bodyBytes))
@@ -408,13 +402,25 @@ func handleError(logger logr.Logger, response *http.Response) error {
 		fmt.Fprintf(os.Stderr, "=== END RAW ERROR RESPONSE ===\n\n")
 		_ = os.Stderr.Sync() // Force flush to ensure output appears
 	} else {
-		logger.V(1).Info("empty error response", "status", response.StatusCode)
-		return errors.Errorf("server unavailable (HTTP %d)", response.StatusCode)
+		return plainBodyError(logger, response.StatusCode, nil)
 	}
 
 	logger.V(1).Info("response is not StatusOK: " + dflowError.Error())
 
 	return dflowError
+}
+
+// plainBodyError reports a non-JSON or empty error body.
+// 502, 503, and 504 are gateway failures. Any other status is unexpected.
+// The raw body is logged only at V(1), which is the CLI verbose level.
+func plainBodyError(logger logr.Logger, status int, body []byte) error {
+	logger.V(1).Info("non-JSON error response", "status", status, "body", string(body))
+	switch status {
+	case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return errors.Errorf("server unavailable (HTTP %d)", status)
+	default:
+		return errors.Errorf("unexpected response from server (HTTP %d)", status)
+	}
 }
 
 func requestLogger(log logr.Logger, request *http.Request) logr.Logger {

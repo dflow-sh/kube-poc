@@ -182,4 +182,57 @@ func DescribeServicesErrors() {
 			Expect(bytes.Contains(captured, []byte("Bad Gateway"))).To(BeFalse())
 		})
 	})
+
+	When("the server returns HTML for a client error", func() {
+		BeforeEach(func() {
+			statusCode = http.StatusNotFound
+			responseBody = "<html><body>not found</body></html>"
+		})
+
+		It("reports an unexpected response and hides the body", func() {
+			old := os.Stderr
+			r, w, err := os.Pipe()
+			Expect(err).NotTo(HaveOccurred())
+			os.Stderr = w
+
+			_, callErr := dflowClient.ServiceCreate(models.ServiceCreateRequest{}, "namespace")
+
+			Expect(w.Close()).To(Succeed())
+			os.Stderr = old
+			captured, err := io.ReadAll(r)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(callErr).To(HaveOccurred())
+			Expect(callErr.Error()).To(Equal("unexpected response from server (HTTP 404)"))
+			Expect(string(captured)).NotTo(ContainSubstring("JSON PARSE ERROR"))
+			Expect(string(captured)).NotTo(ContainSubstring("<html>"))
+			Expect(string(captured)).NotTo(ContainSubstring("not found"))
+		})
+	})
+
+	When("the server returns 503", func() {
+		BeforeEach(func() {
+			statusCode = http.StatusServiceUnavailable
+			responseBody = "Service Unavailable"
+		})
+
+		It("reports the server as unavailable", func() {
+			_, callErr := dflowClient.ServiceCreate(models.ServiceCreateRequest{}, "namespace")
+			Expect(callErr).To(HaveOccurred())
+			Expect(callErr.Error()).To(Equal("server unavailable (HTTP 503)"))
+		})
+	})
+
+	When("the server returns 504", func() {
+		BeforeEach(func() {
+			statusCode = http.StatusGatewayTimeout
+			responseBody = "Gateway Timeout"
+		})
+
+		It("reports the server as unavailable", func() {
+			_, callErr := dflowClient.ServiceCreate(models.ServiceCreateRequest{}, "namespace")
+			Expect(callErr).To(HaveOccurred())
+			Expect(callErr.Error()).To(Equal("server unavailable (HTTP 504)"))
+		})
+	})
 }
