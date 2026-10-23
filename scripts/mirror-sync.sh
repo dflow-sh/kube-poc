@@ -83,8 +83,9 @@ fi
 # Isolate registry config so a push token is not sent on the anonymous pull.
 export XDG_CONFIG_HOME="$(mktemp -d)"
 export DOCKER_CONFIG="$(mktemp -d)"
+set +e
 python3 - "$config" <<'PY'
-import os, pathlib, re, subprocess, sys, tempfile
+import os, pathlib, re, subprocess, sys, tempfile, time
 
 def expand_source(source):
     match = re.fullmatch(r"\{\{\s*env\s+\"([A-Z0-9_]+)\"\s*\}\}", source)
@@ -121,11 +122,21 @@ for source, target in ghcr_pairs:
         check=True,
     )
 
+regsync_failed = False
 if body:
     regsync_path = pathlib.Path(tempfile.mkdtemp()) / "regsync.yaml"
     regsync_path.write_text(header + "".join(body))
-    print(f"regsync once -c {regsync_path}", flush=True)
-    subprocess.run(["regsync", "once", "-c", str(regsync_path)], check=True)
+    # A manifest put can be denied while blobs are still landing. Retry the
+    # whole sync; images already present are left alone.
+    for attempt in range(1, 4):
+        print(f"regsync once -c {regsync_path} attempt {attempt}", flush=True)
+        result = subprocess.run(["regsync", "once", "-c", str(regsync_path)])
+        if result.returncode == 0:
+            regsync_failed = False
+            break
+        regsync_failed = True
+        print(f"regsync exited {result.returncode}", file=sys.stderr, flush=True)
+        time.sleep(10)
 
 token = os.environ["REGISTRY_TOKEN"]
 user = os.environ["REGISTRY_USER"]
@@ -143,7 +154,11 @@ for _source, target in ghcr_pairs:
         ["regctl", "image", "copy", f"ocidir://{layout}:{name}", target],
         check=True,
     )
+if regsync_failed:
+    sys.exit(1)
 PY
+copy_status=$?
+set -e
 
 python3 - <<'PY'
 import json, os, pathlib, re, urllib.error, urllib.request
@@ -193,5 +208,7 @@ PY
 
 if [[ "$missing" -eq 1 ]]; then
   echo "mirror-sync: copied the images whose sources are in git. The three old-upstream images were not copied." >&2
-  exit 2
+fi
+if [[ "${copy_status:-0}" -ne 0 ]]; then
+  exit "$copy_status"
 fi

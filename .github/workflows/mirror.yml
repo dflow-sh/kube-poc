@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Copy images into ghcr.io/dflow-sh/mirror
         env:
-          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_USER: ${{ github.repository_owner }}
           REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MIRROR_DEX_SOURCE: ${{ vars.MIRROR_DEX_SOURCE }}
           MIRROR_UNPACKER_SOURCE: ${{ vars.MIRROR_UNPACKER_SOURCE }}
