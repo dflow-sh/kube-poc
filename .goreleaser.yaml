@@ -80,6 +80,7 @@ docker_signs:
 changelog:
   use: git
   sort: asc
+  abbrev: 7
   groups:
     - title: Features
       regexp: '^feat(\(.+\))?!?:'
@@ -110,6 +111,8 @@ changelog:
   filters:
     exclude:
       - '^Merge '
+      - '^ci: retrigger'
+      - '^ci: rerun'
 
 release:
   extra_files:
@@ -117,8 +120,6 @@ release:
     - glob: scripts/cli/install.sh
       name_template: install.sh
   footer: |
-    ## Known limits
-
     [Known limits](https://github.com/dflow-sh/kube-poc/blob/{{ .Tag }}/docs/INSTALL.md#known-limits)
 
 dockers_v2:

@@ -28,7 +28,7 @@ spec:
       containers:
       - name: dflow-ui
         {{- $dflowUiImage := index .Values.image "dflow-ui" | default dict }}
-        {{- if not $dflowUiImage.repository }}
+        {{- if or (not $dflowUiImage.repository) (not $dflowUiImage.tag) }}
         {{- fail "dflowUI.enabled requires image.dflow-ui.repository and image.dflow-ui.tag" }}
         {{- end }}
         image: "{{ default $dflowUiImage.registry (include "registry-url" .) }}{{ $dflowUiImage.repository }}:{{ $dflowUiImage.tag }}"
