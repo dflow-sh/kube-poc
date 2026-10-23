@@ -1649,10 +1649,14 @@ On this server, repeat the check with docs/TESTING.md:
   export APPS_BASE=${APPS_BASE}
   ${login_server}
 
-On a Mac, from a checkout of this repository:
+On a Mac or Linux machine, with no clone:
+
+  curl -fsSL https://github.com/dflow-sh/kube-poc/releases/latest/download/install.sh | sh
+  ${login_mac}
+
+From a checkout of this repository, this also installs the CLI and runs the sample push:
 
   ./scripts/install-cli.sh --api ${api}
-  ${login_mac}
 
 Or download the public release asset dflow-darwin-arm64 or dflow-darwin-amd64 and check checksums.txt. A browser download may need: xattr -d com.apple.quarantine /usr/local/bin/dflow
 

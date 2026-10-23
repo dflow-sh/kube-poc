@@ -35,6 +35,8 @@ changelog:
 release:
   extra_files:
     - glob: chart-package/dflow-*.tgz
+    - glob: scripts/cli/install.sh
+      name_template: install.sh
 
 dockers_v2:
   - dockerfile: images/Dockerfile.release

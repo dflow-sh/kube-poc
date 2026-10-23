@@ -8,6 +8,31 @@ The server and CLI implement the dFlow API and command set.
 See `NOTICE` and `LICENSE` (Apache-2.0). Copyright and license notices
 live in `NOTICE`, `LICENSE`, and source file headers.
 
+## Install the CLI
+
+```bash
+curl -fsSL https://github.com/dflow-sh/kube-poc/releases/latest/download/install.sh | sh
+```
+
+The script is `scripts/cli/install.sh`. Every GitHub release publishes it as `install.sh`. It does not need a clone or a token. It selects `linux` or `darwin` and `amd64` or `arm64`, downloads `dflow-<os>-<arch>`, and checks the SHA256 in `checksums.txt`. A missing asset or a checksum mismatch exits non-zero.
+
+The default version is `latest`. The default directory is `/usr/local/bin` when that directory is writable or passwordless sudo works (`sudo -n`). Otherwise it installs to `~/.local/bin` and prints a PATH hint. The script does not prompt for a sudo password. Running it again replaces the same binary.
+
+```bash
+curl -fsSL https://github.com/dflow-sh/kube-poc/releases/latest/download/install.sh | sh -s -- --version v0.0.4
+curl -fsSL https://github.com/dflow-sh/kube-poc/releases/latest/download/install.sh | sh -s -- --install-dir "$HOME/.local/bin"
+```
+
+`--version` selects a release tag, or `latest`. `--install-dir` selects the directory. `DFLOW_VERSION` and `DFLOW_INSTALL_DIR` are the same choices when the flags are omitted.
+
+When it finishes it runs `dflow version` and prints the next step, `dflow login`. `dflow login` takes the API URL. `-u` / `--user` and `-p` / `--password` set the user and password. `--trust-ca` trusts an unknown certificate.
+
+`dflow upgrade --cli-only` later replaces this binary from a public release. `dflow upgrade` also accepts `--version`, `--server-only`, and `--dry-run`. Those flags are in this tree. The published `v0.0.4` binary does not include `dflow upgrade`.
+
+`install.sh` is not an asset on the `v0.0.4` release. `releases/latest/download/install.sh` works once a release that contains this script is published.
+
+On macOS, a browser-downloaded binary may need `xattr -d com.apple.quarantine /usr/local/bin/dflow`. The installer removes that attribute when `xattr` is present.
+
 ## Layout
 
 - `apps/cli` builds the `dflow` binary
@@ -37,18 +62,17 @@ Unreleased builds report `v0.0.0-dev` (`packages/dflow/version/version.go`). A r
 
 Install on a server: [docs/INSTALL.md](docs/INSTALL.md). Check it with [docs/TESTING.md](docs/TESTING.md).
 
-The CLI, `checksums.txt`, and the Helm chart are public GitHub Release assets. No token is required:
+The CLI, `install.sh`, `checksums.txt`, and the Helm chart are public GitHub Release assets. No token is required:
 
 ```text
+https://github.com/dflow-sh/kube-poc/releases/latest/download/install.sh
 https://github.com/dflow-sh/kube-poc/releases/download/<tag>/dflow-<os>-<arch>
 https://github.com/dflow-sh/kube-poc/releases/download/<tag>/checksums.txt
 ```
 
-Published names are `dflow-linux-amd64`, `dflow-linux-arm64`, `dflow-darwin-amd64`, `dflow-darwin-arm64`, and `checksums.txt`. Tag `v0.0.4` also publishes `dflow-0.0.4.tgz`.
+Published names are `install.sh`, `dflow-linux-amd64`, `dflow-linux-arm64`, `dflow-darwin-amd64`, `dflow-darwin-arm64`, and `checksums.txt`. Tag `v0.0.4` publishes `dflow-0.0.4.tgz` and the four CLI binaries. It does not publish `install.sh`.
 
-From a checkout, `./scripts/install-cli.sh` installs `dflow` to `/usr/local/bin`. `sudo dflow upgrade` replaces that binary and then helm-upgrades the server to the same tag. `sudo ./scripts/update.sh` does the same and then runs the install self-test. `make dflow` writes `dist/dflow`.
-
-A one-line `curl | bash` install is not available yet: `scripts/install-cli.sh` sources `scripts/install.sh`, so that file alone is not an installer. On macOS, a browser-downloaded binary may need `xattr -d com.apple.quarantine /usr/local/bin/dflow`.
+Install the CLI with the command in [Install the CLI](#install-the-cli). From a checkout, `./scripts/install-cli.sh` installs `dflow` to `/usr/local/bin` and can log in and run the sample push. `sudo dflow upgrade` replaces that binary and then helm-upgrades the server to the same tag. `sudo dflow upgrade --cli-only` replaces only the CLI. `sudo ./scripts/update.sh` upgrades and then runs the install self-test. `make dflow` writes `dist/dflow`.
 
 The installer starts embedded etcd and prints the worker join command and the `--control-plane` command for a second and third server. `scripts/join-node.sh` joins another Ubuntu machine as a worker, or as a server when `--control-plane` is set.
 
