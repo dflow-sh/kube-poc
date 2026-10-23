@@ -450,6 +450,10 @@ seaweedfs:
   tls:
     enabled: false
     certSecret: seaweedfs-tls
+  # Ingress NetworkPolicies for master, volume, filer, and S3.
+  # k3s applies them with its default network policy controller.
+  networkPolicy:
+    enabled: true
 dflowUI:
   enabled: false
   # UI theme, either 'light' or 'dark'
