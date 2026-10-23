@@ -234,7 +234,7 @@ func CatalogServiceAlreadyKnown(catalogService string) APIError {
 // NewQuotaExceededError constructs an API error for storage quota issues
 func NewQuotaExceededError(msg string, details ...string) APIError {
 	if msg == "" {
-		msg = "Storage quota exceeded in s3gw. Please delete unused applications or ask your admin to increase s3gw storage size."
+		msg = "Storage quota exceeded. Please delete unused applications or ask your admin to increase the storage size."
 	}
 	joinedDetails := strings.Join(details, ", ")
 	if joinedDetails != "" {
