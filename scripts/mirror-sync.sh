@@ -25,19 +25,16 @@ if ! command -v regsync >/dev/null 2>&1; then
   export PATH="${dest}:${PATH}"
 fi
 
-CRANE_VERSION="v0.20.3"
-CRANE_SHA256="36c67a932f489b3f2724b64af90b599a8ef2aa7b004872597373c0ad694dc059"
-if ! command -v crane >/dev/null 2>&1; then
-  dest="${TMPDIR:-/tmp}/crane-${CRANE_VERSION}"
+REGCTL_VERSION="v0.11.7"
+REGCTL_SHA256="3737fbbdd791e04e7a831640b681f3397a376498e80e2ad9b1b2d27296f239bc"
+if ! command -v regctl >/dev/null 2>&1; then
+  dest="${TMPDIR:-/tmp}/regctl-${REGCTL_VERSION}"
   mkdir -p "$dest"
-  if [[ ! -x "${dest}/crane" ]]; then
-    tgz="$(mktemp)"
-    curl -fsSL -o "$tgz" \
-      "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz"
-    echo "${CRANE_SHA256}  ${tgz}" | sha256sum -c
-    tar -xzf "$tgz" -C "$dest" crane
-    rm -f "$tgz"
-    chmod 0755 "${dest}/crane"
+  if [[ ! -x "${dest}/regctl" ]]; then
+    curl -fsSL -o "${dest}/regctl" \
+      "https://github.com/regclient/regclient/releases/download/${REGCTL_VERSION}/regctl-linux-amd64"
+    echo "${REGCTL_SHA256}  ${dest}/regctl" | sha256sum -c
+    chmod 0755 "${dest}/regctl"
   fi
   export PATH="${dest}:${PATH}"
 fi
@@ -83,6 +80,9 @@ fi
 # A token that can push to ghcr.io/dflow-sh is rejected by other public
 # ghcr.io repositories. Those sources are pulled anonymously into an OCI
 # layout, then pushed with the token. regsync copies the rest.
+# Isolate registry config so a push token is not sent on the anonymous pull.
+export XDG_CONFIG_HOME="$(mktemp -d)"
+export DOCKER_CONFIG="$(mktemp -d)"
 python3 - "$config" <<'PY'
 import os, pathlib, re, subprocess, sys, tempfile
 
@@ -110,13 +110,16 @@ for block in blocks[1:]:
         body.append(block)
 
 # Pull foreign ghcr.io images before any login. A push token is rejected
-# by other public ghcr.io repositories.
-subprocess.run(["crane", "auth", "logout", "ghcr.io"], check=False)
+# by other public ghcr.io repositories. The layout keeps the manifest
+# digest, including multi-arch indexes.
 layout = pathlib.Path(tempfile.mkdtemp())
 for source, target in ghcr_pairs:
     name = target.rsplit("/", 1)[-1].split(":", 1)[0]
     print(f"pull {target}", flush=True)
-    subprocess.run(["crane", "copy", source, f"oci:{layout}:{name}"], check=True)
+    subprocess.run(
+        ["regctl", "image", "copy", source, f"ocidir://{layout}:{name}"],
+        check=True,
+    )
 
 if body:
     regsync_path = pathlib.Path(tempfile.mkdtemp()) / "regsync.yaml"
@@ -127,7 +130,7 @@ if body:
 token = os.environ["REGISTRY_TOKEN"]
 user = os.environ["REGISTRY_USER"]
 login = subprocess.run(
-    ["crane", "auth", "login", "ghcr.io", "-u", user, "--password-stdin"],
+    ["regctl", "registry", "login", "ghcr.io", "-u", user, "--pass-stdin"],
     input=token.encode(),
     check=False,
 )
@@ -136,7 +139,10 @@ if login.returncode != 0:
 for _source, target in ghcr_pairs:
     name = target.rsplit("/", 1)[-1].split(":", 1)[0]
     print(f"push {target}", flush=True)
-    subprocess.run(["crane", "copy", f"oci:{layout}:{name}", target], check=True)
+    subprocess.run(
+        ["regctl", "image", "copy", f"ocidir://{layout}:{name}", target],
+        check=True,
+    )
 PY
 
 python3 - <<'PY'
