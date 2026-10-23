@@ -24,11 +24,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/dflow-sh/kube-poc/packages/dflow/helpers"
 	api "github.com/dflow-sh/kube-poc/packages/dflow/api/v1"
 	"github.com/dflow-sh/kube-poc/packages/dflow/cli/termui"
-	"github.com/dflow-sh/kube-poc/packages/dflow/version"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers"
 	apierrors "github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/errors"
+	"github.com/dflow-sh/kube-poc/packages/dflow/version"
 	"golang.org/x/oauth2"
 
 	"github.com/go-logr/logr"
@@ -393,8 +393,8 @@ func handleError(logger logr.Logger, response *http.Response) error {
 		// This is a CLI tool, not a web server, so this output is not rendered
 		// in a browser and cannot trigger XSS in a victim.
 		fmt.Fprintf(os.Stderr, "\n=== RAW ERROR RESPONSE ===\n")
-		fmt.Fprintf(os.Stderr, "URL: %s\n", response.Request.URL.String())       // nolint:gosec // debug to stderr, not HTML
-		fmt.Fprintf(os.Stderr, "Status: %d %s\n", response.StatusCode, response.Status) // nolint:gosec // debug to stderr, not HTML
+		fmt.Fprintf(os.Stderr, "URL: %s\n", response.Request.URL.String())                // nolint:gosec // debug to stderr, not HTML
+		fmt.Fprintf(os.Stderr, "Status: %d %s\n", response.StatusCode, response.Status)   // nolint:gosec // debug to stderr, not HTML
 		fmt.Fprintf(os.Stderr, "Content-Type: %s\n", response.Header.Get("Content-Type")) // nolint:gosec // debug to stderr, not HTML
 		fmt.Fprintf(os.Stderr, "Body:\n%s\n", bodyStr)
 		fmt.Fprintf(os.Stderr, "=== END RAW ERROR RESPONSE ===\n\n")
@@ -508,5 +508,5 @@ func (c *Client) warnAboutVersionMismatch(serverVersion string) {
 	ui := termui.NewUI()
 	ui.Exclamation().Msg(
 		fmt.Sprintf("dFlow server version (%s) doesn't match the client version (%s)", serverVersion, version.Version))
-	ui.Exclamation().Msg("Update the client manually or run `dflow client-sync`")
+	ui.Exclamation().Msg("Update the client manually or run `dflow upgrade` or `dflow client-sync`")
 }

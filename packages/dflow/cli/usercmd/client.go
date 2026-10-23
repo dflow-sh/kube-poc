@@ -19,13 +19,13 @@ import (
 	"net/http"
 	"runtime"
 
-	"github.com/dflow-sh/kube-poc/packages/dflow/helpers"
-	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes/tailer"
 	"github.com/dflow-sh/kube-poc/packages/dflow/cli/settings"
 	"github.com/dflow-sh/kube-poc/packages/dflow/cli/termui"
-	"github.com/dflow-sh/kube-poc/packages/dflow/selfupdater"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes/tailer"
 	"github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/client"
 	"github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/models"
+	"github.com/dflow-sh/kube-poc/packages/dflow/selfupdater"
 	"github.com/pkg/errors"
 	kubectlterm "k8s.io/kubectl/pkg/util/term"
 
@@ -40,6 +40,7 @@ type DFlowClient struct {
 	ui       *termui.UI
 	API      APIClient
 	Updater  selfupdater.Updater
+	Server   ServerUpgrader
 }
 
 //counterfeiter:generate -header ../../../LICENSE_HEADER . APIClient
@@ -171,6 +172,7 @@ func New() (*DFlowClient, error) {
 		ui:      termui.NewUI(),
 		Log:     logr.Discard(),
 		Updater: updater,
+		Server:  HostServerUpgrader{},
 	}, nil
 }
 

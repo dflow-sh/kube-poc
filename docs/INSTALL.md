@@ -2,34 +2,19 @@
 
 dFlow runs on Kubernetes. The chart does not install a UI. `dflowUI.enabled` is false.
 
-The repository is private. Clone it with a GitHub token or a deploy key, then run the installer from that checkout. Do not use a public raw URL; that URL returns 404 while the repository is private.
+The repository is public. Clone it, then run the installer from that checkout.
 
 ## One-shot install on Ubuntu
 
 The server is Ubuntu 22.04 or 24.04, with at least 8 GB RAM, a public IPv4 address, and root SSH.
 
-HTTPS with a personal access token that can read this repository:
-
 ```bash
-git clone "https://x-access-token:${GITHUB_TOKEN}@github.com/dflow-sh/kube-poc.git"
+git clone https://github.com/dflow-sh/kube-poc.git
 cd kube-poc
-sudo --preserve-env=GITHUB_TOKEN ./scripts/install.sh --domain auto
+sudo ./scripts/install.sh --domain auto
 ```
 
-`GITHUB_TOKEN` needs permission to read this private repository (`repo` on a classic token, or contents read on a fine-grained token). `sudo` drops the variable unless `--preserve-env=GITHUB_TOKEN` is set. `GH_TOKEN` is accepted as well. If neither is set, a `gh auth login` session for the user who invoked sudo is used. With no token and no `gh` login, the private release metadata cannot be read and the script exits. Pass `--from-checkout` to build the CLI and server image from this checkout.
-
-`ghcr.io/dflow-sh/dflow-server` is pulled without a registry login. A pull that fails is an error: the script prints the registry output and exits. It does not reuse a checkout image and it does not build one. `--from-checkout` is the only checkout build. `GHCR_TOKEN` (and `GHCR_USER`) is used only after an anonymous pull is denied, for a registry that still requires a login.
-
-Deploy key (read access is enough):
-
-```bash
-GIT_SSH_COMMAND='ssh -i ~/.ssh/dflow_deploy_key -o IdentitiesOnly=yes' \
-  git clone git@github.com:dflow-sh/kube-poc.git
-cd kube-poc
-sudo --preserve-env=GITHUB_TOKEN ./scripts/install.sh --domain auto
-```
-
-A deploy key can clone. It cannot download GitHub Release assets. Export `GITHUB_TOKEN` as well when a release should be used.
+Release assets (the CLI, `checksums.txt`, and the Helm chart package) are downloaded from this repository's GitHub Releases. The download does not send a token. `ghcr.io/dflow-sh/dflow-server` is pulled without a registry login. A pull that fails is an error: the script prints the registry output and exits. It does not reuse a checkout image and it does not build one. `--from-checkout` is the only checkout build.
 
 ### Domains and certificates
 
@@ -77,7 +62,7 @@ The script is safe to run again after the first run on this checkout. It install
 
 k3s is started with `cluster-init: true` (embedded etcd). A server that was installed earlier with SQLite restarts k3s once on the next run so the datastore can migrate. After that config is in place, a re-run does not restart k3s. See [Grow from one server to three](#grow-from-one-server-to-three).
 
-When a GitHub Release exists, the script downloads the `dflow` CLI and the Helm chart package (`dflow-*.tgz`) from that release, and pulls the server image `ghcr.io/dflow-sh/dflow-server:<tag>`. The CLI download is checked against `checksums.txt` when that file is in the release. A checksum mismatch, a binary that does not run, or a server image that cannot be pulled exits non-zero. The script does not build this checkout in those cases. `--version v0.0.3` selects that release instead of the latest one. `--from-checkout` builds the CLI and tags the server image `dev-<git sha>`. That build reports `v0.0.0-dev`. CI also uploads CLI binaries and a server image archive as workflow artifacts. That is not a production deploy.
+When a GitHub Release exists, the script downloads the `dflow` CLI and the Helm chart package (`dflow-<version>.tgz`) from that release, and pulls the server image `ghcr.io/dflow-sh/dflow-server:<tag>`. The CLI download is checked against `checksums.txt`. A missing checksum, a checksum mismatch, a binary that does not run, or a server image that cannot be pulled exits non-zero. The script does not build this checkout in those cases. `--version v0.0.4` selects that release instead of the latest one. `--from-checkout` builds the CLI and tags the server image `dev-<git sha>`. That build reports `v0.0.0-dev`. CI also uploads CLI binaries and a server image archive as workflow artifacts. That is not a production deploy.
 
 The chart sets `server.defaultBuildMode` to `railpack`. A `dflow push` that omits `--build-mode` builds with Railpack (BuildKit in the staging job, image pushed to the in-cluster registry). `--build-mode buildpack` and `--build-mode dockerfile` stay explicit. `dflow app logs --staging` prints the staging pod name once, then left-aligned log lines. `--verbose` restores the pod and container prefix on every line.
 
@@ -89,7 +74,7 @@ The script also prints the k3s join URL and token, a worker command, and a `--co
 
 ## Add a worker
 
-Another Ubuntu 22.04 or 24.04 machine joins as a worker. Clone this private repository on that machine the same way as the first server (`GITHUB_TOKEN` for HTTPS, or a deploy key). The join command itself does not need a token beyond the k3s node token. Extra control-plane servers are a different command, described in [Grow from one server to three](#grow-from-one-server-to-three).
+Another Ubuntu 22.04 or 24.04 machine joins as a worker. Clone this repository on that machine the same way as the first server. The join command itself does not need a token beyond the k3s node token. Extra control-plane servers are a different command, described in [Grow from one server to three](#grow-from-one-server-to-three).
 
 On the first server, `scripts/install.sh` prints the URL and token when it finishes. The URL is `https://<first-server-public-ipv4>:6443`. Read the token again from the k3s node-token file:
 
@@ -258,7 +243,7 @@ CGO_ENABLED=0 go build -o dist/dflow ./apps/cli
 sudo install -m 0755 dist/dflow /usr/local/bin/dflow
 ```
 
-CI on this branch uploads `dflow-darwin-arm64` and `dflow-darwin-amd64` as workflow artifacts. With access to the private repository:
+CI on this branch uploads `dflow-darwin-arm64` and `dflow-darwin-amd64` as workflow artifacts. From a checkout of the default branch:
 
 ```bash
 gh run list --repo dflow-sh/kube-poc --branch main --workflow ci --limit 1
@@ -266,72 +251,101 @@ gh run download --repo dflow-sh/kube-poc <run-id> -n dflow-darwin-arm64
 sudo install -m 0755 dflow-darwin-arm64 /usr/local/bin/dflow
 ```
 
-Building locally does not wait on that artifact.
+A published release is the install path below. Building locally does not wait on that artifact.
 
 ### scripts/install-cli.sh
 
-From a Mac checkout, this installs the matching `darwin-arm64` or `darwin-amd64` binary to `/usr/local/bin/dflow`, then logs in and runs the sample push when `--api` is set.
+From a Mac or Linux checkout, this installs the matching binary to `/usr/local/bin/dflow`, then logs in and runs the sample push when `--api` is set.
 
 ```bash
-export GITHUB_TOKEN=...   # or: gh auth login
 ./scripts/install-cli.sh \
   --api "https://dflow.<domain>" \
   --user admin \
   --password 'password'
 ```
 
-`<domain>` and the password are what `scripts/install.sh` printed on the server. The script downloads `dflow-darwin-arm64` or `dflow-darwin-amd64` from the latest GitHub Release and checks `checksums.txt` when that file is in the release. If that asset cannot be downloaded, the script exits non-zero. `--from-checkout` runs `go build` from the checkout (Go 1.26).
+`<domain>` and the password are what `scripts/install.sh` printed on the server. The script downloads `dflow-darwin-arm64`, `dflow-darwin-amd64`, `dflow-linux-arm64`, or `dflow-linux-amd64` from the public GitHub Release and requires a matching line in `checksums.txt`. If that asset cannot be downloaded, the script exits non-zero. `--from-checkout` runs `go build` from the checkout (Go 1.26). `--version v0.0.4` selects that tag instead of the latest release.
 
 Without `--api` the binary is still installed and the script prints the login and push commands instead of running them.
 
+On macOS, a browser download can be quarantined. If Gatekeeper refuses to run the binary:
+
+```bash
+xattr -d com.apple.quarantine /usr/local/bin/dflow
+```
+
+A binary installed by `scripts/install-cli.sh` or `install -m 0755` is not quarantined. A binary saved from a browser is.
+
 ## Upgrade
 
-On the server, after the one-shot install:
+On the server, after the one-shot install, either command upgrades the CLI and then the server to the same release:
 
 ```bash
-sudo --preserve-env=GITHUB_TOKEN ./scripts/update.sh
+sudo dflow upgrade
+sudo ./scripts/update.sh
 ```
 
-That selects the latest GitHub Release, runs `helm upgrade`, waits until `dflow-server` is ready, then repeats the API health check and the CLI self-test (login, push `traefik/whoami`, curl expecting HTTP 200, delete, confirm the sample namespace is gone).
-
-A specific release:
+`dflow upgrade` downloads the CLI from the public release, checks SHA256, and replaces the running binary. A permission error prints a `sudo dflow upgrade` line and does not change the server. It then runs `helm upgrade --install dflow` with the chart package from that release (`dflow-<version>.tgz`), sets `image.dflow.tag`, imports `ghcr.io/dflow-sh/dflow-server:<tag>` when `docker` and `k3s` are on the machine, and waits until `dflow-server` is ready.
 
 ```bash
-sudo --preserve-env=GITHUB_TOKEN ./scripts/update.sh v1.0.0
+sudo dflow upgrade --version v0.0.4
+sudo dflow upgrade --cli-only
+sudo dflow upgrade --server-only
+sudo dflow upgrade --dry-run
 ```
 
-If that tag does not exist, the script stops. It does not build a different commit and label it with the missing tag. If the server image for that release cannot be pulled, the script stops. It does not reuse an image already imported from this checkout. If no latest release exists, the script stops unless you pass `--from-checkout`. That flag builds from the checkout, tags the image `dev-<git sha>`, upgrades with that image, and still runs the self-test. `GITHUB_TOKEN` (or `GH_TOKEN`) needs repository read for the private release assets. The server image pull does not need a token.
+`--dry-run` prints the asset URL and the helm command. `--cli-only` does not touch the cluster. `--server-only` does not replace the CLI.
 
-A Mac installs or replaces the CLI with `scripts/install-cli.sh`, not with `scripts/update.sh`.
+`dflow upgrade` does not install k3s, cert-manager, or Traefik, does not change the saved domain or admin password, and does not run the login and sample-push self-test. A machine that cannot read `/etc/rancher/k3s/k3s.yaml` (or `KUBECONFIG`) stops after the CLI step and tells you to run `sudo ./scripts/update.sh <tag>` on the server.
 
-## Release workflow
+`scripts/update.sh` replaces `/usr/local/bin/dflow` from the same release, then runs the helm upgrade, waits until `dflow-server` is ready, and repeats the API health check and the CLI self-test (login, push `traefik/whoami`, curl expecting HTTP 200, delete, confirm the sample namespace is gone).
 
-`.github/workflows/release.yml` runs only when a tag matching `v*` is pushed. For example `v1.0.0`. It uses GoReleaser. The tag must point at a commit that already contains that workflow file. Pushing the tag is the only trigger. Do not run it by hand from a pull request.
+```bash
+sudo ./scripts/update.sh v0.0.4
+```
+
+If that tag does not exist, the script stops. It does not build a different commit and label it with the missing tag. If the server image for that release cannot be pulled, the script stops. It does not reuse an image already imported from this checkout. If no latest release exists, the script stops unless you pass `--from-checkout`. That flag builds from the checkout, tags the image `dev-<git sha>`, upgrades with that image, and still runs the self-test.
+
+`dflow client-sync` still only replaces the CLI so it matches the server you are logged in to. It uses the same public URL, asset name, and `checksums.txt` check. It does not upgrade the server.
+
+## Release assets
+
+`.github/workflows/release.yml` runs only when a tag matching `v*` is pushed. For example `v0.0.4`. It uses GoReleaser. The tag must point at a commit that already contains that workflow file. Pushing the tag is the only trigger. Do not run it by hand from a pull request.
 
 ```bash
 git checkout main
 git pull
-git tag v1.0.0
-git push origin v1.0.0
+git tag v0.0.4
+git push origin v0.0.4
 ```
 
 The workflow then:
 
 - publishes `dflow-linux-amd64`, `dflow-linux-arm64`, `dflow-darwin-amd64`, and `dflow-darwin-arm64`, plus `checksums.txt`, as GitHub Release assets
 - pushes `ghcr.io/dflow-sh/dflow-server:<tag>` and `ghcr.io/dflow-sh/dflow-server:latest`
-- packages the Helm chart, sets its version and the server image tag to the git tag, and uploads `dflow-<version>.tgz` on the same release
+- packages the Helm chart and uploads `dflow-<version>.tgz` (tag `v0.0.4` uploads `dflow-0.0.4.tgz`) on the same release
 
-Actions uses the workflow `GITHUB_TOKEN` (`contents: write` and `packages: write`). No extra secret is required for this repository. This is not a production deploy of a cluster.
-
-`ghcr.io/dflow-sh/dflow-server` is a public package. CLI binaries, `checksums.txt`, and the Helm chart package are still assets on this private repository's GitHub Releases, so downloading them needs a token that can read this repository. There is no public repository for those binaries yet, and these scripts do not download them from a public URL.
-
-The intended public URL, once that repository exists and a release is published there, is:
+Actions uses the workflow `GITHUB_TOKEN` (`contents: write` and `packages: write`) to publish. Downloading those assets does not need a token.
 
 ```text
-https://github.com/dflow-sh/dflow-releases/releases/download/<tag>/dflow-<os>-<arch>
+https://github.com/dflow-sh/kube-poc/releases/download/<tag>/dflow-<os>-<arch>
+https://github.com/dflow-sh/kube-poc/releases/download/<tag>/checksums.txt
 ```
 
-For `<tag>` `v0.0.4` the linux/amd64 asset would be `dflow-linux-amd64`. `checksums.txt` is the sibling file. That URL needs no token. This checkout does not call it.
+For tag `v0.0.4` the linux/amd64 file is `dflow-linux-amd64`. `checksums.txt` is the sibling file. The lines look like `<sha256>  dflow-linux-amd64`.
+
+A one-line `curl | bash` installer is not available. `scripts/install-cli.sh` sources `scripts/install.sh`, so fetching that one file from raw GitHub does not install the CLI. Use a checkout and `./scripts/install-cli.sh`, or download the asset and checksum yourself:
+
+```bash
+curl -fsSL -o dflow-linux-amd64 \
+  https://github.com/dflow-sh/kube-poc/releases/download/v0.0.4/dflow-linux-amd64
+curl -fsSL -o checksums.txt \
+  https://github.com/dflow-sh/kube-poc/releases/download/v0.0.4/checksums.txt
+grep ' dflow-linux-amd64$' checksums.txt | sha256sum -c -
+sudo install -m 0755 dflow-linux-amd64 /usr/local/bin/dflow
+```
+
+On macOS, clear the quarantine attribute when the binary was saved by a browser (`xattr -d com.apple.quarantine /usr/local/bin/dflow`).
 
 ## What you provide
 

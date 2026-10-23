@@ -10,11 +10,13 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/install.sh"
 usage() {
   cat <<'EOF'
 Usage:
-  sudo --preserve-env=GITHUB_TOKEN ./scripts/update.sh
-  sudo --preserve-env=GITHUB_TOKEN ./scripts/update.sh v1.0.0
+  sudo ./scripts/update.sh
+  sudo ./scripts/update.sh v0.0.4
   sudo ./scripts/update.sh --from-checkout
 
 Runs helm upgrade to the latest GitHub Release, or to the tag you pass.
+Replaces /usr/local/bin/dflow with that same release before the server
+upgrade. Checks the CLI SHA256 against checksums.txt. No token is sent.
 Waits until dflow-server is ready, then repeats the API health check and
 CLI self-test from scripts/install.sh.
 
@@ -22,10 +24,6 @@ The server image is pulled from ghcr.io. If that pull fails, the script
 exits non-zero. It does not reuse or build a checkout image.
 --from-checkout is the only way to upgrade from this checkout.
 A tag you name that does not exist is an error.
-
-GITHUB_TOKEN, GH_TOKEN, or an authenticated gh session reads private
-release assets (the CLI binary and the Helm chart). sudo drops those
-variables unless you pass --preserve-env.
 EOF
 }
 
@@ -81,7 +79,7 @@ if [[ "$FROM_CHECKOUT" -eq 1 ]]; then
   log "upgrading from this checkout (--from-checkout)"
 elif [[ -n "$REQUESTED" ]]; then
   load_release_json "$REQUESTED" \
-    || die "GitHub release ${REQUESTED} was not found. Set GITHUB_TOKEN or GH_TOKEN, or run gh auth login. Refusing to build a different tree and call it ${REQUESTED}."
+    || die "GitHub release ${REQUESTED} was not found. Refusing to build a different tree and call it ${REQUESTED}."
 else
   RELEASE_TAG_REQUEST=latest
   load_release_json latest \
@@ -90,10 +88,8 @@ fi
 
 install_packages
 install_helm
+install_cli_release_or_build
 import_or_build_image
-if [[ ! -x /usr/local/bin/dflow ]]; then
-  die "dflow is not installed at /usr/local/bin/dflow. scripts/update.sh does not replace the CLI. Run scripts/install.sh first."
-fi
 kubectl -n cert-manager get deploy cert-manager-webhook >/dev/null 2>&1 \
   || die "cert-manager is not installed. Run scripts/install.sh."
 apply_dflow_release
