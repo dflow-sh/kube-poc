@@ -95,6 +95,17 @@ jobs:
             exit 1
           fi
           ls -l chart-package
+      - name: Require the CLI installer
+        run: |
+          set -eu
+          test -f scripts/cli/install.sh
+          grep -q 'scripts/cli/install.sh' .goreleaser.yaml
+          grep -q 'name_template: install.sh' .goreleaser.yaml
+          head -n 1 scripts/cli/install.sh | grep -q '^#!/bin/sh'
+          if grep -E '^[[:space:]]*(\.|source)[[:space:]]' scripts/cli/install.sh; then
+            echo "scripts/cli/install.sh must stand alone" >&2
+            exit 1
+          fi
       - uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
@@ -102,3 +113,21 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Confirm install.sh is attached to the release
+        run: |
+          set -eu
+          tag="${GITHUB_REF_NAME}"
+          case "$tag" in
+            v*) ;;
+            *)
+              echo "this check only runs for a v* tag, got ${tag}" >&2
+              exit 1
+              ;;
+          esac
+          url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/install.sh"
+          echo "downloading ${url} with no token"
+          env -u GITHUB_TOKEN -u GH_TOKEN -u GH_ENTERPRISE_TOKEN \
+            curl -fsSL -o /tmp/dflow-install.sh "$url"
+          test -s /tmp/dflow-install.sh
+          cmp scripts/cli/install.sh /tmp/dflow-install.sh
+          echo "install.sh is attached to ${tag}"

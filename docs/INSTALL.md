@@ -2,9 +2,40 @@
 
 dFlow runs on Kubernetes. The chart does not install a UI. `dflowUI.enabled` is false.
 
-The repository is public. Clone it, then run the installer from that checkout.
+## Install the CLI
+
+On macOS or Linux, with no clone:
+
+```bash
+curl -fsSL https://github.com/dflow-sh/kube-poc/releases/latest/download/install.sh | sh
+```
+
+The file in this repository is `scripts/cli/install.sh`. The release publishes that same file as `install.sh`. The download sends no token. The script selects `linux` or `darwin` and `amd64` or `arm64`, downloads `dflow-<os>-<arch>` from the same public release, and checks SHA256 against `checksums.txt`. A missing asset, a missing checksum line, or a checksum mismatch exits non-zero.
+
+```bash
+curl -fsSL https://github.com/dflow-sh/kube-poc/releases/latest/download/install.sh | sh -s -- --version vX.Y.Z
+curl -fsSL https://github.com/dflow-sh/kube-poc/releases/latest/download/install.sh | sh -s -- --install-dir "$HOME/.local/bin"
+```
+
+`--version` is a release tag, or `latest` (the default). `--install-dir` is the destination directory. `DFLOW_VERSION` and `DFLOW_INSTALL_DIR` set those same values when the flags are omitted.
+
+`/usr/local/bin` is used when that directory is writable or `sudo -n` succeeds. If it is not writable, passwordless sudo is unavailable, and `/dev/tty` can be read, the script asks before running sudo. The question and the sudo password are read from `/dev/tty`, which still works under `curl | sh`. Declining, or running with no terminal, installs to `~/.local/bin` and prints a PATH hint. A second run replaces the binary. If `dflow` on `PATH` is a different file from the one just installed, the script prints both paths.
+
+The script then runs `dflow version` and prints the next step, `dflow login`. `dflow login` requires the API URL. `-u` / `--user` and `-p` / `--password` set the admin user and password. `--trust-ca` trusts an unknown certificate:
+
+```bash
+dflow login -u admin -p '<password>' --trust-ca "https://dflow.<domain>"
+```
+
+Omit `--trust-ca` when the API certificate is already trusted. `dflow upgrade --cli-only` replaces the CLI from a later public release and does not change the cluster. `dflow upgrade` also accepts `--version`, `--server-only`, and `--dry-run`. Those flags are in this tree (`packages/dflow/cli/cmd/upgrade.go`). The published `v0.0.4` binary does not include `dflow upgrade`.
+
+`install.sh` is not on the `v0.0.4` release. The `releases/latest/download/install.sh` URL works once a release that contains this script is published. Until then, the four `dflow-<os>-<arch>` binaries and `checksums.txt` from `v0.0.4` are the public CLI download.
+
+From a checkout, `./scripts/install-cli.sh` still installs the CLI and, when `--api` is set, logs in and runs the sample push. See [scripts/install-cli.sh](#scriptsinstall-clish).
 
 ## One-shot install on Ubuntu
+
+The repository is public. Clone it, then run the installer from that checkout.
 
 The server is Ubuntu 22.04 or 24.04, with at least 8 GB RAM, a public IPv4 address, and root SSH.
 
@@ -62,7 +93,7 @@ The script is safe to run again after the first run on this checkout. It install
 
 k3s is started with `cluster-init: true` (embedded etcd). A server that was installed earlier with SQLite restarts k3s once on the next run so the datastore can migrate. After that config is in place, a re-run does not restart k3s. See [Grow from one server to three](#grow-from-one-server-to-three).
 
-When a GitHub Release exists, the script downloads the `dflow` CLI and the Helm chart package (`dflow-<version>.tgz`) from that release, and pulls the server image `ghcr.io/dflow-sh/dflow-server:<tag>`. The CLI download is checked against `checksums.txt`. A missing checksum, a checksum mismatch, a binary that does not run, or a server image that cannot be pulled exits non-zero. The script does not build this checkout in those cases. `--version v0.0.4` selects that release instead of the latest one. `--from-checkout` builds the CLI and tags the server image `dev-<git sha>`. That build reports `v0.0.0-dev`. CI also uploads CLI binaries and a server image archive as workflow artifacts. That is not a production deploy.
+When a GitHub Release exists, the script downloads the `dflow` CLI and the Helm chart package (`dflow-<version>.tgz`) from that release, and pulls the server image `ghcr.io/dflow-sh/dflow-server:<tag>`. The CLI download is checked against `checksums.txt`. A missing checksum, a checksum mismatch, a binary that does not run, or a server image that cannot be pulled exits non-zero. The script does not build this checkout in those cases. `--version vX.Y.Z` selects that release instead of the latest one. `--from-checkout` builds the CLI and tags the server image `dev-<git sha>`. That build reports `v0.0.0-dev`. CI also uploads CLI binaries and a server image archive as workflow artifacts. That is not a production deploy.
 
 The chart sets `server.defaultBuildMode` to `railpack`. A `dflow push` that omits `--build-mode` builds with Railpack (BuildKit in the staging job, image pushed to the in-cluster registry). `--build-mode buildpack` and `--build-mode dockerfile` stay explicit. `dflow app logs --staging` prints the staging pod name once, then left-aligned log lines. `--verbose` restores the pod and container prefix on every line.
 
@@ -266,7 +297,7 @@ From a Mac or Linux checkout, this installs the matching binary to `/usr/local/b
   --password 'password'
 ```
 
-`<domain>` and the password are what `scripts/install.sh` printed on the server. The script downloads `dflow-darwin-arm64`, `dflow-darwin-amd64`, `dflow-linux-arm64`, or `dflow-linux-amd64` from the public GitHub Release and requires a matching line in `checksums.txt`. If that asset cannot be downloaded, the script exits non-zero. `--from-checkout` runs `go build` from the checkout (Go 1.26). `--version v0.0.4` selects that tag instead of the latest release.
+`<domain>` and the password are what `scripts/install.sh` printed on the server. The script downloads `dflow-darwin-arm64`, `dflow-darwin-amd64`, `dflow-linux-arm64`, or `dflow-linux-amd64` from the public GitHub Release and requires a matching line in `checksums.txt`. If that asset cannot be downloaded, the script exits non-zero. `--from-checkout` runs `go build` from the checkout (Go 1.26). `--version vX.Y.Z` selects that tag instead of the latest release.
 
 Without `--api` the binary is still installed and the script prints the login and push commands instead of running them.
 
@@ -290,7 +321,7 @@ sudo ./scripts/update.sh
 `dflow upgrade` downloads the CLI from the public release, checks SHA256, and replaces the running binary. A permission error prints a `sudo dflow upgrade` line and does not change the server. It then runs `helm upgrade --install dflow` with the chart package from that release (`dflow-<version>.tgz`), sets `image.dflow.tag`, imports `ghcr.io/dflow-sh/dflow-server:<tag>` when `docker` and `k3s` are on the machine, and waits until `dflow-server` is ready.
 
 ```bash
-sudo dflow upgrade --version v0.0.4
+sudo dflow upgrade --version vX.Y.Z
 sudo dflow upgrade --cli-only
 sudo dflow upgrade --server-only
 sudo dflow upgrade --dry-run
@@ -323,20 +354,23 @@ git push origin v0.0.4
 
 The workflow then:
 
-- publishes `dflow-linux-amd64`, `dflow-linux-arm64`, `dflow-darwin-amd64`, and `dflow-darwin-arm64`, plus `checksums.txt`, as GitHub Release assets
+- publishes `install.sh`, `dflow-linux-amd64`, `dflow-linux-arm64`, `dflow-darwin-amd64`, and `dflow-darwin-arm64`, plus `checksums.txt`, as GitHub Release assets
+- fails the release job if `install.sh` cannot be downloaded with no token, or if those bytes differ from `scripts/cli/install.sh`
 - pushes `ghcr.io/dflow-sh/dflow-server:<tag>` and `ghcr.io/dflow-sh/dflow-server:latest`
 - packages the Helm chart and uploads `dflow-<version>.tgz` (tag `v0.0.4` uploads `dflow-0.0.4.tgz`) on the same release
 
 Actions uses the workflow `GITHUB_TOKEN` (`contents: write` and `packages: write`) to publish. Downloading those assets does not need a token.
 
 ```text
+https://github.com/dflow-sh/kube-poc/releases/latest/download/install.sh
+https://github.com/dflow-sh/kube-poc/releases/download/<tag>/install.sh
 https://github.com/dflow-sh/kube-poc/releases/download/<tag>/dflow-<os>-<arch>
 https://github.com/dflow-sh/kube-poc/releases/download/<tag>/checksums.txt
 ```
 
-For tag `v0.0.4` the linux/amd64 file is `dflow-linux-amd64`. `checksums.txt` is the sibling file. The lines look like `<sha256>  dflow-linux-amd64`.
+For tag `v0.0.4` the linux/amd64 file is `dflow-linux-amd64`. `checksums.txt` is the sibling file. The lines look like `<sha256>  dflow-linux-amd64`. That tag does not include `install.sh`. [Install the CLI](#install-the-cli) is the install path on a release that publishes it.
 
-A one-line `curl | bash` installer is not available. `scripts/install-cli.sh` sources `scripts/install.sh`, so fetching that one file from raw GitHub does not install the CLI. Use a checkout and `./scripts/install-cli.sh`, or download the asset and checksum yourself:
+The same binary and checksum can be checked by hand:
 
 ```bash
 curl -fsSL -o dflow-linux-amd64 \
