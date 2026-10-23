@@ -25,6 +25,7 @@ import (
 	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
@@ -177,6 +178,9 @@ func (s *AuthService) userFromCurrentSecret(ctx context.Context, user User) (Use
 
 	secret, err := s.SecretInterface.Get(ctx, user.secretName, metav1.GetOptions{})
 	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			return User{}, ErrUserNotFound
+		}
 		return User{}, errors.Wrapf(err, "reading user secret %s", user.secretName)
 	}
 

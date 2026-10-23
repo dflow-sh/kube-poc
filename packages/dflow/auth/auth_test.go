@@ -28,7 +28,9 @@ import (
 	. "github.com/onsi/gomega"
 	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 var r *rand.Rand
@@ -198,6 +200,16 @@ var _ = Describe("Auth users", func() {
 
 			_, err := authService.GetUserByUsername(context.Background(), "ada")
 			Expect(err).To(HaveOccurred())
+			Expect(errors.Is(err, auth.ErrUserNotFound)).To(BeFalse())
+		})
+
+		It("returns user not found when the secret is missing", func() {
+			listed := newUserSecret("ada", "password", "user", "old")
+			fakeSecret.ListReturns(&corev1.SecretList{Items: []corev1.Secret{listed}}, nil)
+			fakeSecret.GetReturns(nil, k8serrors.NewNotFound(schema.GroupResource{Resource: "secrets"}, "ada"))
+
+			_, err := authService.GetUserByUsername(context.Background(), "ada")
+			Expect(errors.Is(err, auth.ErrUserNotFound)).To(BeTrue())
 		})
 	})
 
