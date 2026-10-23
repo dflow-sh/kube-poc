@@ -299,6 +299,22 @@ From a Mac or Linux checkout, this installs the matching binary to `/usr/local/b
 
 `<domain>` and the password are what `scripts/install.sh` printed on the server. The script downloads `dflow-darwin-arm64`, `dflow-darwin-amd64`, `dflow-linux-arm64`, or `dflow-linux-amd64` from the public GitHub Release and requires a matching line in `checksums.txt`. If that asset cannot be downloaded, the script exits non-zero. `--from-checkout` runs `go build` from the checkout (Go 1.26). `--version vX.Y.Z` selects that tag instead of the latest release.
 
+To check the signature on `checksums.txt`, a CLI binary, or the chart tarball, download that file and the matching `.sigstore.json`. cosign 3.1.4 `verify-blob` takes `--bundle`, `--certificate-identity`, and `--certificate-oidc-issuer` (there is no separate certificate flag). The identity is this repository's release workflow at the tag, and the issuer is GitHub Actions OIDC:
+
+```bash
+tag=v0.0.5
+base="https://github.com/dflow-sh/kube-poc/releases/download/${tag}"
+curl -fsSL -o checksums.txt "${base}/checksums.txt"
+curl -fsSL -o checksums.txt.sigstore.json "${base}/checksums.txt.sigstore.json"
+cosign verify-blob \
+  --bundle checksums.txt.sigstore.json \
+  --certificate-identity "https://github.com/dflow-sh/kube-poc/.github/workflows/release.yml@refs/tags/${tag}" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  checksums.txt
+```
+
+Use the same flags for `dflow-linux-amd64` or `dflow-0.0.5.tgz`. `checksums.txt` lists the chart tarball. The release workflow signs with keyless cosign (`sign-blob --bundle`, no `--key`) and publishes each bundle. That signature exists only after the `v*` workflow runs, so the check is proven when `v0.0.5` is tagged.
+
 Without `--api` the binary is still installed and the script prints the login and push commands instead of running them.
 
 On macOS, a browser download can be quarantined. If Gatekeeper refuses to run the binary:

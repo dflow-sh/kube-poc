@@ -28,6 +28,37 @@ archives:
 checksum:
   name_template: checksums.txt
   algorithm: sha256
+  extra_files:
+    - glob: chart-package/dflow-*.tgz
+
+# SPDX JSON for each published CLI binary. Flags match `syft --help`:
+# `--output spdx-json=<file>` writes SPDX 2.3 JSON.
+sboms:
+  - id: cli
+    artifacts: binary
+    cmd: syft
+    args:
+      - "$artifact"
+      - "--output"
+      - "spdx-json=$document"
+    documents:
+      - "{{ .ArtifactName }}.spdx.json"
+
+# Keyless cosign 3. `sign-blob --help` has `--bundle` and `--yes`, and no
+# stored-key flag is set, so Fulcio uses the GitHub Actions OIDC token.
+# Each bundle is published next to its artifact as `<name>.sigstore.json`.
+signs:
+  - id: release-blobs
+    cmd: cosign
+    signature: "${artifact}.sigstore.json"
+    artifacts: all
+    args:
+      - sign-blob
+      - "--yes"
+      - "--oidc-provider=github-actions"
+      - "--bundle"
+      - "$signature"
+      - "$artifact"
 
 changelog:
   disable: true
