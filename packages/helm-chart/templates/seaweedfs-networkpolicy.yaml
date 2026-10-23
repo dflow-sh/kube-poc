@@ -1,0 +1,20 @@
+{{- if .Values.seaweedfs.enabled }}
+# Ingress to SeaweedFS is limited to pods in this release namespace.
+# SeaweedFS components share that namespace, so master, volume, filer, and the
+# S3 gateway can still reach each other. Pods in other namespaces cannot.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: seaweedfs
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: seaweedfs
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector: {}
+{{- end }}

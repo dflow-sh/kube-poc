@@ -24,50 +24,55 @@ image:
     registry: ghcr.io/
     repository: dflow-sh/dflow-server
     tag: v0.0.0-dev
+    # Digest of the published v0.0.4 release. The tag stays v0.0.0-dev so the
+    # release workflow can rewrite that line. The pod uses the digest.
+    digest: sha256:6bd9a740ceb0e56d014de9c94578c89daf943aadd7ee26101e71bf0ff976d8b8
   dflow-ui:
     registry: ghcr.io/
     repository: dflow-sh/dflow-ui
     tag: v0.0.0-dev
-  # Published upstream unpacker. This repo does not build that image.
+  # Source archive tools. bci-base has GNU tar, find, gzip, and bash.
+  # It does not include unzip, bzip2, or xz.
   bash:
-    registry: ghcr.io/
-    repository: epinio/epinio-unpacker
-    tag: v1.14.3-rc1
+    repository: registry.suse.com/bci/bci-base
+    tag: "15.7"
+    digest: sha256:927140d8ede708eed63e8ce3c789801288403c23ac53a40ced59164abc938103
   awscli:
-    repository: amazon/aws-cli
-    tag: 2.13.26
+    repository: docker.io/amazon/aws-cli
+    tag: 2.38.5
+    digest: sha256:c8156a0e74e13929a42d7e60f0d4e14e7d28d980cd21822505d4bff80e5460c1
   skopeo:
-    registry: quay.io/
-    repository: skopeo/stable
-    tag: v1.13.2
+    repository: quay.io/skopeo/stable
+    tag: v1.22.3
+    digest: sha256:24940638e4abb0edfedc78a680554f316069d0212a00159276759421a059e611
   kubectl:
-    repository: rancher/kubectl
-    tag: v1.22.6
-  # Paketo builder used when a push selects --build-mode buildpack and
-  # passes a builder image. /info does not report this image. The default
-  # builder is server.defaultBuilderImage (railpack).
+    repository: docker.io/rancher/kubectl
+    tag: v1.36.2
+    digest: sha256:06c7a7a9772737494ae1e0c3af90f1b5385630c147e47c1c7cea92f4bed55fbe
+  # Buildpack is not the default. No builder image is installed with the chart.
+  # userid and groupid are still read by the stage scripts.
   builder:
-    repository: paketobuildpacks/builder-jammy-full
-    tag: 0.3.495
-    # The user/group combination to use when running
-    # the builder image (and in supporting scripts).
     userid: 1001
     groupid: 1000
   dockerfileBuilder:
-    # Built from dflow/kaniko (fork of chainguard-forks/kaniko), like Dex.
-    # Keep the -debug tag: the dockerfile-build stage script needs a shell.
-    # Track version bumps with Dex during release dependency updates.
-    # Published upstream kaniko image. This repo does not build that image.
-    registry: ghcr.io/
-    repository: epinio/kaniko
-    tag: v1.25.19-debug
+    # The dockerfile-build stage script needs a shell, so keep the debug image.
+    # v1.24.0 is the latest release that publishes a debug tag.
+    repository: gcr.io/kaniko-project/executor
+    tag: v1.24.0-debug
+    digest: sha256:2562c4fe551399514277ffff7dcca9a3b1628c4ea38cb017d7286dc6ea52f4cd
   # Railpack is the default staging mode. The staging job runs this BuildKit
   # image, downloads the railpack CLI, and pushes the image with buildctl.
+  # Railpack v0.43.0 builds against BuildKit v0.34.0. v0.34.1 is the latest
+  # release on that line.
   railpack:
-    repository: moby/buildkit
-    tag: v0.23.2
+    repository: docker.io/moby/buildkit
+    tag: v0.34.1
+    digest: sha256:99368f3e46177c6405b9740e4461d91cee004128daeecca78d4ceac50ec1da5c
     cliVersion: v0.43.0
-    frontend: ghcr.io/railwayapp/railpack-frontend:v0.43.0
+    frontend:
+      repository: ghcr.io/railwayapp/railpack-frontend
+      tag: v0.43.0
+      digest: sha256:355ef61fae6f2551103cd8b10c710cb07167dd353d561f15c69b8d7ac1c676cc
 # Runtime charts that deploy an application workload. They are packed into
 # the server image (see images/Dockerfile) and derived from the upstream
 # Apache-2.0 application charts.
@@ -255,8 +260,8 @@ certManagerNamespace: cert-manager
 # With the auto-creation of secrets from Cert request gone the secrets have to specified manually.
 # See below. Leaving out the `dex` falls back to `dflow`. No other connections between them.
 # Further note:
-#  - s3 applies to either seaweedfs, or s3gw, whichever is active.
-#    In case of using an external s3 store it does not apply at all.
+#  - s3 applies when SeaweedFS is active.
+#    An external S3 store does not use that certificate.
 #  - dex applies only when enabled
 certManager:
   # install cert-manager chart alongside dFlow if one does not exist
@@ -319,11 +324,12 @@ api:
         - workspace
 # Dex subchart values -- None for now, and sub chart disabled
 dex:
-  # Target fork that supports pkce for oidc providers
-  # Published upstream Dex image with PKCE. This repo does not build Dex.
+  # Upstream Dex. Chart 0.26.0 uses image.digest when it is set.
+  # This repo does not build Dex.
   image:
-    repository: ghcr.io/epinio/dex
-    tag: v2.45.1-epinio-pkce
+    repository: ghcr.io/dexidp/dex
+    tag: v2.46.0
+    digest: sha256:933fcd3f523338c847b88ef84a7145fb2fcb7b9917f08418612afeaaa2001777
     pullPolicy: IfNotPresent
   # hardcode this, to avoid problems with release name
   fullnameOverride: "dex"
@@ -427,6 +433,15 @@ seaweedfs:
   global:
     # Set to true to enable SeaweedFS internal TLS. When enabled, also set `seaweedfs.tls.enabled=true`.
     enableSecurity: false
+    # Chart 4.48 joins imageRegistry, global.seaweedfs.image.name, and image.tag.
+    imageRegistry: docker.io
+    seaweedfs:
+      image:
+        name: chrislusf/seaweedfs
+  image:
+    # Tag 4.48, digest sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d.
+    # The chart has no digest field, so the tag carries both.
+    tag: 4.48@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d
   s3:
     enabled: true
     port: 8333
@@ -460,9 +475,11 @@ dflowUI:
 reflector:
   enabled: true
   fullnameOverride: reflector
+  # The reflector chart joins repository and tag with a colon, so the
+  # repository ends in @sha256 and the tag is the digest hex.
   image:
-    repository: emberstack/kubernetes-reflector
-    tag: ""
+    repository: docker.io/emberstack/kubernetes-reflector@sha256
+    tag: 51dbd5880929dc26678f6e190c70abfbcccd3846679ff464e5815823fd782f1a
     pullPolicy: IfNotPresent
   rbac:
     enabled: true
@@ -470,20 +487,6 @@ reflector:
     create: true
     name: ""
 
-# s3gw subchart values
-s3gw:
-  enabled: false
-  ingress:
-    enabled: false
-  ui:
-    enabled: false
-  serviceName: s3gw
-  useExistingSecret: true
-  defaultUserCredentialsSecret: s3gw-creds
-  storageSize: 2Gi
-  storageClass:
-    create: false
-    name: ""
 # One registry pod. Its disk is not replicated. emptyDir (the default below)
 # is removed when the pod is rescheduled. Do not raise the Deployment replica
 # count: two registry processes would not share blobs. For a registry that
@@ -493,11 +496,13 @@ containerregistry:
   enabled: true
   image:
     registry:
-      repository: registry
-      tag: "3"
+      repository: docker.io/library/registry
+      tag: "3.1.2"
+      digest: sha256:01cd312e67026f06f5d89c3e133a4a9adc7cb9eeb9b1194e0b2954dfd770efd2
     nginx:
-      repository: nginx
-      tag: 1.27-alpine
+      repository: docker.io/library/nginx
+      tag: 1.30.6-alpine
+      digest: sha256:47928bf67eb62a1863cb08d9ecb52d3e704304ba614eaee17884204677702951
   imagePullPolicy: IfNotPresent
   # The ingressClassName is used to select the ingress controller. If
   # empty no class will be added to the ingresses.
@@ -548,6 +553,10 @@ serviceCatalog:
   enableDevServices: true
 # Scheduling configurations for the Helm Controller
 helmController:
+  image:
+    repository: docker.io/rancher/helm-controller
+    tag: v0.12.1
+    digest: sha256:30341f17079a7baa48da098cfbf0d481525d92440dc5bdfd8f977d927adfa4db
   resources: {}
   # requests:
   #   cpu: "200m"

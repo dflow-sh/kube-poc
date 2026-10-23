@@ -10,7 +10,7 @@ IMAGE="${IMAGE:-ghcr.io/dflow-sh/dflow-server:v0.0.0-dev}"
 PASSWORD="${PASSWORD:-password}"
 NS="${NS:-sample}"
 APP="${APP:-hello}"
-SAMPLE_IMAGE="${SAMPLE_IMAGE:-traefik/whoami}"
+SAMPLE_IMAGE="${SAMPLE_IMAGE:-docker.io/traefik/whoami:v1.12.0@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44}"
 export PATH="/usr/local/go/bin:${PATH}"
 
 need() {
@@ -57,8 +57,10 @@ k3d image import "${IMAGE}" -c "${CLUSTER}"
 echo "== cert-manager =="
 # Certificate manifests in the dFlow chart cannot be applied in the same
 # Helm release that first installs the cert-manager CRDs.
-helm upgrade --install cert-manager "${ROOT}/packages/helm-chart/charts/cert-manager-v1.19.3.tgz" \
+cert_manager_chart="$(echo "${ROOT}"/packages/helm-chart/charts/cert-manager-*.tgz)"
+helm upgrade --install cert-manager "${cert_manager_chart}" \
   --namespace cert-manager --create-namespace \
+  --values "${ROOT}/packages/helm-chart/cert-manager-images.yaml" \
   --set crds.enabled=true \
   --timeout 10m
 kubectl -n cert-manager rollout status deploy/cert-manager --timeout=10m

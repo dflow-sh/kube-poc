@@ -89,7 +89,7 @@ spec:
       {{- end }}
       containers:
       - name: nginx
-        image: "{{ template "registry-url" . }}{{ .Values.containerregistry.image.nginx.repository}}:{{ .Values.containerregistry.image.nginx.tag }}"
+        image: {{ include "dflow.imageRef" .Values.containerregistry.image.nginx | quote }}
         imagePullPolicy: IfNotPresent
         securityContext:
           runAsUser: 1000
@@ -112,7 +112,7 @@ spec:
         - mountPath: /var/run/
           name: nginx-run
       - name: registry
-        image: "{{ template "registry-url" . }}{{ .Values.containerregistry.image.registry.repository}}:{{ .Values.containerregistry.image.registry.tag }}"
+        image: {{ include "dflow.imageRef" .Values.containerregistry.image.registry | quote }}
         imagePullPolicy: {{ .Values.containerregistry.imagePullPolicy }}
         env:
         - name: REGISTRY_AUTH

@@ -44,7 +44,7 @@ Usage:
   --flannel-backend NAME    vxlan or host-gw; required with --control-plane
   --tls-san HOST            extra name on this server's API certificate (repeatable)
   --node-external-ip ADDR   advertised node IP; default is this host's default-route address
-  --k3s-version V           optional k3s version passed to the installer
+  --k3s-version V           k3s version passed to the installer (default v1.36.5+k3s1)
 
 Without --control-plane the host joins as a worker. With --control-plane it
 joins the embedded etcd quorum. The first server must already have been
@@ -151,6 +151,9 @@ parse_args() {
         die "--flannel-backend must be vxlan or host-gw (got ${FLANNEL_BACKEND})"
         ;;
     esac
+  fi
+  if [[ -z "$K3S_BIN_VERSION" ]]; then
+    K3S_BIN_VERSION="v1.36.5+k3s1"
   fi
 }
 

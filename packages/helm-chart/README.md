@@ -110,14 +110,8 @@ true (default).
 
 For additional values that are available, please see the helm chart source: https://github.com/seaweedfs/seaweedfs/tree/master/helm/seaweedfs
 
-This chart will install [s3gw](https://s3gw.io/) when `.Values.s3gw.enabled` is
-true.
-
-Any S3 compatible solution can be used instead by setting the aforementioned values
-to `false` and using [the values under `s3`](https://github.com/dflow-sh/kube-poc/blob/main/chart/dflow/values.yaml#L44)
-to point to the desired S3 server.
-
-For additional values that are available, please see the helm chart source: https://github.com/s3gw-tech/s3gw-charts/tree/main/charts/s3gw
+Any S3 compatible solution can be used instead by setting `seaweedfs.enabled`
+to `false` and using the values under `s3` to point at that store.
 
 ### Container Registry
 

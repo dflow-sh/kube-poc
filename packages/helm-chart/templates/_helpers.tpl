@@ -68,6 +68,27 @@ Create the name of the service account to use
 
 
 {{/*
+imageRef prints repository@sha256:digest when digest is set, otherwise
+registry + repository:tag. A digest pin is absolute and is not prefixed.
+*/}}
+{{- define "dflow.imageRef" -}}
+{{- $digest := .digest | default "" | toString -}}
+{{- $repo := .repository | toString -}}
+{{- if $digest -}}
+{{- if not (hasPrefix "sha256:" $digest) -}}
+{{- $digest = printf "sha256:%s" $digest -}}
+{{- end -}}
+{{- printf "%s@%s" $repo $digest -}}
+{{- else -}}
+{{- $reg := .registry | default "" | toString -}}
+{{- if and $reg (not (hasSuffix "/" $reg)) -}}
+{{- $reg = printf "%s/" $reg -}}
+{{- end -}}
+{{- printf "%s%s:%s" $reg $repo (.tag | toString) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 URL prefix for container images to be compatible with Rancher
 */}}
 {{- define "registry-url" -}}
@@ -103,24 +124,6 @@ Host name of the SeaweedFS S3 service dflow installed
 */}}
 {{- define "dflow.seaweedfs-hostname" -}}
 {{- printf "%s-s3.%s.svc.cluster.local" (default "seaweedfs" .Values.seaweedfs.fullnameOverride) .Release.Namespace }}
-{{- end -}}
-
-{{/*
-URL of the s3gw dflow installed
-*/}}
-{{- define "dflow.s3gw-url" -}}
-{{- if .Values.s3gw.enabled -}}
-{{-   printf "%s.%s.svc.cluster.local" .Values.s3gw.serviceName .Release.Namespace }}
-{{- else -}}
-{{-  .Values.s3.endpoint }}
-{{- end -}}
-{{- end -}}
-
-{{/*
-Host name of the s3gw dflow installed
-*/}}
-{{- define "dflow.s3gw-hostname" -}}
-{{- printf "%s.%s.svc.cluster.local" .Values.s3gw.serviceName .Release.Namespace }}
 {{- end -}}
 
 {{/*
@@ -223,7 +226,7 @@ extraDeploy:
           - name: post-install-job
             image: "%s"
             command: ["kubectl", "delete", "pvc", "-n", "{{ .Release.Namespace }}", "-l", "app.kubernetes.io/instance={{ .Release.Name }}"]
-` (print (include "registry-url" .) .Values.image.kubectl.repository ":" .Values.image.kubectl.tag) | indent 4}}
+` (include "dflow.imageRef" .Values.image.kubectl) | indent 4}}
 {{- end -}}
 
 {{/*

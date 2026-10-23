@@ -66,7 +66,7 @@ When a GitHub Release exists, the script downloads the `dflow` CLI and the Helm 
 
 The chart sets `server.defaultBuildMode` to `railpack`. A `dflow push` that omits `--build-mode` builds with Railpack (BuildKit in the staging job, image pushed to the in-cluster registry). `--build-mode buildpack` and `--build-mode dockerfile` stay explicit. `dflow app logs --staging` prints the staging pod name once, then left-aligned log lines. `--verbose` restores the pod and container prefix on every line.
 
-When the script finishes it prints the API URL, the `admin` password, and the login command. It has already logged in, pushed `traefik/whoami`, required HTTP 200 from the app URL, deleted the app, and deleted the `sample` namespace. If any of those steps fail, the script exits non-zero and prints the step that failed.
+When the script finishes it prints the API URL, the `admin` password, and the login command. It has already logged in, pushed `traefik/whoami` as `dflow-install-check`, required HTTP 200 from that app URL, deleted that app, and deleted the `dflow-install-check` namespace. If an app already uses that name, or an ingress already serves `dflow-install-check.<domain>`, the push is skipped and the existing app is left in place. If any other step fails, the script exits non-zero and prints the step that failed.
 
 Manual checks and uninstall: [docs/TESTING.md](TESTING.md).
 
@@ -298,7 +298,7 @@ sudo dflow upgrade --dry-run
 
 `dflow upgrade` does not install k3s, cert-manager, or Traefik, does not change the saved domain or admin password, and does not run the login and sample-push self-test. A machine that cannot read `/etc/rancher/k3s/k3s.yaml` (or `KUBECONFIG`) stops after the CLI step and tells you to run `sudo ./scripts/update.sh <tag>` on the server.
 
-`scripts/update.sh` replaces `/usr/local/bin/dflow` from the same release, then runs the helm upgrade, waits until `dflow-server` is ready, and repeats the API health check and the CLI self-test (login, push `traefik/whoami`, curl expecting HTTP 200, delete, confirm the sample namespace is gone).
+`scripts/update.sh` replaces `/usr/local/bin/dflow` from the same release, then runs the helm upgrade, waits until `dflow-server` is ready, and repeats the API health check and the CLI self-test (login, push `traefik/whoami` as `dflow-install-check`, curl expecting HTTP 200, delete, confirm that namespace is gone). An existing app on another name, including `hello.<domain>`, is left in place. If `dflow-install-check` or its route is already in use, the smoke push is skipped and that app is left in place.
 
 ```bash
 sudo ./scripts/update.sh v0.0.4
@@ -432,20 +432,20 @@ The chart installs, when you turn the switches on:
 - the container registry (`containerregistry.enabled`, default true)
 - S3-compatible storage via SeaweedFS (`seaweedfs.enabled`, default true)
 - railpack as the default builder (`server.defaultBuilderImage`, reported by `/info` as `default_builder_image`)
-- the Paketo builder image reference (`image.builder`, `paketobuildpacks/builder-jammy-full`), used when `--build-mode buildpack` passes a builder image
-- the Railpack BuildKit image (`image.railpack`, `moby/buildkit`), used when a push omits `--build-mode` (`server.defaultBuildMode: railpack`)
+- the Railpack BuildKit image (`image.railpack`), used when a push omits `--build-mode` (`server.defaultBuildMode: railpack`)
 
-s3gw is the other S3-compatible option and is off by default. MinIO is not installed by the chart. To use MinIO, set `seaweedfs.enabled=false`, `s3gw.enabled=false`, and set `s3.endpoint`, `s3.accessKeyID`, `s3.secretAccessKey`, and `s3.bucket`.
+No Paketo builder image is installed. Buildpack mode needs a builder image passed with the push. MinIO is not installed. To use another S3 store, set `seaweedfs.enabled=false` and set `s3.endpoint`, `s3.accessKeyID`, `s3.secretAccessKey`, and `s3.bucket`.
 
-Dex, the source unpacker, and the Dockerfile builder are published upstream images. See `NOTICE`. A container-image push does not pull the Paketo builder.
+Platform images are digest-pinned to their upstream registries. Development catalog entries still name Bitnami chart repositories. `install.sh` does not pull those.
 
-Install cert-manager from the chart bundled in this repo, then dFlow. The dFlow manifests include `Certificate` resources, so the cert-manager CRDs have to exist before that install.
+Install cert-manager from the chart bundled in this repo, then dFlow. The dFlow manifests include `Certificate` resources, so the cert-manager CRDs have to exist before that install. The cert-manager version is the dependency in `packages/helm-chart/Chart.yaml`. The checkout vendors one `charts/cert-manager-*.tgz`, and the commands below use that glob.
 
 ```bash
 export DOMAIN=203.0.113.10.sslip.io   # or apps.example.com
 
-helm upgrade --install cert-manager packages/helm-chart/charts/cert-manager-v1.19.3.tgz \
+helm upgrade --install cert-manager packages/helm-chart/charts/cert-manager-*.tgz \
   --namespace cert-manager --create-namespace \
+  --values packages/helm-chart/cert-manager-images.yaml \
   --set crds.enabled=true
 kubectl -n cert-manager rollout status deploy/cert-manager-webhook --timeout=10m
 
@@ -514,8 +514,9 @@ kubectl get nodes
 Then follow sections 2 through 5. Load the server image into every node that might run `dflow-server`, or push it to a registry the cluster can pull. Set `ingress.ingressClassName` if the cluster does not use the default ingress class.
 
 ```bash
-helm upgrade --install cert-manager packages/helm-chart/charts/cert-manager-v1.19.3.tgz \
+helm upgrade --install cert-manager packages/helm-chart/charts/cert-manager-*.tgz \
   --namespace cert-manager --create-namespace \
+  --values packages/helm-chart/cert-manager-images.yaml \
   --set crds.enabled=true
 kubectl -n cert-manager rollout status deploy/cert-manager-webhook --timeout=10m
 

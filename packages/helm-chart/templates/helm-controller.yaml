@@ -46,7 +46,7 @@ spec:
       serviceAccountName: helm-controller
       containers:
         - name: helm-controller
-          image: rancher/helm-controller:v0.12.1
+          image: {{ include "dflow.imageRef" .Values.helmController.image | quote }}
           command: ["helm-controller"]
       {{- if .Values.helmController }}
           {{- with .Values.helmController.resources }}

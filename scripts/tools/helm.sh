@@ -11,10 +11,10 @@ set -e
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-VERSION="3.19.0"
+VERSION="3.22.1"
 
 URL="https://get.helm.sh/helm-v${VERSION}-linux-amd64.tar.gz"
-SHA256="a7f81ce08007091b86d8bd696eb4d86b8d0f2e1b9f6c714be62f82f96a594496"
+SHA256="896cf63684a42a723d61c980369d6e588330927deb13676ca0d85006dd6da0ea"
 
 pushd "$TMP_DIR" > /dev/null
 wget -q "$URL" -O "helm.tar.gz"
