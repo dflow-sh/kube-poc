@@ -126,7 +126,9 @@ func ExpectGoodTokenLogin(tmpSettingsPath, serverURL string) {
 	loginClient, err := auth.NewDexClient(fmt.Sprintf("%s://%s", u.Scheme, u.Host))
 	Expect(err).ToNot(HaveOccurred())
 
-	authCode, err := loginClient.Login(authURL, "admin@dflow.sh", "password")
+	adminPassword, err := testenv.GeneratedCredential("adminPassword")
+	Expect(err).NotTo(HaveOccurred())
+	authCode, err := loginClient.Login(authURL, "admin@dflow.sh", adminPassword)
 	Expect(err).ToNot(HaveOccurred())
 
 	By("Piping auth data into command")

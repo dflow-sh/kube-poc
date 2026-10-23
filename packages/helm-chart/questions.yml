@@ -54,7 +54,7 @@ questions:
     - "letsencrypt-production"
 - variable: api.adminPassword
   label: API password for the 'admin' user
-  description: "The password of the 'admin' user"
+  description: "Password of the admin user. Leave empty to generate one and store it in Secret dflow-generated-passwords."
   type: password
   required: false
   group: "General settings"

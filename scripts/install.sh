@@ -22,7 +22,8 @@ RELEASE_REPO="${RELEASE_REPO:-dflow-sh/kube-poc}"
 DFLOW_VERSION="${DFLOW_VERSION:-v0.0.0-dev}"
 IMAGE="${IMAGE:-ghcr.io/dflow-sh/dflow-server:${DFLOW_VERSION}}"
 ADMIN_USER="${ADMIN_USER:-admin}"
-ADMIN_PASSWORD="${ADMIN_PASSWORD:-password}"
+# Empty until --admin-password, install.env, or ensure_admin_password.
+ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"
 DOMAIN="${DOMAIN:-auto}"
 API_DOMAIN="${DFLOW_API_DOMAIN:-${API_DOMAIN:-}}"
 APPS_DOMAIN="${DFLOW_APPS_DOMAIN:-${APPS_DOMAIN:-}}"
@@ -90,12 +91,24 @@ Usage: sudo ./scripts/install.sh [options]
   --email ADDRESS           Let's Encrypt contact email (required for real domains)
   --letsencrypt-staging     use the Let's Encrypt staging issuer
   --tunnel-token TOKEN      Cloudflare Tunnel token when this host has no public IPv4
-  --admin-password PASS     API password for user admin (default: password)
+  --admin-password PASS     API password for user admin (generated and saved when omitted)
   --version TAG             install this release, for example v0.0.3
   --from-checkout           build the CLI and server image from this checkout
 
 With no domain flags on a terminal, the script asks for the API host, the apps
 domain, and an email. Press Enter to keep <public-ipv4>.sslip.io.
+
+With no --admin-password, the script generates a random admin password, stores
+it in Secret dflow-generated-passwords, and reuses it on the next run. Read it
+again with:
+
+  kubectl -n dflow get secret dflow-generated-passwords -o jsonpath='{.data.adminPassword}' | base64 -d; echo
+
+The dflow user is .data.dflowPassword in that Secret. Rotate the admin
+password by running this script again with --admin-password. Dex reads its
+config at startup, so then run:
+
+  kubectl -n dflow rollout restart deployment/dex
 
 A second run with no domain flags, or with --domain auto again, keeps the
 domains saved in /var/lib/dflow/install.env.
@@ -1252,7 +1265,29 @@ EOF
   chmod 600 "${STATE_DIR}/install.env"
 }
 
+ensure_admin_password() {
+  if [[ -n "${ADMIN_PASSWORD:-}" ]]; then
+    return 0
+  fi
+  local from_secret=""
+  if [[ -r "${KUBECONFIG_PATH}" ]] && command -v kubectl >/dev/null 2>&1; then
+    from_secret="$(kubectl --kubeconfig "$KUBECONFIG_PATH" -n dflow get secret dflow-generated-passwords -o jsonpath='{.data.adminPassword}' 2>/dev/null || true)"
+    if [[ -n "$from_secret" ]]; then
+      from_secret="$(printf '%s' "$from_secret" | base64 -d 2>/dev/null || true)"
+    fi
+  fi
+  if [[ -n "$from_secret" ]]; then
+    ADMIN_PASSWORD="$from_secret"
+    log "reusing the admin password from secret dflow-generated-passwords"
+    return 0
+  fi
+  ADMIN_PASSWORD="$(openssl rand -hex 24)"
+  [[ -n "$ADMIN_PASSWORD" ]] || die "could not generate an admin password"
+  log "generated a random admin password; Secret dflow-generated-passwords stores it"
+}
+
 apply_dflow_release() {
+  ensure_admin_password
   resolve_chart
   mkdir -p "$STATE_DIR"
   local image_tag="${IMAGE##*:}"
@@ -1661,7 +1696,17 @@ From a checkout of this repository, this also installs the CLI and runs the samp
 
 Or download the public release asset dflow-darwin-arm64 or dflow-darwin-amd64 and check checksums.txt. A browser download may need: xattr -d com.apple.quarantine /usr/local/bin/dflow
 
-Change the admin password before leaving the API on the public internet.
+The admin password is random unless you passed --admin-password. A second run
+keeps it. Read it again with:
+
+  kubectl -n dflow get secret dflow-generated-passwords -o jsonpath='{.data.adminPassword}' | base64 -d; echo
+
+The dflow user password is .data.dflowPassword in that Secret. Dex users
+admin@dflow.sh and dflow@dflow.sh use those same passwords. Rotate the admin
+password with --admin-password, then:
+
+  kubectl -n dflow rollout restart deployment/dex
+
 Helm values used for this install: ${STATE_DIR}/values.yaml
 EOF
   print_join_info

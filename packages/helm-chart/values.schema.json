@@ -251,11 +251,11 @@
       "type": "object",
       "properties": {
         "adminPassword": {
-          "description": "The cleartext password for the 'admin' user",
+          "description": "Cleartext password for the admin user. Empty generates one in Secret dflow-generated-passwords.",
           "type": "string"
         },
         "dflowPassword": {
-          "description": "The cleartext password for the 'dflow' user",
+          "description": "Cleartext password for the dflow user. Empty generates one in Secret dflow-generated-passwords.",
           "type": "string"
         },
         "users": {

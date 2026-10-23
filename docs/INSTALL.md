@@ -254,10 +254,10 @@ Go 1.26 is required. From a checkout on the Mac:
 make dflow
 sudo install -m 0755 dist/dflow /usr/local/bin/dflow
 dflow version
-dflow login -u admin -p 'password' --trust-ca "https://dflow.<domain>"
+dflow login -u admin -p '<admin-password>' --trust-ca "https://dflow.<domain>"
 ```
 
-`<domain>` and the password are what `scripts/install.sh` printed. `password` is the default. Drop `--trust-ca` when the installer used Let's Encrypt production (`letsencrypt-production`). Keep it for `dflow-ca` and for `letsencrypt-staging`.
+`<domain>` and the admin password are what `scripts/install.sh` printed. The password is random unless you passed `--admin-password`. Read it again with `kubectl -n dflow get secret dflow-generated-passwords -o jsonpath='{.data.adminPassword}' | base64 -d`. Drop `--trust-ca` when the installer used Let's Encrypt production (`letsencrypt-production`). Keep it for `dflow-ca` and for `letsencrypt-staging`.
 
 The same push as the server self-test. `traefik/whoami` listens on `WHOAMI_PORT_NUMBER`, which defaults to 80. The app chart routes to port 8080, so the push sets that variable:
 
@@ -303,10 +303,10 @@ From a Mac or Linux checkout, this installs the matching binary to `/usr/local/b
 ./scripts/install-cli.sh \
   --api "https://dflow.<domain>" \
   --user admin \
-  --password 'password'
+  --password '<admin-password>'
 ```
 
-`<domain>` and the password are what `scripts/install.sh` printed on the server. The script downloads `dflow-darwin-arm64`, `dflow-darwin-amd64`, `dflow-linux-arm64`, or `dflow-linux-amd64` from the public GitHub Release and requires a matching line in `checksums.txt`. If that asset cannot be downloaded, the script exits non-zero. `--from-checkout` runs `go build` from the checkout (Go 1.26). `--version vX.Y.Z` selects that tag instead of the latest release.
+`<domain>` and the admin password are what `scripts/install.sh` printed on the server. `--user` and `--password` are `dflow login -u` and `-p`. The script downloads `dflow-darwin-arm64`, `dflow-darwin-amd64`, `dflow-linux-arm64`, or `dflow-linux-amd64` from the public GitHub Release and requires a matching line in `checksums.txt`. If that asset cannot be downloaded, the script exits non-zero. `--from-checkout` runs `go build` from the checkout (Go 1.26). `--version vX.Y.Z` selects that tag instead of the latest release.
 
 To check the signature on `checksums.txt`, a CLI binary, or the chart tarball, download that file and the matching `.sigstore.json`. cosign 3.1.4 `verify-blob` takes `--bundle`, `--certificate-identity`, and `--certificate-oidc-issuer` (there is no separate certificate flag). The identity is this repository's release workflow at the tag, and the issuer is GitHub Actions OIDC:
 
@@ -443,7 +443,7 @@ sslip.io needs no DNS account. With the same IP and `--domain auto`:
 
 `sslip.io` answers for that name and for `*.203.0.113.10.sslip.io`.
 
-Change the default admin password before the host is reachable on the internet. The chart default user is `admin` / `password`.
+The installer generates the admin password and stores it in Secret `dflow-generated-passwords`. A second run keeps that value. Pass `--admin-password` to set or rotate it, then `kubectl -n dflow rollout restart deployment/dex` so Dex loads the new hash. The `dflow` user is the `dflowPassword` key in the same Secret. Dex users `admin@dflow.sh` and `dflow@dflow.sh` use those two passwords.
 
 ## Tools on the machine
 

@@ -312,21 +312,25 @@ api:
   # When false, only the default "user" and "blank" roles are available.
   rbac:
     enabled: true
-  # Default users
-  # plain password used for the 'admin' user
+  # Passwords for the admin and dflow API users. Empty generates a random
+  # value on first install and stores it in Secret dflow-generated-passwords.
+  # A later upgrade reuses that Secret, so a rerun keeps the same password.
+  # Set a value here, or pass --admin-password to scripts/install.sh, to
+  # choose or rotate the admin password. api.dflowPassword does the same
+  # for the dflow user. Read the generated values with:
+  #   kubectl -n <namespace> get secret dflow-generated-passwords -o jsonpath='{.data.adminPassword}' | base64 -d
+  #   kubectl -n <namespace> get secret dflow-generated-passwords -o jsonpath='{.data.dflowPassword}' | base64 -d
+  # When dex.staticPasswords is null, Dex users admin@dflow.sh and
+  # dflow@dflow.sh use these same two passwords. Dex reads its config only
+  # at startup, so after a rotation run:
+  #   kubectl -n <namespace> rollout restart deployment/dex
   adminPassword: ""
-  # plain password used for the 'dflow' user
   dflowPassword: ""
   users:
     - username: admin
-      password: password
-      # or you can provide an already bcrypt hashed password
-      # passwordBcrypt: "$2a$10$6bCi5NMstMK781In7JGiL.B44pgoplUb330FQvm6mVXMppbXBPiXS"
       roles:
         - admin
     - username: dflow
-      # the Bcrypt hash for the `password` password
-      passwordBcrypt: "$2a$10$6bCi5NMstMK781In7JGiL.B44pgoplUb330FQvm6mVXMppbXBPiXS"
       roles:
         - user
         - admin:workspace
@@ -387,8 +391,9 @@ dex:
   rolesMapping: []
   # -- Enables Dex's local password database (static and stored users).
   enablePasswordDB: true
-  # -- Local users. null keeps the default admin@dflow.sh and
-  # dflow@dflow.sh users; [] removes them.
+  # -- Local users. null gives admin@dflow.sh the admin password and
+  # dflow@dflow.sh the dflow password from Secret dflow-generated-passwords.
+  # [] removes the static users. A list replaces them.
   staticPasswords: null
   # -- Static clients added after dFlow's own (dflow-api, dflow-cli,
   # dflow-ui and, with a Rancher URL, rancher-dashboard).

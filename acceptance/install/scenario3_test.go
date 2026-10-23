@@ -152,8 +152,10 @@ var _ = Describe("<Scenario3> RKE, Private CA, Configuration, on External Regist
 		})
 
 		By("Connecting to dFlow", func() {
+			adminPassword, err := testenv.GeneratedCredential("adminPassword")
+			Expect(err).NotTo(HaveOccurred())
 			Eventually(func() string {
-				out, _ := dflowHelper.Run("login", "-u", "admin", "-p", "password", "--trust-ca", "https://dflow."+domain)
+				out, _ := dflowHelper.Run("login", "-u", "admin", "-p", adminPassword, "--trust-ca", "https://dflow."+domain)
 				return out
 			}, "2m", "5s").Should(ContainSubstring("Login successful"))
 		})

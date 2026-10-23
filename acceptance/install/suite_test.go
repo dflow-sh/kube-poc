@@ -283,7 +283,11 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 		testenv.SetRoot("../..")
 		testenv.SetupEnv()
 
-		env = testenv.New(nodeTmpDir, testenv.Root(), "admin", "password", "", "")
+		adminPassword, credErr := testenv.GeneratedCredential("adminPassword")
+		if credErr != nil {
+			adminPassword = ""
+		}
+		env = testenv.New(nodeTmpDir, testenv.Root(), "admin", adminPassword, "", "")
 	})
 
 	released := os.Getenv("DFLOW_RELEASED")

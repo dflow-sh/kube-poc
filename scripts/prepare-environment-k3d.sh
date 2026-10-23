@@ -170,9 +170,17 @@ rm -f $HOME/.config/dflow/settings.yaml
 # Retry 5 times and sleep 1s because sometimes it takes a while before dflow server is ready
 
 echo "-------------------------------------"
-echo -n "Trying to login using:"
-echo -n "${DFLOW_BINARY} login -u admin -p password --trust-ca https://dflow.$DFLOW_DOMAIN_AND_PORT"
-retry 5 10 "${DFLOW_BINARY} login -u admin -p password --trust-ca https://dflow.$DFLOW_DOMAIN_AND_PORT"
+echo "Trying to login using the admin password from Secret dflow-generated-passwords"
+if [ -n "${DFLOW_ADMIN_PASSWORD:-}" ]; then
+  ADMIN_PASSWORD="$DFLOW_ADMIN_PASSWORD"
+else
+  ADMIN_PASSWORD="$(kubectl -n dflow get secret dflow-generated-passwords -o jsonpath='{.data.adminPassword}' 2>/dev/null | base64 -d || true)"
+fi
+if [ -z "$ADMIN_PASSWORD" ]; then
+  echo "Secret dflow-generated-passwords has no adminPassword. Set DFLOW_ADMIN_PASSWORD to the password this cluster was installed with." >&2
+  exit 1
+fi
+retry 5 10 "${DFLOW_BINARY} login -u admin -p '${ADMIN_PASSWORD}' --trust-ca https://dflow.$DFLOW_DOMAIN_AND_PORT"
 echo "-------------------------------------"
 echo -n "Trying to getting info"
 retry 5 10 "${DFLOW_BINARY} info"

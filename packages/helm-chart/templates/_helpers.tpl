@@ -319,3 +319,56 @@ Return the configured Issuer URL for Dex
  {{- printf "https://%s" (include "dflow-dex-hostname" .) -}}
 {{- end -}}
 {{- end }}
+
+{{/*
+Resolve one password. The caller passes a dict with explicit, plainKey,
+hashKey, and existing (the data map from Secret dflow-generated-passwords).
+An explicit value wins, then the stored plaintext, then a new random value.
+The stored bcrypt is reused when the plaintext did not change.
+The dict gains plain and hash.
+*/}}
+{{- define "dflow.oneCredential" -}}
+{{- $explicit := .explicit | default "" -}}
+{{- $existing := .existing -}}
+{{- $storedPlain := "" -}}
+{{- $storedRaw := index $existing .plainKey | default "" -}}
+{{- if $storedRaw -}}
+{{- $storedPlain = $storedRaw | b64dec -}}
+{{- end -}}
+{{- $plain := $explicit -}}
+{{- if not $plain -}}
+{{- $plain = $storedPlain -}}
+{{- end -}}
+{{- if not $plain -}}
+{{- $plain = randAlphaNum 32 -}}
+{{- end -}}
+{{- $hash := "" -}}
+{{- $storedHashRaw := index $existing .hashKey | default "" -}}
+{{- if and $storedHashRaw (eq $plain $storedPlain) -}}
+{{- $hash = $storedHashRaw | b64dec -}}
+{{- else -}}
+{{- $hash = bcrypt $plain -}}
+{{- end -}}
+{{- $_ := set . "plain" $plain -}}
+{{- $_ := set . "hash" $hash -}}
+{{- end -}}
+
+{{/*
+Set .dflowGeneratedCredentials once per render. Later includes see the
+same plaintext and bcrypt, including templates rendered before the Secret
+exists in the cluster.
+*/}}
+{{- define "dflow.ensureGeneratedCredentials" -}}
+{{- if not (hasKey . "dflowGeneratedCredentials") -}}
+{{- $existing := dict -}}
+{{- $found := lookup "v1" "Secret" .Release.Namespace "dflow-generated-passwords" -}}
+{{- if $found -}}
+{{- $existing = $found.data | default dict -}}
+{{- end -}}
+{{- $admin := dict "explicit" (.Values.api.adminPassword | default "") "plainKey" "adminPassword" "hashKey" "adminPasswordBcrypt" "existing" $existing -}}
+{{- include "dflow.oneCredential" $admin -}}
+{{- $user := dict "explicit" (.Values.api.dflowPassword | default "") "plainKey" "dflowPassword" "hashKey" "dflowPasswordBcrypt" "existing" $existing -}}
+{{- include "dflow.oneCredential" $user -}}
+{{- $_ := set . "dflowGeneratedCredentials" (dict "adminPassword" (index $admin "plain") "adminPasswordBcrypt" (index $admin "hash") "dflowPassword" (index $user "plain") "dflowPasswordBcrypt" (index $user "hash")) -}}
+{{- end -}}
+{{- end -}}
