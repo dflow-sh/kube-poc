@@ -88,7 +88,7 @@ questions:
     required: false
   - variable: global.registryPassword
     label: External registry password
-    description: "Password to authenticate to the external registry"
+    description: "Password for the registry. Leave empty to generate one and store it in Secret dflow-generated-passwords. password and changeme are replaced."
     type: password
     required: false
   - variable: global.registryNamespace

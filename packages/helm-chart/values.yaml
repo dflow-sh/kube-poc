@@ -393,8 +393,12 @@ dex:
   enablePasswordDB: true
   # -- Local users. null gives admin@dflow.sh the admin password and
   # dflow@dflow.sh the dflow password from Secret dflow-generated-passwords.
-  # [] removes the static users. A list replaces them.
+  # [] removes the static users and the admin@dflow.sh API user. A list replaces them.
+  # scripts/install.sh sets podAnnotations.checksum/generated-passwords to the
+  # sha256 of the admin password so this Deployment rolls when that password
+  # changes. Dex reads its config only at startup.
   staticPasswords: null
+  podAnnotations: {}
   # -- Static clients added after dFlow's own (dflow-api, dflow-cli,
   # dflow-ui and, with a Rancher URL, rancher-dashboard).
   extraStaticClients: []
@@ -769,7 +773,12 @@ global:
   # Skip if containerregistry.enabled is true
   registryURL: ""
   registryUsername: "admin"
-  registryPassword: "changeme"
+  # Empty generates a password on first install and stores it in Secret
+  # dflow-generated-passwords under registryPassword. A later upgrade reuses
+  # that Secret. "changeme" and "password" are old defaults and are replaced.
+  # The registry listens on NodePort 30500. Read the password with:
+  #   kubectl -n <namespace> get secret dflow-generated-passwords -o jsonpath='{.data.registryPassword}' | base64 -d
+  registryPassword: ""
   # Used in registry path when pushing -> "external.tld/apps/APPNAME"
   registryNamespace: "apps"
   # The name of the cluster issuer to use.

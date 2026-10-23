@@ -113,6 +113,8 @@ stringData:
 {{- toYaml . | nindent 4 }}
 {{- end }}
 {{- end }}
+{{- /* The admin@ API user exists only for the generated static passwords. A list, including [], replaces them. */}}
+{{- if not (kindIs "slice" .Values.dex.staticPasswords) }}
 ---
 apiVersion: v1
 kind: Secret
@@ -127,6 +129,7 @@ metadata:
 stringData:
   username: "admin@dflow.sh"
   password: {{ index $cred "adminPasswordBcrypt" | quote }}
+{{- end }}
 
 ---
 # TODO (Future):  Remove this custom resource and leverage Dex Helm chart values instead

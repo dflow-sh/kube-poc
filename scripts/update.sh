@@ -74,6 +74,9 @@ export KUBECONFIG="$KUBECONFIG_PATH"
 [[ -f "${STATE_DIR}/install.env" ]] || die "${STATE_DIR}/install.env is missing. Run scripts/install.sh first."
 # shellcheck disable=SC1091
 source "${STATE_DIR}/install.env"
+# A v0.0.4 install.env stores ADMIN_PASSWORD=password. Drop that, and changeme,
+# before apply_dflow_release writes the chart values.
+replace_known_default_passwords
 
 if [[ "$FROM_CHECKOUT" -eq 1 ]]; then
   log "upgrading from this checkout (--from-checkout)"

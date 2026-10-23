@@ -443,7 +443,7 @@ sslip.io needs no DNS account. With the same IP and `--domain auto`:
 
 `sslip.io` answers for that name and for `*.203.0.113.10.sslip.io`.
 
-The installer generates the admin password and stores it in Secret `dflow-generated-passwords`. A second run keeps that value. Pass `--admin-password` to set or rotate it, then `kubectl -n dflow rollout restart deployment/dex` so Dex loads the new hash. The `dflow` user is the `dflowPassword` key in the same Secret. Dex users `admin@dflow.sh` and `dflow@dflow.sh` use those two passwords.
+The installer generates the admin password and stores it in Secret `dflow-generated-passwords`. A second run keeps that value. A saved `ADMIN_PASSWORD` of `password` or `changeme` is an old default: `scripts/install.sh` and `scripts/update.sh` replace it, print a warning, and the old password stops working. Pass `--admin-password` to set or rotate it. The installer sets a checksum annotation on Dex so the Deployment rolls when that password changes. The `dflow` user is the `dflowPassword` key in the same Secret. Dex users `admin@dflow.sh` and `dflow@dflow.sh` use those two passwords. The registry password is the `registryPassword` key in the same Secret. `changeme` is not a registry password. NodePort 30500 uses the generated value. Pass `--registry-password` to set or rotate it. `helm uninstall` leaves Secret `dflow-generated-passwords` in place.
 
 ## Tools on the machine
 

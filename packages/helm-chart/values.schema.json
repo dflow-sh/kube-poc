@@ -381,6 +381,7 @@
           "type": "string"
         },
         "registryPassword": {
+          "description": "Registry password. Empty generates one in Secret dflow-generated-passwords. The values password and changeme are old defaults and are replaced.",
           "type": "string"
         },
         "registryNamespace": {

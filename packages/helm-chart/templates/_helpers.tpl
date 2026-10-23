@@ -329,11 +329,18 @@ The dict gains plain and hash.
 */}}
 {{- define "dflow.oneCredential" -}}
 {{- $explicit := .explicit | default "" -}}
+{{- /* password and changeme are the old installer and registry defaults. */ -}}
+{{- if or (eq $explicit "password") (eq $explicit "changeme") -}}
+{{- $explicit = "" -}}
+{{- end -}}
 {{- $existing := .existing -}}
 {{- $storedPlain := "" -}}
 {{- $storedRaw := index $existing .plainKey | default "" -}}
 {{- if $storedRaw -}}
 {{- $storedPlain = $storedRaw | b64dec -}}
+{{- end -}}
+{{- if or (eq $storedPlain "password") (eq $storedPlain "changeme") -}}
+{{- $storedPlain = "" -}}
 {{- end -}}
 {{- $plain := $explicit -}}
 {{- if not $plain -}}
@@ -369,6 +376,8 @@ exists in the cluster.
 {{- include "dflow.oneCredential" $admin -}}
 {{- $user := dict "explicit" (.Values.api.dflowPassword | default "") "plainKey" "dflowPassword" "hashKey" "dflowPasswordBcrypt" "existing" $existing -}}
 {{- include "dflow.oneCredential" $user -}}
-{{- $_ := set . "dflowGeneratedCredentials" (dict "adminPassword" (index $admin "plain") "adminPasswordBcrypt" (index $admin "hash") "dflowPassword" (index $user "plain") "dflowPasswordBcrypt" (index $user "hash")) -}}
+{{- $registry := dict "explicit" (.Values.global.registryPassword | default "") "plainKey" "registryPassword" "hashKey" "registryPasswordBcrypt" "existing" $existing -}}
+{{- include "dflow.oneCredential" $registry -}}
+{{- $_ := set . "dflowGeneratedCredentials" (dict "adminPassword" (index $admin "plain") "adminPasswordBcrypt" (index $admin "hash") "dflowPassword" (index $user "plain") "dflowPasswordBcrypt" (index $user "hash") "registryPassword" (index $registry "plain") "registryPasswordBcrypt" (index $registry "hash")) -}}
 {{- end -}}
 {{- end -}}

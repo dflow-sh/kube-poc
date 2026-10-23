@@ -23,7 +23,9 @@ DFLOW_VERSION="${DFLOW_VERSION:-v0.0.0-dev}"
 IMAGE="${IMAGE:-ghcr.io/dflow-sh/dflow-server:${DFLOW_VERSION}}"
 ADMIN_USER="${ADMIN_USER:-admin}"
 # Empty until --admin-password, install.env, or ensure_admin_password.
+# The literal "password" and "changeme" are old defaults and are treated as unset.
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"
+REGISTRY_PASSWORD="${REGISTRY_PASSWORD:-}"
 DOMAIN="${DOMAIN:-auto}"
 API_DOMAIN="${DFLOW_API_DOMAIN:-${API_DOMAIN:-}}"
 APPS_DOMAIN="${DFLOW_APPS_DOMAIN:-${APPS_DOMAIN:-}}"
@@ -59,6 +61,7 @@ APPS_DOMAIN_SET=0
 EMAIL_SET=0
 TUNNEL_SET=0
 PASSWORD_SET=0
+REGISTRY_PASSWORD_SET=0
 TRAEFIK_CONFIG_CHANGED=0
 TRAEFIK_HOST_IP=""
 GOARCH_NAME=""
@@ -92,6 +95,7 @@ Usage: sudo ./scripts/install.sh [options]
   --letsencrypt-staging     use the Let's Encrypt staging issuer
   --tunnel-token TOKEN      Cloudflare Tunnel token when this host has no public IPv4
   --admin-password PASS     API password for user admin (generated and saved when omitted)
+  --registry-password PASS  registry password (generated and saved when omitted)
   --version TAG             install this release, for example v0.0.3
   --from-checkout           build the CLI and server image from this checkout
 
@@ -99,8 +103,9 @@ With no domain flags on a terminal, the script asks for the API host, the apps
 domain, and an email. Press Enter to keep <public-ipv4>.sslip.io.
 
 With no --admin-password, the script generates a random admin password, stores
-it in Secret dflow-generated-passwords, and reuses it on the next run. Read it
-again with:
+it in Secret dflow-generated-passwords, and reuses it on the next run. A saved
+value of "password" or "changeme" is an old default: it is replaced, and the
+log says so. Read the new password with:
 
   kubectl -n dflow get secret dflow-generated-passwords -o jsonpath='{.data.adminPassword}' | base64 -d; echo
 
@@ -191,6 +196,17 @@ parse_args() {
       --admin-password=*)
         ADMIN_PASSWORD="${1#--admin-password=}"
         PASSWORD_SET=1
+        shift
+        ;;
+      --registry-password)
+        [[ $# -ge 2 ]] || die "--registry-password needs a value"
+        REGISTRY_PASSWORD="$2"
+        REGISTRY_PASSWORD_SET=1
+        shift 2
+        ;;
+      --registry-password=*)
+        REGISTRY_PASSWORD="${1#--registry-password=}"
+        REGISTRY_PASSWORD_SET=1
         shift
         ;;
       --version)
@@ -348,10 +364,14 @@ load_saved_endpoints() {
   local saved="${STATE_DIR}/install.env"
   [[ -f "$saved" ]] || return 1
   local keep_password="$ADMIN_PASSWORD"
+  local keep_registry="${REGISTRY_PASSWORD:-}"
   # shellcheck disable=SC1090
   source "$saved"
   if [[ "$PASSWORD_SET" -eq 1 ]]; then
     ADMIN_PASSWORD="$keep_password"
+  fi
+  if [[ "${REGISTRY_PASSWORD_SET:-0}" -eq 1 ]]; then
+    REGISTRY_PASSWORD="$keep_registry"
   fi
   [[ -n "${API_HOST:-}" && -n "${APPS_BASE:-}" ]] || return 1
   DOMAIN="$APPS_BASE"
@@ -1255,6 +1275,7 @@ CURL_INSECURE=$(printf '%q' "$CURL_INSECURE")
 PUBLIC_IP=$(printf '%q' "$PUBLIC_IP")
 ADMIN_USER=$(printf '%q' "$ADMIN_USER")
 ADMIN_PASSWORD=$(printf '%q' "$ADMIN_PASSWORD")
+REGISTRY_PASSWORD=$(printf '%q' "${REGISTRY_PASSWORD:-}")
 IMAGE=$(printf '%q' "$IMAGE")
 IMAGE_TAG=$(printf '%q' "$image_tag")
 RELEASE_TAG=$(printf '%q' "${RELEASE_TAG:-}")
@@ -1265,16 +1286,47 @@ EOF
   chmod 600 "${STATE_DIR}/install.env"
 }
 
+# Old chart and installer defaults. They are not secrets and must not survive an upgrade.
+is_known_default_secret() {
+  case "${1:-}" in
+    password|changeme) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+replace_known_default_passwords() {
+  if is_known_default_secret "${ADMIN_PASSWORD:-}"; then
+    log "warning: replaced the old default admin password. Log in with the new password printed at the end of this run. The old password no longer works."
+    ADMIN_PASSWORD=""
+  fi
+  if is_known_default_secret "${REGISTRY_PASSWORD:-}"; then
+    log "warning: replaced the old default registry password. Use the new registry password printed at the end of this run. The old password no longer works."
+    REGISTRY_PASSWORD=""
+  fi
+}
+
+read_generated_secret_key() {
+  local key="$1" raw=""
+  if [[ -r "${KUBECONFIG_PATH}" ]] && command -v kubectl >/dev/null 2>&1; then
+    raw="$(kubectl --kubeconfig "$KUBECONFIG_PATH" -n dflow get secret dflow-generated-passwords -o jsonpath="{.data.${key}}" 2>/dev/null || true)"
+    if [[ -n "$raw" ]]; then
+      printf '%s' "$raw" | base64 -d 2>/dev/null || true
+      return 0
+    fi
+  fi
+  return 0
+}
+
 ensure_admin_password() {
+  replace_known_default_passwords
   if [[ -n "${ADMIN_PASSWORD:-}" ]]; then
     return 0
   fi
   local from_secret=""
-  if [[ -r "${KUBECONFIG_PATH}" ]] && command -v kubectl >/dev/null 2>&1; then
-    from_secret="$(kubectl --kubeconfig "$KUBECONFIG_PATH" -n dflow get secret dflow-generated-passwords -o jsonpath='{.data.adminPassword}' 2>/dev/null || true)"
-    if [[ -n "$from_secret" ]]; then
-      from_secret="$(printf '%s' "$from_secret" | base64 -d 2>/dev/null || true)"
-    fi
+  from_secret="$(read_generated_secret_key adminPassword)"
+  if is_known_default_secret "$from_secret"; then
+    log "warning: replaced the old default admin password stored in secret dflow-generated-passwords. Log in with the new password printed at the end of this run. The old password no longer works."
+    from_secret=""
   fi
   if [[ -n "$from_secret" ]]; then
     ADMIN_PASSWORD="$from_secret"
@@ -1286,22 +1338,59 @@ ensure_admin_password() {
   log "generated a random admin password; Secret dflow-generated-passwords stores it"
 }
 
+ensure_registry_password() {
+  local had_value=0
+  if [[ -n "${REGISTRY_PASSWORD:-}" ]]; then
+    had_value=1
+  fi
+  replace_known_default_passwords
+  if [[ -n "${REGISTRY_PASSWORD:-}" ]]; then
+    return 0
+  fi
+  local from_secret=""
+  from_secret="$(read_generated_secret_key registryPassword)"
+  if is_known_default_secret "$from_secret"; then
+    log "warning: replaced the old default registry password stored in secret dflow-generated-passwords. The old password no longer works."
+    from_secret=""
+  fi
+  if [[ -n "$from_secret" ]]; then
+    REGISTRY_PASSWORD="$from_secret"
+    log "reusing the registry password from secret dflow-generated-passwords"
+    return 0
+  fi
+  REGISTRY_PASSWORD="$(openssl rand -hex 24)"
+  [[ -n "$REGISTRY_PASSWORD" ]] || die "could not generate a registry password"
+  if [[ "$had_value" -eq 0 && -r "${KUBECONFIG_PATH}" ]] && command -v helm >/dev/null 2>&1 && helm --kubeconfig "$KUBECONFIG_PATH" status dflow -n dflow >/dev/null 2>&1; then
+    log "warning: replaced the old default registry password. Docker login with changeme no longer works. The new password is printed at the end of this run."
+  else
+    log "generated a random registry password; Secret dflow-generated-passwords stores it"
+  fi
+}
+
 apply_dflow_release() {
   ensure_admin_password
+  ensure_registry_password
   resolve_chart
   mkdir -p "$STATE_DIR"
   local image_tag="${IMAGE##*:}"
+  local password_checksum
+  password_checksum="$(printf '%s' "$ADMIN_PASSWORD" | sha256sum | awk '{print $1}')"
+  umask 077
   cat > "${STATE_DIR}/values.yaml" <<EOF
 global:
   domain: $(yaml_quote "$DOMAIN")
   tlsIssuer: $(yaml_quote "$TLS_ISSUER")
   tlsIssuerEmail: $(yaml_quote "$LE_EMAIL")
+  registryPassword: $(yaml_quote "$REGISTRY_PASSWORD")
 $(if [[ -n "$APPS_DOMAIN_VALUE" ]]; then printf '  appsDomain: %s\n' "$(yaml_quote "$APPS_DOMAIN_VALUE")"; fi)
 certManager:
   install: false
   enabled: true
 dflowUI:
   enabled: false
+dex:
+  podAnnotations:
+    checksum/generated-passwords: $(yaml_quote "$password_checksum")
 api:
   adminPassword: $(yaml_quote "$ADMIN_PASSWORD")
 ingress:
@@ -1313,6 +1402,7 @@ image:
   dflow:
     tag: $(yaml_quote "$image_tag")
 EOF
+  chmod 600 "${STATE_DIR}/values.yaml"
 
   log "dFlow chart (${CHART_REF}, image tag ${image_tag})"
   helm upgrade --install dflow "$CHART_REF" \
@@ -1581,7 +1671,7 @@ self_test() {
   fi
 
   log "CLI self-test"
-  log "API https://${API_HOST} user ${ADMIN_USER} password ${ADMIN_PASSWORD}"
+  log "API https://${API_HOST} user ${ADMIN_USER}"
   export PATH="/usr/local/bin:${PATH}"
   local -a login_args=(-u "$ADMIN_USER" -p "$ADMIN_PASSWORD")
   if [[ "${CURL_INSECURE:-1}" == "1" ]]; then
@@ -1673,6 +1763,7 @@ dFlow is installed.
   API:       ${api}
   User:      ${ADMIN_USER}
   Password:  ${ADMIN_PASSWORD}
+  Registry:  user admin, password ${REGISTRY_PASSWORD}
   Apps:      https://<app>.${APPS_BASE}
   TLS:       ${TLS_ISSUER}
 
@@ -1702,8 +1793,9 @@ keeps it. Read it again with:
   kubectl -n dflow get secret dflow-generated-passwords -o jsonpath='{.data.adminPassword}' | base64 -d; echo
 
 The dflow user password is .data.dflowPassword in that Secret. Dex users
-admin@dflow.sh and dflow@dflow.sh use those same passwords. Rotate the admin
-password with --admin-password, then:
+admin@dflow.sh and dflow@dflow.sh use those same passwords. The registry
+password is .data.registryPassword. Rotate the admin password with
+--admin-password, or the registry password with --registry-password, then:
 
   kubectl -n dflow rollout restart deployment/dex
 

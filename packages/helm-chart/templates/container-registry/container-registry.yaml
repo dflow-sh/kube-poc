@@ -1,4 +1,6 @@
 {{- if .Values.containerregistry.enabled }}
+{{- include "dflow.ensureGeneratedCredentials" . -}}
+{{- $cred := index . "dflowGeneratedCredentials" -}}
 ---
 apiVersion: v1
 kind: Secret
@@ -6,8 +8,9 @@ metadata:
   name: auth
   namespace: {{ .Release.Namespace }}
 stringData:
-  # The only supported password format is bcrypt
-  htpasswd:  {{ htpasswd .Values.global.registryUsername .Values.global.registryPassword | quote }}
+  # The only supported password format is bcrypt. Reuse the hash stored with
+  # the generated password so a rerun does not roll the registry.
+  htpasswd: {{ printf "%s:%s" .Values.global.registryUsername (index $cred "registryPasswordBcrypt") | quote }}
 ---
 apiVersion: v1
 kind: Service
