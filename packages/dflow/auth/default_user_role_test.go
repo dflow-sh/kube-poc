@@ -75,6 +75,25 @@ var _ = Describe("default user role", func() {
 			Expect(admin.IsAllowed(http.MethodDelete, "/api/v1/builderimages/:name", nil)).To(BeTrue())
 		})
 
+		It("grants builder image write to system manager only", func() {
+			contents := readChart("templates", "rbac-roles.yaml")
+			Expect(strings.Count(contents, "builderimage_write")).To(Equal(1))
+
+			for _, id := range []string{"application_manager", "application_developer"} {
+				section := roleSection(contents, id)
+				Expect(section).NotTo(ContainSubstring("builderimage_write"))
+				Expect(section).To(ContainSubstring("builderimage_read"))
+				Expect(section).To(ContainSubstring("app_create"))
+				Expect(section).To(ContainSubstring("app_stage"))
+				Expect(section).To(ContainSubstring("app_logs"))
+			}
+
+			system := roleSection(contents, "system_manager")
+			Expect(system).To(ContainSubstring("builderimage_write"))
+			Expect(system).To(ContainSubstring("app_create"))
+			Expect(system).To(ContainSubstring("app_stage"))
+		})
+
 		DescribeTable("returns 403 for a user-role account and 200 for an admin",
 			func(method, route, url string) {
 				userResponse := callWithRole(method, route, url, user)
@@ -115,6 +134,17 @@ func userRoleChart() string {
 
 func serverChart() string {
 	return readChart("templates", "server.yaml")
+}
+
+func roleSection(contents, id string) string {
+	marker := "id: " + id + "\n"
+	for _, part := range strings.Split(contents, "\n---") {
+		if strings.Contains(part, marker) {
+			return part
+		}
+	}
+	Fail("missing role " + id)
+	return ""
 }
 
 func defaultUserRoleActions() []string {
