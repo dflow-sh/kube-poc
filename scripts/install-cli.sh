@@ -16,14 +16,15 @@ usage() {
 Usage:
   ./scripts/install-cli.sh --api https://dflow.<domain> --user admin --password 'password'
   ./scripts/install-cli.sh --api https://paas.dflow.sh --apps-domain apps.dflow.sh
-  GITHUB_TOKEN=... ./scripts/install-cli.sh --api https://dflow.<domain>
-  ./scripts/install-cli.sh --version v1.0.0 --api https://dflow.<domain>
+  ./scripts/install-cli.sh --version v0.0.4 --api https://dflow.<domain>
   ./scripts/install-cli.sh --from-checkout
 
 Installs the darwin or linux CLI for this CPU to /usr/local/bin/dflow.
-A GitHub Release asset is used when GITHUB_TOKEN, GH_TOKEN, or gh auth login
-can read the private repository. If that asset cannot be downloaded, the
-script exits non-zero. --from-checkout builds from this checkout with go build.
+The binary is downloaded from the public GitHub Release without a token:
+https://github.com/dflow-sh/kube-poc/releases/download/<tag>/dflow-<os>-<arch>
+SHA256 is checked against checksums.txt in that release. If the asset or
+the checksum cannot be downloaded, the script exits non-zero.
+--from-checkout builds from this checkout with go build.
 
 When --api is set, the script logs in, pushes traefik/whoami, checks HTTP 200,
 deletes the app, and deletes the sample namespace. Without --api it prints
@@ -102,7 +103,7 @@ if [[ "$FROM_CHECKOUT" -eq 1 ]]; then
   log "CLI will be built from this checkout (--from-checkout)"
 elif [[ -n "$REQUESTED" ]]; then
   load_release_json "$REQUESTED" \
-    || die "GitHub release ${REQUESTED} was not found. Set GITHUB_TOKEN or GH_TOKEN, or run gh auth login. Refusing to build the checkout CLI."
+    || die "GitHub release ${REQUESTED} was not found. Refusing to build the checkout CLI."
 else
   RELEASE_TAG_REQUEST=latest
 fi
