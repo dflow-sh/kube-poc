@@ -1296,11 +1296,11 @@ is_known_default_secret() {
 
 replace_known_default_passwords() {
   if is_known_default_secret "${ADMIN_PASSWORD:-}"; then
-    log "warning: replaced the old default admin password. Log in with the new password printed at the end of this run. The old password no longer works."
+    log "warning: replaced the old default admin password. It no longer works. Read the new one with: kubectl -n dflow get secret dflow-generated-passwords -o jsonpath='{.data.adminPassword}' | base64 -d; echo"
     ADMIN_PASSWORD=""
   fi
   if is_known_default_secret "${REGISTRY_PASSWORD:-}"; then
-    log "warning: replaced the old default registry password. Use the new registry password printed at the end of this run. The old password no longer works."
+    log "warning: replaced the old default registry password. It no longer works. Read the new one with: kubectl -n dflow get secret dflow-generated-passwords -o jsonpath='{.data.registryPassword}' | base64 -d; echo"
     REGISTRY_PASSWORD=""
   fi
 }
@@ -1325,7 +1325,7 @@ ensure_admin_password() {
   local from_secret=""
   from_secret="$(read_generated_secret_key adminPassword)"
   if is_known_default_secret "$from_secret"; then
-    log "warning: replaced the old default admin password stored in secret dflow-generated-passwords. Log in with the new password printed at the end of this run. The old password no longer works."
+    log "warning: replaced the old default admin password stored in secret dflow-generated-passwords. It no longer works. Read the new one with: kubectl -n dflow get secret dflow-generated-passwords -o jsonpath='{.data.adminPassword}' | base64 -d; echo"
     from_secret=""
   fi
   if [[ -n "$from_secret" ]]; then
@@ -1385,7 +1385,7 @@ ensure_registry_password() {
   REGISTRY_PASSWORD="$(openssl rand -hex 24)"
   [[ -n "$REGISTRY_PASSWORD" ]] || die "could not generate a registry password"
   if [[ "$had_value" -eq 0 && -r "${KUBECONFIG_PATH}" ]] && command -v helm >/dev/null 2>&1 && helm --kubeconfig "$KUBECONFIG_PATH" status dflow -n dflow >/dev/null 2>&1; then
-    log "warning: replaced the old default registry password. Docker login with changeme no longer works. The new password is printed at the end of this run."
+    log "warning: replaced the old default registry password. Docker login with changeme no longer works. Read the new one with: kubectl -n dflow get secret dflow-generated-passwords -o jsonpath='{.data.registryPassword}' | base64 -d; echo"
   else
     log "generated a random registry password; Secret dflow-generated-passwords stores it"
   fi
