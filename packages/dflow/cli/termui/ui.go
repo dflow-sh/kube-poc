@@ -24,6 +24,7 @@ import (
 	"github.com/fatih/color"
 	"github.com/kyokomi/emoji"
 	"github.com/olekukonko/tablewriter"
+	"github.com/olekukonko/tablewriter/tw"
 	"github.com/spf13/viper"
 )
 
@@ -303,16 +304,14 @@ func (u *Message) Msg(message string) {
 	}
 
 	for idx, headers := range u.tableHeaders {
-		table := tablewriter.NewWriter(u.ui.output)
-		table.SetHeader(headers)
-		table.SetBorders(tablewriter.Border{Left: true, Top: false, Right: true, Bottom: false})
-		table.SetCenterSeparator("|")
+		table := tablewriter.NewTable(u.ui.output, tablewriter.WithRendition(pipeTableRendition()))
+		table.Header(headers)
 
 		if idx < len(u.tableData) {
-			table.AppendBulk(u.tableData[idx])
+			_ = table.Bulk(u.tableData[idx])
 		}
 
-		table.Render()
+		_ = table.Render()
 	}
 
 	if u.end > -1 {
@@ -489,4 +488,40 @@ func readInt() int {
 // verbosity returns the verbosity argument
 func verbosity() int {
 	return viper.GetInt("verbosity")
+}
+
+// pipeTableRendition keeps the previous ASCII table: left and right borders,
+// no top or bottom border, and "|" at every junction.
+func pipeTableRendition() tw.Rendition {
+	return tw.Rendition{
+		Borders: tw.Border{
+			Left:   tw.On,
+			Right:  tw.On,
+			Top:    tw.Off,
+			Bottom: tw.Off,
+		},
+		Settings: tw.Settings{
+			Lines: tw.Lines{
+				ShowTop:        tw.Off,
+				ShowBottom:     tw.Off,
+				ShowHeaderLine: tw.On,
+				ShowFooterLine: tw.Off,
+			},
+		},
+		Symbols: tw.NewSymbolCustom("pipe").
+			WithRow("-").
+			WithColumn("|").
+			WithCenter("|").
+			WithTopLeft("|").
+			WithTopMid("|").
+			WithTopRight("|").
+			WithMidLeft("|").
+			WithMidRight("|").
+			WithBottomLeft("|").
+			WithBottomMid("|").
+			WithBottomRight("|").
+			WithHeaderLeft("|").
+			WithHeaderMid("|").
+			WithHeaderRight("|"),
+	}
 }
