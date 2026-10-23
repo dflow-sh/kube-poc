@@ -432,19 +432,18 @@ The chart installs, when you turn the switches on:
 - the container registry (`containerregistry.enabled`, default true)
 - S3-compatible storage via SeaweedFS (`seaweedfs.enabled`, default true)
 - railpack as the default builder (`server.defaultBuilderImage`, reported by `/info` as `default_builder_image`)
-- the Paketo builder image reference (`image.builder`, `ghcr.io/dflow-sh/mirror/builder-jammy-full`), used when `--build-mode buildpack` passes a builder image
-- the Railpack BuildKit image (`image.railpack`, `ghcr.io/dflow-sh/mirror/buildkit`), used when a push omits `--build-mode` (`server.defaultBuildMode: railpack`)
+- the Railpack BuildKit image (`image.railpack`), used when a push omits `--build-mode` (`server.defaultBuildMode: railpack`)
 
-s3gw is the other S3-compatible option and is off by default. Its images are not part of the mirror. MinIO is not installed by the chart. To use MinIO, set `seaweedfs.enabled=false`, `s3gw.enabled=false`, and set `s3.endpoint`, `s3.accessKeyID`, `s3.secretAccessKey`, and `s3.bucket`.
+No Paketo builder image is installed. Buildpack mode needs a builder image passed with the push. MinIO is not installed. To use another S3 store, set `seaweedfs.enabled=false` and set `s3.endpoint`, `s3.accessKeyID`, `s3.secretAccessKey`, and `s3.bucket`.
 
-Dex, the source unpacker, and the Dockerfile builder are digest-pinned images under `ghcr.io/dflow-sh/mirror`. See `images/mirror.yaml` and `docs/mirror-decisions.md`. A container-image push does not pull the Paketo builder. Development catalog entries still name Bitnami chart repositories. `install.sh` does not pull those.
+Platform images are digest-pinned to their upstream registries. Development catalog entries still name Bitnami chart repositories. `install.sh` does not pull those.
 
 Install cert-manager from the chart bundled in this repo, then dFlow. The dFlow manifests include `Certificate` resources, so the cert-manager CRDs have to exist before that install.
 
 ```bash
 export DOMAIN=203.0.113.10.sslip.io   # or apps.example.com
 
-helm upgrade --install cert-manager packages/helm-chart/charts/cert-manager-v1.19.3.tgz \
+helm upgrade --install cert-manager packages/helm-chart/charts/cert-manager-v1.19.6.tgz \
   --namespace cert-manager --create-namespace \
   --values packages/helm-chart/cert-manager-images.yaml \
   --set crds.enabled=true
@@ -515,7 +514,7 @@ kubectl get nodes
 Then follow sections 2 through 5. Load the server image into every node that might run `dflow-server`, or push it to a registry the cluster can pull. Set `ingress.ingressClassName` if the cluster does not use the default ingress class.
 
 ```bash
-helm upgrade --install cert-manager packages/helm-chart/charts/cert-manager-v1.19.3.tgz \
+helm upgrade --install cert-manager packages/helm-chart/charts/cert-manager-v1.19.6.tgz \
   --namespace cert-manager --create-namespace \
   --values packages/helm-chart/cert-manager-images.yaml \
   --set crds.enabled=true

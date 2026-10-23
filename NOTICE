@@ -17,8 +17,7 @@ Changes: user-visible product naming in this distribution is dFlow.
 Copyright headers and license notices in derived files are kept.
 
 This repository builds the dflow CLI and the dflow-server API. Other images
-the chart runs are copied into ghcr.io/dflow-sh/mirror and pinned by digest.
-See images/mirror.yaml.
+the chart runs are pinned by digest to their upstream registries.
 
 Application workloads are deployed with charts derived from the upstream
 application charts (application 0.1.26, the Gateway API variant 0.1.26, and

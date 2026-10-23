@@ -28,7 +28,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Install Helm
         run: |
-          curl -fsSL https://get.helm.sh/helm-v3.17.3-linux-amd64.tar.gz -o /tmp/helm.tgz
+          curl -fsSL https://get.helm.sh/helm-v3.22.1-linux-amd64.tar.gz -o /tmp/helm.tgz
           tar -C /tmp -xzf /tmp/helm.tgz
           sudo install -m 0755 /tmp/linux-amd64/helm /usr/local/bin/helm
       - name: Package Helm chart
@@ -39,7 +39,7 @@ jobs:
           work="$(mktemp -d)"
           cp -a packages/helm-chart "$work/helm-chart"
           python3 - "$version" "$GITHUB_REF_NAME" "$work/helm-chart" <<'PY'
-          import pathlib, sys
+          import pathlib, re, sys
           version, tag, root = sys.argv[1], sys.argv[2], pathlib.Path(sys.argv[3])
           chart = root / "Chart.yaml"
           text = chart.read_text()
@@ -76,6 +76,14 @@ jobs:
                   needle.replace("tag: v0.0.0-dev", f"tag: {tag}"),
                   1,
               )
+          # The git checkout pins dflow-server by digest. The packaged chart
+          # follows the release tag, so drop that digest after the tag stamp.
+          raw = re.sub(
+              r"(repository: dflow-sh/dflow-server\n    tag: [^\n]+\n)(?:    #[^\n]*\n)*    digest: sha256:[a-f0-9]{64}\n",
+              r"\1",
+              raw,
+              count=1,
+          )
           values.write_text(raw)
           PY
           mkdir -p chart-package

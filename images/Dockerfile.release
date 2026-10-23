@@ -11,7 +11,7 @@
 # Build context is prepared by GoReleaser (see .goreleaser.yaml).
 # The CLI binary is already compiled. Do not run go build in this image.
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 ARG TARGETPLATFORM
 COPY ${TARGETPLATFORM}/dflow /dflow
 COPY docs/references/api/swagger.json /swagger.json

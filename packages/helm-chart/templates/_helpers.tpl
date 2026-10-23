@@ -127,24 +127,6 @@ Host name of the SeaweedFS S3 service dflow installed
 {{- end -}}
 
 {{/*
-URL of the s3gw dflow installed
-*/}}
-{{- define "dflow.s3gw-url" -}}
-{{- if .Values.s3gw.enabled -}}
-{{-   printf "%s.%s.svc.cluster.local" .Values.s3gw.serviceName .Release.Namespace }}
-{{- else -}}
-{{-  .Values.s3.endpoint }}
-{{- end -}}
-{{- end -}}
-
-{{/*
-Host name of the s3gw dflow installed
-*/}}
-{{- define "dflow.s3gw-hostname" -}}
-{{- printf "%s.%s.svc.cluster.local" .Values.s3gw.serviceName .Release.Namespace }}
-{{- end -}}
-
-{{/*
 PVC cleanup hooks for bitnami helm chart based catalog services
 # https://github.com/dflow-sh/kube-poc/packages/dflow/issues/1386
 # https://docs.bitnami.com/kubernetes/apps/aspnet-core/administration/deploy-extra-resources/

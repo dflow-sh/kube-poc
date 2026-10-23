@@ -6,8 +6,9 @@
 #   scripts/image-inventory.sh --check
 #   scripts/image-inventory.sh --resolve
 #
-# --check fails unless each image is either ghcr.io/dflow-sh/mirror/<name>@sha256:<digest>
-# or another ghcr.io/dflow-sh image (the server and UI tags).
+# --check fails on a floating tag, on latest, and on an image with no digest.
+# A registry other than one host is fine. The server image in the install
+# scripts may use a GitHub release tag; the rendered chart still needs a digest.
 # --resolve asks the registry for tag digests. Digest pins are already resolved.
 set -euo pipefail
 
@@ -24,8 +25,8 @@ for arg in "$@"; do
   esac
 done
 
-HELM_VERSION="3.19.0"
-HELM_SHA256="a7f81ce08007091b86d8bd696eb4d86b8d0f2e1b9f6c714be62f82f96a594496"
+HELM_VERSION="3.22.1"
+HELM_SHA256="896cf63684a42a723d61c980369d6e588330927deb13676ca0d85006dd6da0ea"
 
 ensure_helm() {
   if command -v helm >/dev/null 2>&1; then
@@ -63,7 +64,8 @@ helm template dflow packages/helm-chart \
   --set global.domain=example.com \
   > "${render_dir}/dflow.yaml"
 
-helm template cert-manager packages/helm-chart/charts/cert-manager-v1.19.3.tgz \
+cm_chart="$(echo packages/helm-chart/charts/cert-manager-*.tgz)"
+helm template cert-manager "${cm_chart}" \
   --namespace cert-manager \
   --values packages/helm-chart/cert-manager-images.yaml \
   --set crds.enabled=true \
@@ -85,20 +87,21 @@ render_dir = pathlib.Path(os.environ["RENDER_DIR"])
 do_check = os.environ["DO_CHECK"] == "1"
 do_resolve = os.environ["DO_RESOLVE"] == "1"
 
+tag_or_var = r"(?:[A-Za-z0-9._-]+|\$\{[A-Za-z0-9_]+\}|\$\([A-Za-z0-9_]+\))"
 ref_re = re.compile(
     r"^(?:[a-z0-9][a-z0-9.-]*(?:\.[a-z0-9.-]+)+/)?"
     r"[a-z0-9][a-z0-9._-]*(?:/[a-z0-9][a-z0-9._-]*)*"
-    r"(?::(?:[A-Za-z0-9._-]+|\$\{[A-Za-z0-9_]+\}|\$\([A-Za-z0-9_]+\))|@sha256:[a-f0-9]{64})$"
+    rf"(?:(?::{tag_or_var})(?:@sha256:[a-f0-9]{{64}})?|@sha256:[a-f0-9]{{64}})$"
 )
 rendered_re = re.compile(
-    r"(?:ghcr\.io|quay\.io|docker\.io|registry\.k8s\.io)/"
+    r"(?:ghcr\.io|quay\.io|docker\.io|registry\.k8s\.io|gcr\.io|registry\.suse\.com)/"
     r"[a-z0-9][a-z0-9._/-]*"
-    r"(?::[A-Za-z0-9][A-Za-z0-9._-]*|@sha256:[a-f0-9]{64})"
+    r"(?::[A-Za-z0-9][A-Za-z0-9._-]*)?(?:@sha256:[a-f0-9]{64})?"
 )
 shell_re = re.compile(
-    r"(?:ghcr\.io|quay\.io|docker\.io)/"
+    r"(?:ghcr\.io|quay\.io|docker\.io|gcr\.io|registry\.suse\.com)/"
     r"[a-z0-9][a-z0-9._/-]*"
-    r"(?::(?:[A-Za-z0-9._-]+|\$\{[A-Za-z0-9_]+\}|\$\([A-Za-z0-9_]+\))|@sha256:[a-f0-9]{64})"
+    rf"(?:(?::{tag_or_var})(?:@sha256:[a-f0-9]{{64}})?|@sha256:[a-f0-9]{{64}})"
 )
 
 rows = {}
@@ -143,6 +146,9 @@ def from_values(path):
             continue
         indent = len(repo_match.group(1))
         repo = repo_match.group(2).strip("'\"")
+        if repo in {"dflow-sh/dflow-server", "dflow-sh/dflow-ui"}:
+            index += 1
+            continue
         tag = ""
         digest = ""
         cursor = index + 1
@@ -168,7 +174,7 @@ def from_values(path):
             cursor += 1
         if repo.endswith("@sha256") and re.fullmatch(r"[a-f0-9]{64}", tag):
             consider(f"{repo}:{tag}", path.name)
-        elif "mirror/" in repo or repo.startswith("ghcr.io/dflow-sh/"):
+        elif "/" in repo:
             if digest:
                 if not digest.startswith("sha256:"):
                     digest = "sha256:" + digest
@@ -190,13 +196,6 @@ from_values(root / "packages/helm-chart/cert-manager-images.yaml")
 # Dex, reflector, and SeaweedFS encode the pin as repository@sha256 plus a
 # hex tag. The rendered manifest is the source of truth for those.
 
-mirror_targets = {}
-mirror_text = (root / "images/mirror.yaml").read_text()
-for target in re.findall(r"^\s*target:\s*(\S+)\s*$", mirror_text, re.M):
-    target = target.strip("'\"")
-    image_name, _, tag = target.rsplit("/", 1)[-1].partition(":")
-    mirror_targets[image_name] = tag
-
 digest_re = re.compile(r"^(.+)@(?P<digest>sha256:[a-f0-9]{64})$")
 tag_re = re.compile(r"^(?P<name>.+):(?P<tag>[^:]+)$")
 
@@ -209,14 +208,14 @@ def split_ref(ref):
     if pinned:
         base = pinned.group(1)
         digest = pinned.group("digest")
+        if ":" in base.rsplit("/", 1)[-1]:
+            base, tag = base.rsplit(":", 1)
     else:
         # A registry port would be host:port/name. Tags are the last colon
         # only when it appears after the last slash.
         if ":" in ref.rsplit("/", 1)[-1]:
             base, tag = ref.rsplit(":", 1)
     image_name = base.rsplit("/", 1)[-1]
-    if not tag and image_name in mirror_targets:
-        tag = mirror_targets[image_name]
     return image_name, tag, digest
 
 
@@ -239,12 +238,17 @@ def resolve_digest(ref, digest):
 
 
 def allowed(ref):
-    if ref.startswith("ghcr.io/dflow-sh/mirror/"):
-        return "@sha256:" in ref and bool(re.search(r"@sha256:[a-f0-9]{64}$", ref))
-    if ref.startswith("ghcr.io/dflow-sh/"):
-        rest = ref[len("ghcr.io/dflow-sh/") :]
-        # Product images keep moving tags. The mirror path is handled above.
-        return not rest.startswith("mirror/")
+    tail = ref.rsplit("/", 1)[-1]
+    if tail == "latest" or tail.endswith(":latest") or ":latest@" in tail:
+        return False
+    if re.search(r"@sha256:[a-f0-9]{64}$", ref):
+        return True
+    # The installer selects a GitHub release tag, or a local checkout tag.
+    # The rendered server pod is still required to carry a digest.
+    if ref.startswith("ghcr.io/dflow-sh/dflow-server:") or ref.startswith(
+        "ghcr.io/dflow-sh/dflow-ui:"
+    ):
+        return ":latest" not in ref
     return False
 
 
@@ -255,15 +259,6 @@ for ref in sorted(rows):
     table.append((image_name, tag, digest, ref))
     if do_check and not allowed(ref):
         errors.append(f"not allowed: {ref} ({rows[ref]})")
-
-if do_check:
-    seen_names = {name for name, _, _, _ in table}
-    for image_name in sorted(mirror_targets):
-        if image_name not in seen_names:
-            errors.append(f"mirror target {image_name} is not in the inventory")
-    for image_name, tag, digest, ref in table:
-        if ref.startswith("ghcr.io/dflow-sh/mirror/") and image_name not in mirror_targets:
-            errors.append(f"inventory image {image_name} has no images/mirror.yaml target")
 
 print("name\ttag\tdigest\treference")
 for image_name, tag, digest, ref in table:

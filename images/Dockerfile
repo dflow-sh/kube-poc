@@ -8,7 +8,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 ARG DIST_BINARY=apps/cli/dist/dflow
 COPY ${DIST_BINARY} /dflow
 COPY docs/references/api/swagger.json /swagger.json

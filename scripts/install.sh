@@ -31,11 +31,13 @@ TUNNEL_TOKEN="${DFLOW_TUNNEL_TOKEN:-${CLOUDFLARE_TUNNEL_TOKEN:-${TUNNEL_TOKEN:-}
 LE_STAGING="${DFLOW_LETSENCRYPT_STAGING:-0}"
 SAMPLE_NAMESPACE="${SAMPLE_NAMESPACE:-sample}"
 SAMPLE_APP="${SAMPLE_APP:-hello}"
-SAMPLE_IMAGE="${SAMPLE_IMAGE:-ghcr.io/dflow-sh/mirror/whoami@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44}"
+SAMPLE_IMAGE="${SAMPLE_IMAGE:-docker.io/traefik/whoami:v1.12.0@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44}"
 SAMPLE_ENV="${SAMPLE_ENV:-WHOAMI_PORT_NUMBER=8080}"
 GO_VERSION="${GO_VERSION:-1.26.0}"
-HELM_VERSION="${HELM_VERSION:-v3.17.3}"
+HELM_VERSION="${HELM_VERSION:-v3.22.1}"
 KUBECONFIG_PATH="${KUBECONFIG_PATH:-/etc/rancher/k3s/k3s.yaml}"
+# stable channel on 2026-10-23. latest is v1.37.1+k3s1 and is not this pin.
+INSTALL_K3S_VERSION="${INSTALL_K3S_VERSION:-v1.36.5+k3s1}"
 STATE_DIR="${STATE_DIR:-/var/lib/dflow}"
 
 ROOT=""
@@ -216,8 +218,19 @@ require_checkout() {
   [[ -n "$source" && -f "$source" ]] || die "run scripts/install.sh from a git checkout. A public raw URL is not the install path. See docs/INSTALL.md."
   ROOT="$(cd "$(dirname "$source")/.." && pwd)"
   [[ -f "$ROOT/packages/helm-chart/Chart.yaml" ]] || die "packages/helm-chart/Chart.yaml is missing. Clone dflow-sh/kube-poc and run sudo ./scripts/install.sh from that checkout."
-  [[ -f "$ROOT/packages/helm-chart/charts/cert-manager-v1.19.3.tgz" ]] || die "the vendored cert-manager chart is missing from this checkout"
+  cert_manager_chart >/dev/null
   [[ -f "$ROOT/images/Dockerfile" ]] || die "images/Dockerfile is missing from this checkout"
+}
+
+cert_manager_chart() {
+  local found="" extra
+  for extra in "${ROOT}/packages/helm-chart/charts/"cert-manager-*.tgz; do
+    [[ -f "$extra" ]] || die "the vendored cert-manager chart is missing from this checkout"
+    [[ -z "$found" ]] || die "more than one vendored cert-manager chart is present"
+    found="$extra"
+  done
+  [[ -n "$found" ]] || die "the vendored cert-manager chart is missing from this checkout"
+  printf '%s' "$found"
 }
 
 require_ubuntu() {
@@ -631,8 +644,8 @@ install_k3s() {
     NEED_K3S_INSTALL=1
   fi
   if [[ "$NEED_K3S_INSTALL" -eq 1 ]]; then
-    log "install k3s"
-    curl -sfL https://get.k3s.io | sh - \
+    log "install k3s ${INSTALL_K3S_VERSION}"
+    curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="${INSTALL_K3S_VERSION}" sh - \
       || die "k3s install failed"
   elif [[ "$CONFIG_CHANGED" -eq 1 ]]; then
     log "restart k3s to apply server config"
@@ -1283,7 +1296,7 @@ EOF
 
 install_charts() {
   log "cert-manager"
-  helm upgrade --install cert-manager "${ROOT}/packages/helm-chart/charts/cert-manager-v1.19.3.tgz" \
+  helm upgrade --install cert-manager "$(cert_manager_chart)" \
     --namespace cert-manager --create-namespace \
     --values "${ROOT}/packages/helm-chart/cert-manager-images.yaml" \
     --set crds.enabled=true \
