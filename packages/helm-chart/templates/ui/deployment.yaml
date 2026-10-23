@@ -27,7 +27,10 @@ spec:
         fsGroup: 1000
       containers:
       - name: dflow-ui
-        {{ $dflowUiImage := index .Values "image" "dflow-ui" -}}
+        {{- $dflowUiImage := index .Values.image "dflow-ui" | default dict }}
+        {{- if not $dflowUiImage.repository }}
+        {{- fail "dflowUI.enabled requires image.dflow-ui.repository and image.dflow-ui.tag" }}
+        {{- end }}
         image: "{{ default $dflowUiImage.registry (include "registry-url" .) }}{{ $dflowUiImage.repository }}:{{ $dflowUiImage.tag }}"
         imagePullPolicy: {{ .Values.dflowUI.imagePullPolicy }}
         workingDir: /db

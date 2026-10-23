@@ -27,10 +27,8 @@ image:
     # Digest of the published v0.0.4 release. The tag stays v0.0.0-dev so the
     # release workflow can rewrite that line. The pod uses the digest.
     digest: sha256:6bd9a740ceb0e56d014de9c94578c89daf943aadd7ee26101e71bf0ff976d8b8
-  dflow-ui:
-    registry: ghcr.io/
-    repository: dflow-sh/dflow-ui
-    tag: v0.0.0-dev
+  # No UI image is set. dflowUI.enabled stays false. Turning it on requires
+  # image.dflow-ui.repository and image.dflow-ui.tag.
   # Source archive tools. bci-base has GNU tar, find, gzip, and bash.
   # It does not include unzip, bzip2, or xz.
   bash:
@@ -407,8 +405,9 @@ dex:
   # that hash changes. Dex reads its config only at startup.
   staticPasswords: null
   podAnnotations: {}
-  # -- Static clients added after dFlow's own (dflow-api, dflow-cli,
-  # dflow-ui and, with a Rancher URL, rancher-dashboard).
+  # -- Static clients added after dFlow's own (dflow-api, dflow-cli, and,
+  # when dflowUI.enabled is true, the UI client, plus rancher-dashboard
+  # when a Rancher URL is set).
   extraStaticClients: []
   # -- Other top-level Dex settings, such as expiry, logger or frontend.
   # Keys the chart renders itself are rejected: web, issuer, storage, oauth2,

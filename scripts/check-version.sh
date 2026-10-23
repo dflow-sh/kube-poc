@@ -57,7 +57,7 @@ def image_tag(text, name):
     )
     return match.group(1) if match else None
 
-for image_name in ("dflow", "dflow-ui"):
+for image_name in ("dflow",):
     tag = image_tag(values, image_name)
     if tag != version:
         errors.append(f"values image.{image_name}.tag is {tag!r}, want {version!r}")

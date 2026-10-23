@@ -64,12 +64,6 @@ jobs:
                   "    repository: dflow-sh/dflow-server\n"
                   "    tag: v0.0.0-dev\n"
               ),
-              (
-                  "  dflow-ui:\n"
-                  "    registry: ghcr.io/\n"
-                  "    repository: dflow-sh/dflow-ui\n"
-                  "    tag: v0.0.0-dev\n"
-              ),
           ]
           for needle in needles:
               if needle not in raw:
