@@ -12,8 +12,18 @@
 package helm
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"os"
+
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
 	"github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/models"
+	"go.uber.org/zap"
+	"gopkg.in/yaml.v2"
 	helmrelease "helm.sh/helm/v3/pkg/release"
+	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/client-go/rest"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -276,5 +286,81 @@ var _ = Describe("releaseChartConfig()", func() {
 			"tuning": "speed",
 			"port":   "8080",
 		}))
+	})
+})
+
+var _ = Describe("service setup logging", func() {
+	It("does not JSON-encode the REST config or the deploy hook", func() {
+		cfg := &rest.Config{Host: "https://kubernetes.default.svc"}
+		cfg.Wrap(func(rt http.RoundTripper) http.RoundTripper { return rt })
+
+		params := ServiceParameters{
+			AppRef: models.NewAppRef("pg", "workspace"),
+			Cluster: &kubernetes.Cluster{
+				RestConfig: cfg,
+			},
+			CatalogService: models.CatalogService{
+				HelmChart:    "postgresql",
+				ChartVersion: "12.1.6",
+				HelmRepo:     models.HelmRepo{URL: "https://charts.bitnami.com/bitnami"},
+			},
+			Wait: false,
+			PostDeployHook: func(context.Context) error {
+				return nil
+			},
+		}
+
+		_, err := json.Marshal(params)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("transport.WrapperFunc"))
+
+		fields := serviceSetupFields(params)
+		Expect(fields).To(Equal([]any{
+			"namespace", "workspace",
+			"service", "pg",
+			"chart", "postgresql",
+			"version", "12.1.6",
+			"repo", "https://charts.bitnami.com/bitnami",
+			"wait", false,
+		}))
+		for i := 1; i < len(fields); i += 2 {
+			_, err := json.Marshal(fields[i])
+			Expect(err).NotTo(HaveOccurred())
+		}
+	})
+
+	It("recovers a panic in the async service goroutine", func() {
+		logger := zap.NewNop().Sugar()
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			defer recoverServiceGoroutine(logger)
+			panic("boom")
+		}()
+		Eventually(done).Should(BeClosed())
+	})
+})
+
+var _ = Describe("server memory limit", func() {
+	It("is large enough to parse a Helm repository index", func() {
+		// packages/dflow/helm -> packages/helm-chart
+		raw, err := os.ReadFile("../../helm-chart/values.yaml")
+		Expect(err).NotTo(HaveOccurred())
+
+		var doc struct {
+			Server struct {
+				Resources struct {
+					Limits struct {
+						Memory string `yaml:"memory"`
+					} `yaml:"limits"`
+				} `yaml:"resources"`
+			} `yaml:"server"`
+		}
+		Expect(yaml.Unmarshal(raw, &doc)).To(Succeed())
+
+		got := resource.MustParse(doc.Server.Resources.Limits.Memory)
+		// helm repo add of charts.bitnami.com peaked at about 517MB.
+		floor := resource.MustParse("1Gi")
+		Expect(got.Cmp(floor)).To(BeNumerically(">=", 0))
 	})
 })
