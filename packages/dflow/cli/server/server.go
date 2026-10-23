@@ -37,6 +37,33 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 )
 
+// apiMiddleware is the authenticated REST chain.
+// gitconfig authorization is enforced in the handlers (read allows global,
+// delete is owner/admin only), which the middleware cannot express without
+// loading the resource.
+func apiMiddleware() []gin.HandlerFunc {
+	return []gin.HandlerFunc{
+		middleware.Authentication,
+		middleware.DFlowVersion,
+		middleware.NamespaceExists,
+		middleware.RoleAuthorization,
+		middleware.NamespaceAuthorization,
+	}
+}
+
+// websocketMiddleware is the authenticated websocket chain.
+// TokenAuth stores the user it just read, and NamespaceAuthorization uses
+// that user. gitconfig has no websocket routes.
+func websocketMiddleware() []gin.HandlerFunc {
+	return []gin.HandlerFunc{
+		middleware.TokenAuth,
+		middleware.DFlowVersion,
+		middleware.NamespaceExists,
+		middleware.RoleAuthorization,
+		middleware.NamespaceAuthorization,
+	}
+}
+
 // tracedPath reports whether a request should be traced by the otelgin
 // middleware. Websocket connections are long-running, so a span covering
 // their whole lifetime doesn't represent a meaningful unit of work and
@@ -141,32 +168,13 @@ func NewHandler() (*gin.Engine, error) {
 
 	// Register api routes
 	{
-		apiRoutesGroup := router.Group(apiv1.Root,
-			middleware.Authentication,
-			middleware.DFlowVersion,
-			middleware.NamespaceExists,
-			middleware.RoleAuthorization,
-			middleware.NamespaceAuthorization,
-			// gitconfig authorization is enforced in the handlers (read allows
-			// global, delete is owner/admin only), which the middleware cannot
-			// express without loading the resource.
-		)
+		apiRoutesGroup := router.Group(apiv1.Root, apiMiddleware()...)
 		apiv1.Lemon(apiRoutesGroup)
 	}
 
 	// Register web socket routes
 	{
-		wapiRoutesGroup := router.Group(apiv1.WsRoot,
-			middleware.TokenAuth,
-			middleware.DFlowVersion,
-			middleware.NamespaceExists,
-			middleware.RoleAuthorization,
-			// NOTE: websocket endpoints rely on TokenAuth + RoleAuthorization.
-			// We intentionally skip NamespaceAuthorization here because token-backed
-			// websocket sessions can observe transient namespace-list lag, causing
-			// intermittent 403 handshake failures in exec/port-forward flows.
-			// gitconfig has no websocket routes
-		)
+		wapiRoutesGroup := router.Group(apiv1.WsRoot, websocketMiddleware()...)
 		apiv1.Spice(wapiRoutesGroup)
 	}
 

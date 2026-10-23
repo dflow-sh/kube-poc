@@ -14,6 +14,7 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -25,6 +26,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	apiv1 "github.com/dflow-sh/kube-poc/packages/dflow/api/v1"
+	"github.com/dflow-sh/kube-poc/packages/dflow/api/v1/middleware"
 	"github.com/dflow-sh/kube-poc/packages/dflow/tracing"
 	"github.com/dflow-sh/kube-poc/packages/dflow/version"
 )
@@ -55,6 +57,25 @@ var _ = Describe("setSwaggerVersion", func() {
 		Expect(info["version"]).To(Equal("v9.9.9"))
 	})
 })
+
+var _ = Describe("websocket middleware", func() {
+	It("includes namespace authorization after token auth", func() {
+		chain := websocketMiddleware()
+		Expect(handlerIndex(chain, middleware.TokenAuth)).To(BeNumerically(">=", 0))
+		Expect(handlerIndex(chain, middleware.NamespaceAuthorization)).To(BeNumerically(">", handlerIndex(chain, middleware.TokenAuth)))
+		Expect(handlerIndex(chain, middleware.RoleAuthorization)).To(BeNumerically(">=", 0))
+	})
+})
+
+func handlerIndex(chain []gin.HandlerFunc, want gin.HandlerFunc) int {
+	wantPtr := reflect.ValueOf(want).Pointer()
+	for i, handler := range chain {
+		if reflect.ValueOf(handler).Pointer() == wantPtr {
+			return i
+		}
+	}
+	return -1
+}
 
 var _ = Describe("tracedPath", func() {
 	It("excludes websocket routes", func() {

@@ -48,6 +48,10 @@ func RoleAuthorization(c *gin.Context) {
 // NamespaceAuthorization ensures the user is allowed to access the requested namespace.
 // Only admins may access any namespace; all other users are restricted to namespaces
 // listed in their Secret's "namespaces" field.
+//
+// The user is the one Authentication or TokenAuth already stored on the request.
+// TokenAuth loads that user with a direct secret read, so this check does not
+// use a namespace list that can lag behind the secret.
 func NamespaceAuthorization(c *gin.Context) {
 	user := requestctx.User(c.Request.Context())
 	authorization(c, "namespace", user.Namespaces)

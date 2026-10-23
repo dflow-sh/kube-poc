@@ -20,9 +20,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/dflow-sh/kube-poc/packages/dflow/helmchart"
 	"github.com/dflow-sh/kube-poc/packages/dflow/helpers"
 	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
-	"github.com/dflow-sh/kube-poc/packages/dflow/helmchart"
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -145,7 +145,10 @@ func (s *AuthService) GetUserByUsername(ctx context.Context, username string) (U
 
 	for _, user := range users {
 		if user.Username == username {
-			return user, nil
+			// A secret list can lag a write that just added a namespace.
+			// Read this user's secret so callers, including TokenAuth, see
+			// the current namespace list.
+			return s.userFromCurrentSecret(ctx, user)
 		}
 	}
 
@@ -162,6 +165,22 @@ func (s *AuthService) GetUserByUsername(ctx context.Context, username string) (U
 	logger.Debugw("user not found")
 
 	return User{}, ErrUserNotFound
+}
+
+// userFromCurrentSecret re-reads the named user secret. GetUsers lists every
+// user secret, and that list can be older than a namespace the user just
+// gained. The following get is the list the authorization check must use.
+func (s *AuthService) userFromCurrentSecret(ctx context.Context, user User) (User, error) {
+	if user.secretName == "" {
+		return user, nil
+	}
+
+	secret, err := s.SecretInterface.Get(ctx, user.secretName, metav1.GetOptions{})
+	if err != nil {
+		return User{}, errors.Wrapf(err, "reading user secret %s", user.secretName)
+	}
+
+	return newUserFromSecret(*secret), nil
 }
 
 // SaveUser will save the user
