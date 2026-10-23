@@ -79,6 +79,30 @@ var _ = Describe("Application Log API Endpoint unit tests", func() {
 				Expect(theFunc(request)).To(BeFalse())
 			})
 		})
+		When("allowed origins is empty and the forwarded websocket scheme is wss", func() {
+			BeforeEach(func() {
+				allowedOrigins = []string{}
+				request.URL.Scheme = ""
+				request.Host = "somedomain.org"
+				request.Header.Set("X-Forwarded-Proto", "wss")
+				request.Header.Set("Origin", "https://somedomain.org")
+			})
+			It("returns true", func() {
+				Expect(theFunc(request)).To(BeTrue())
+			})
+		})
+		When("allowed origins is empty and the forwarded websocket scheme is ws", func() {
+			BeforeEach(func() {
+				allowedOrigins = []string{}
+				request.URL.Scheme = ""
+				request.Host = "somedomain.org"
+				request.Header.Set("X-Forwarded-Proto", "ws")
+				request.Header.Set("Origin", "https://somedomain.org")
+			})
+			It("returns false", func() {
+				Expect(theFunc(request)).To(BeFalse())
+			})
+		})
 		When("allowed origins is empty and the origin is a different host", func() {
 			BeforeEach(func() {
 				allowedOrigins = []string{}

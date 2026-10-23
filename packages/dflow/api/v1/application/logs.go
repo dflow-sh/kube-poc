@@ -702,7 +702,21 @@ func sameOrigin(r *http.Request, originHeader string) bool {
 	if !strings.EqualFold(parsed.Host, host) {
 		return false
 	}
-	return strings.EqualFold(parsed.Scheme, requestScheme(r))
+	return strings.EqualFold(browserScheme(parsed.Scheme), browserScheme(requestScheme(r)))
+}
+
+// browserScheme maps a websocket scheme to the scheme a browser sends in
+// Origin. A TLS websocket upgrade is forwarded as wss while the page origin
+// stays https. ws maps to http the same way.
+func browserScheme(scheme string) string {
+	switch strings.ToLower(strings.TrimSpace(scheme)) {
+	case "wss":
+		return "https"
+	case "ws":
+		return "http"
+	default:
+		return strings.ToLower(strings.TrimSpace(scheme))
+	}
 }
 
 func requestScheme(r *http.Request) string {
