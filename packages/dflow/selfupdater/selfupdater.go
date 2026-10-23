@@ -23,33 +23,16 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 
 	"github.com/dflow-sh/kube-poc/packages/dflow/helpers"
 	"github.com/pkg/errors"
 	progressbar "github.com/schollz/progressbar/v3"
 )
 
-const (
-	GithubBinaryURLFormat = "https://github.com/dflow-sh/kube-poc/packages/dflow/releases/download/%s/dflow-%s-%s"
-	GithubChecksumURLFormat = "https://github.com/dflow-sh/kube-poc/packages/dflow/releases/download/%s/dflow_%s_checksums.txt"
-)
-
 type BinaryInfo struct {
-	Path string
-	Dir string
+	Path        string
+	Dir         string
 	Permissions fs.FileMode
-}
-
-// ArchToURL is a map from GOARCH to the arch as it's set in the url of the github assets.
-// E.g. the binary for amd64 has a suffix "x86_64" in the assets here:
-// https://github.com/dflow-sh/kube-poc/packages/dflow/releases/tag/v1.2.0
-// NOTE: If we change how we name the assets, this code will break.
-var ArchToURL = map[string]string{
-	"arm64": "arm64",
-	"s390x": "s390x",
-	"arm": "armv7",
-	"amd64": "x86_64",
 }
 
 //counterfeiter:generate -header ../../LICENSE_HEADER . Updater
@@ -79,11 +62,12 @@ func downloadFile(remoteURL, dir string) (string, error) {
 	if err != nil {
 		return "", errors.Wrap(err, "constructing a request")
 	}
-	resp, err := http.DefaultClient.Do(req) // nolint:gosec // remoteURL from release metadata, not user input
+	req.Header.Set("User-Agent", "dflow")
+	resp, err := DownloadClient.Do(req) // nolint:gosec // remoteURL is a public release asset, not user input
 	if err != nil {
 		return "", errors.Wrap(err, "making the request")
 	}
-	
+
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
 			if helpers.Logger != nil {
@@ -133,17 +117,12 @@ func currentBinaryInfo() (BinaryInfo, error) {
 	return result, nil
 }
 
-func validateFileChecksum(filePath, checksumFileURL, fileNamePattern string) error {
-	tmpFileChecksum, err := calculateChecksum(filePath)
-	if err != nil {
-		return errors.Wrap(err, "calculating binary file checksum")
-	}
-
+func validateFileChecksum(filePath, checksumFileURL, assetName string) error {
 	tmpDir, err := os.MkdirTemp("", "dflow")
 	if err != nil {
 		return errors.Wrap(err, "creating temporary directory")
 	}
-	
+
 	defer func() {
 		if err := os.RemoveAll(tmpDir); err != nil {
 			if helpers.Logger != nil {
@@ -162,17 +141,7 @@ func validateFileChecksum(filePath, checksumFileURL, fileNamePattern string) err
 		return errors.Wrap(err, "reading the checksum file")
 	}
 
-	re := regexp.MustCompile(fmt.Sprintf(`([a-z,0-9]+)\s+%s`, fileNamePattern))
-	matches := re.FindStringSubmatch(string(checksumFileContents))
-	if len(matches) < 2 {
-		return errors.New("couldn't find a checksum for the given file")
-	}
-
-	if matches[1] != tmpFileChecksum {
-		return errors.New("file checksum invalid")
-	}
-
-	return nil
+	return matchFileChecksum(filePath, string(checksumFileContents), assetName)
 }
 
 func calculateChecksum(filePath string) (string, error) {
@@ -180,7 +149,7 @@ func calculateChecksum(filePath string) (string, error) {
 	if err != nil {
 		return "", errors.Wrapf(err, "opening file %s", filePath)
 	}
-	
+
 	defer func() {
 		if err := f.Close(); err != nil {
 			if helpers.Logger != nil {

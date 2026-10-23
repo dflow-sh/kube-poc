@@ -1,17 +1,16 @@
 #!/usr/bin/env bash
 # Idempotent dFlow install for a fresh Ubuntu 22.04 or 24.04 server.
 #
-# The repository is private. Clone it first (GitHub token or deploy key),
-# then run this script from that checkout. See docs/INSTALL.md.
+# Clone the public repository, then run this script from that checkout.
+# See docs/INSTALL.md.
 #
 #   sudo ./scripts/install.sh
 #   sudo ./scripts/install.sh --domain auto
 #   sudo ./scripts/install.sh --api-domain paas.dflow.sh --apps-domain apps.dflow.sh --email ops@dflow.sh
 #   sudo ./scripts/install.sh --domain auto --admin-password 'replace-this'
 #
-# The latest GitHub Release is tried first (CLI binary, ghcr.io server image,
-# and Helm chart package). The repository is private, so the CLI and chart
-# download needs GITHUB_TOKEN, GH_TOKEN, or an authenticated gh session.
+# The latest GitHub Release is used (CLI binary, ghcr.io server image, and
+# Helm chart package). Release downloads are public and do not send a token.
 # The server image is pulled from ghcr.io. If that pull fails, the script
 # exits non-zero. It does not build this checkout unless --from-checkout is set.
 
@@ -99,9 +98,8 @@ domains saved in /var/lib/dflow/install.env.
 
 The server image is pulled from ghcr.io/dflow-sh/dflow-server. A pull that
 fails is an error. The script does not reuse or build a checkout image unless
-you pass --from-checkout. sudo drops GITHUB_TOKEN, GH_TOKEN, and GHCR_TOKEN
-unless you pass --preserve-env. Those variables are for the private release
-assets and for a registry that still requires a login.
+you pass --from-checkout. CLI binaries, checksums.txt, and the Helm chart are
+downloaded from the public GitHub Release without a token.
 EOF
 }
 
@@ -874,14 +872,9 @@ checkout_image_tag() {
 }
 
 load_release_json() {
-  local requested="${1:-latest}" token url dest
+  local requested="${1:-latest}" url dest
   if ! command -v python3 >/dev/null 2>&1; then
     log "python3 is not installed, so release metadata cannot be read"
-    return 1
-  fi
-  token="$(release_token || true)"
-  if [[ -z "$token" ]]; then
-    log "no GITHUB_TOKEN, GH_TOKEN, or gh login is available"
     return 1
   fi
   dest="$(release_cache_dir)/release.json"
@@ -890,9 +883,11 @@ load_release_json() {
   else
     url="https://api.github.com/repos/${RELEASE_REPO}/releases/latest"
   fi
+  # Public release metadata. Do not send a token: an invalid token makes
+  # GitHub reject a release that anonymous clients can read.
   if ! curl -fsSL --retry 3 --retry-delay 2 \
-    -H "Authorization: Bearer ${token}" \
     -H "Accept: application/vnd.github+json" \
+    -H "User-Agent: dflow" \
     -o "$dest" "$url"; then
     log "GitHub release ${requested} for ${RELEASE_REPO} was not downloaded"
     return 1
@@ -915,25 +910,12 @@ PY
 }
 
 download_release_asset() {
-  local name="$1" dest="$2" token url
-  [[ -n "$RELEASE_JSON" ]] || return 1
-  url="$(python3 - "$name" "$RELEASE_JSON" <<'PY'
-import json, sys
-name, path = sys.argv[1], sys.argv[2]
-data = json.load(open(path))
-for asset in data.get("assets") or []:
-    if asset.get("name") == name:
-        print(asset.get("url") or "")
-        raise SystemExit(0)
-raise SystemExit(1)
-PY
-)" || return 1
-  [[ -n "$url" ]] || return 1
-  token="$(release_token || true)"
-  [[ -n "$token" ]] || return 1
+  local name="$1" dest="$2" url
+  [[ -n "$RELEASE_TAG" ]] || return 1
+  url="https://github.com/${RELEASE_REPO}/releases/download/${RELEASE_TAG}/${name}"
+  log "downloading ${url}"
   curl -fL --retry 3 --retry-delay 2 \
-    -H "Authorization: Bearer ${token}" \
-    -H "Accept: application/octet-stream" \
+    -H "User-Agent: dflow" \
     -o "$dest" "$url"
 }
 
@@ -956,16 +938,24 @@ PY
 }
 
 verify_checksum() {
-  local file="$1" asset="$2" sums dir base hash
+  local file="$1" asset="$2" required="${3:-}" sums dir base hash
   sums="$(mktemp)"
   if ! download_release_asset checksums.txt "$sums"; then
-    log "release ${RELEASE_TAG} has no checksums.txt; not verifying ${asset}"
     rm -f "$sums"
+    if [[ "$required" == "required" ]]; then
+      log "release ${RELEASE_TAG} has no checksums.txt; refusing to install ${asset}"
+      return 1
+    fi
+    log "release ${RELEASE_TAG} has no checksums.txt; not verifying ${asset}"
     return 0
   fi
   if ! grep -q -F "$asset" "$sums"; then
-    log "checksums.txt has no line for ${asset}; not verifying it"
     rm -f "$sums"
+    if [[ "$required" == "required" ]]; then
+      log "checksums.txt has no line for ${asset}; refusing to install it"
+      return 1
+    fi
+    log "checksums.txt has no line for ${asset}; not verifying it"
     return 0
   fi
   hash="$(grep -F "$asset" "$sums" | head -n 1 | awk '{ print $1 }')"
@@ -1188,7 +1178,7 @@ install_cli_release_or_build() {
     die "release asset ${asset} for ${RELEASE_TAG} could not be downloaded from ${RELEASE_REPO}. Refusing to build the checkout CLI. Pass --from-checkout to build it."
   fi
   chmod 0755 "$dest" || true
-  if ! verify_checksum "$dest" "$asset"; then
+  if ! verify_checksum "$dest" "$asset" required; then
     die "release asset ${asset} failed its checksum. Refusing to install it or build the checkout CLI."
   fi
   if ! "$dest" version >/dev/null 2>&1; then
@@ -1616,9 +1606,10 @@ On this server, repeat the check with docs/TESTING.md:
 
 On a Mac, from a checkout of this repository:
 
-  make dflow
-  sudo install -m 0755 dist/dflow /usr/local/bin/dflow
+  ./scripts/install-cli.sh --api ${api}
   ${login_mac}
+
+Or download the public release asset dflow-darwin-arm64 or dflow-darwin-amd64 and check checksums.txt. A browser download may need: xattr -d com.apple.quarantine /usr/local/bin/dflow
 
 Change the admin password before leaving the API on the public internet.
 Helm values used for this install: ${STATE_DIR}/values.yaml
