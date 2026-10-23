@@ -308,7 +308,7 @@ From a Mac or Linux checkout, this installs the matching binary to `/usr/local/b
 
 `<domain>` and the admin password are what `scripts/install.sh` printed on the server. `--user` and `--password` are `dflow login -u` and `-p`. The script downloads `dflow-darwin-arm64`, `dflow-darwin-amd64`, `dflow-linux-arm64`, or `dflow-linux-amd64` from the public GitHub Release and requires a matching line in `checksums.txt`. If that asset cannot be downloaded, the script exits non-zero. `--from-checkout` runs `go build` from the checkout (Go 1.26). `--version vX.Y.Z` selects that tag instead of the latest release.
 
-To check the signature on `checksums.txt`, a CLI binary, or the chart tarball, download that file and the matching `.sigstore.json`. cosign 3.1.4 `verify-blob` takes `--bundle`, `--certificate-identity`, and `--certificate-oidc-issuer` (there is no separate certificate flag). The identity is this repository's release workflow at the tag, and the issuer is GitHub Actions OIDC:
+To check a release, download `checksums.txt` and `checksums.txt.sigstore.json`. Verify that signature, then check the chart tarball, `install.sh`, and the CLI binaries against `checksums.txt`. Those files do not have their own `.sigstore.json`. cosign 3.1.4 `verify-blob` takes `--bundle`, `--certificate-identity`, and `--certificate-oidc-issuer` (there is no separate certificate flag). The identity is this repository's release workflow at the tag, and the issuer is GitHub Actions OIDC:
 
 ```bash
 tag=v0.1.0
@@ -322,10 +322,11 @@ cosign verify-blob \
   checksums.txt
 ```
 
-That checks the signature on `checksums.txt`. The chart tarball and `install.sh` are lines in that file. They do not have their own `.sigstore.json`. After the signature check:
+That checks the signature on `checksums.txt`. The chart tarball and `install.sh` are lines in that file. They do not have their own `.sigstore.json`. After the signature check, use `sha256sum` on Linux or `shasum` on macOS:
 
 ```bash
 sha256sum -c checksums.txt --ignore-missing
+shasum -a 256 -c checksums.txt --ignore-missing
 ```
 
 Verify the server image with `cosign verify` (not `verify-blob`) and the same identity. `cosign sign` in the release workflow uses `--yes` and `--oidc-provider=github-actions` and signs `${artifact}@${digest}`. That signature exists only after the `v*` workflow runs, so the image check is proven when `v0.1.0` is tagged.

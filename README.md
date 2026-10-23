@@ -86,10 +86,11 @@ cosign verify-blob \
   checksums.txt
 ```
 
-That verifies `checksums.txt`. Then check the chart tarball and `install.sh` against the signed checksum file. There is no `dflow-0.1.0.tgz.sigstore.json`.
+That verifies `checksums.txt`. Then check the chart tarball and `install.sh` against the signed checksum file. There is no `dflow-0.1.0.tgz.sigstore.json`. Use `sha256sum` on Linux or `shasum` on macOS:
 
 ```bash
 sha256sum -c checksums.txt --ignore-missing
+shasum -a 256 -c checksums.txt --ignore-missing
 ```
 
 Verify the server image with the same identity. Image signing is proven when `v0.1.0` is published, not from a local snapshot, because keyless `cosign sign` runs in the tag workflow.
