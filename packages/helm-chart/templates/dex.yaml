@@ -81,7 +81,9 @@ stringData:
       # https://dexidp.io/docs/custom-scopes-claims-clients/#cross-client-trust-and-authorized-party
       trustedPeers:
       - dflow-cli
+      {{- if .Values.dflowUI.enabled }}
       - dflow-ui
+      {{- end }}
 {{- if $rancherUrl }}
       - rancher-dashboard
 {{- end }}
@@ -95,12 +97,14 @@ stringData:
       name: 'dFlow cli'
       public: true
 
+    {{- if .Values.dflowUI.enabled }}
     - id: dflow-ui
       name: 'dFlow UI'
       secret: {{ $uiClientSecret | quote }}
       # Shouldn't be public, https://dexidp.io/docs/custom-scopes-claims-clients/#public-clients
       redirectURIs:
       - {{ .Values.dex.ui.redirectURI | default (printf "https://%s/auth/verify/" (include "dflow-hostname" .)) | quote }}
+    {{- end }}
 
 {{- if $rancherUrl }}
     - id: rancher-dashboard
