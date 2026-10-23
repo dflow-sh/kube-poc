@@ -29,8 +29,9 @@ APPS_DOMAIN="${DFLOW_APPS_DOMAIN:-${APPS_DOMAIN:-}}"
 LE_EMAIL="${DFLOW_EMAIL:-${LETSENCRYPT_EMAIL:-${LE_EMAIL:-}}}"
 TUNNEL_TOKEN="${DFLOW_TUNNEL_TOKEN:-${CLOUDFLARE_TUNNEL_TOKEN:-${TUNNEL_TOKEN:-}}}"
 LE_STAGING="${DFLOW_LETSENCRYPT_STAGING:-0}"
-SAMPLE_NAMESPACE="${SAMPLE_NAMESPACE:-sample}"
-SAMPLE_APP="${SAMPLE_APP:-hello}"
+SAMPLE_NAMESPACE="${SAMPLE_NAMESPACE:-dflow-install-check}"
+SAMPLE_APP="${SAMPLE_APP:-dflow-install-check}"
+SMOKE_SKIPPED=0
 SAMPLE_IMAGE="${SAMPLE_IMAGE:-docker.io/traefik/whoami:v1.12.0@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44}"
 SAMPLE_ENV="${SAMPLE_ENV:-WHOAMI_PORT_NUMBER=8080}"
 GO_VERSION="${GO_VERSION:-1.26.0}"
@@ -1411,6 +1412,33 @@ app_exists() {
   list_has_name "$1" "$SAMPLE_APP"
 }
 
+# True when some app already uses the smoke name, or an ingress already
+# serves the smoke hostname. The caller must not delete that app.
+smoke_in_use() {
+  local host="${SAMPLE_APP}.${APPS_BASE}"
+  local apps_json hosts
+  apps_json="$(kubectl get apps.application.dflow.sh -A -o json 2>/dev/null || true)"
+  if [[ -n "$apps_json" ]] && printf '%s' "$apps_json" | python3 -c '
+import json, sys
+name = sys.argv[1]
+try:
+    data = json.load(sys.stdin)
+except json.JSONDecodeError:
+    sys.exit(1)
+for item in data.get("items") or []:
+    if item.get("metadata", {}).get("name") == name:
+        sys.exit(0)
+sys.exit(1)
+' "$SAMPLE_APP"; then
+    return 0
+  fi
+  hosts="$(kubectl get ingress -A -o jsonpath='{range .items[*]}{range .spec.rules[*]}{.host}{"\n"}{end}{end}' 2>/dev/null || true)"
+  if [[ -n "$hosts" ]] && grep -Fxq "$host" <<<"$hosts"; then
+    return 0
+  fi
+  return 1
+}
+
 curl_health_ok() {
   local https_url="$1"
   local http_url="$2"
@@ -1527,20 +1555,21 @@ self_test() {
     die "dflow login to https://${API_HOST} failed. User ${ADMIN_USER}, password is the value printed below."
   fi
 
+  if smoke_in_use; then
+    SMOKE_SKIPPED=1
+    log "smoke check skipped: ${SAMPLE_APP} or https://${SAMPLE_APP}.${APPS_BASE} is already in use"
+    log "self-test passed: login, smoke check skipped, existing apps left in place"
+    return 0
+  fi
+
+  local created_ns=0
   if ! dflow namespace show "$SAMPLE_NAMESPACE" >/dev/null 2>&1; then
     dflow namespace create "$SAMPLE_NAMESPACE" </dev/null \
       || die "could not create namespace ${SAMPLE_NAMESPACE}"
+    created_ns=1
   fi
   dflow target "$SAMPLE_NAMESPACE" </dev/null \
     || die "could not target namespace ${SAMPLE_NAMESPACE}"
-
-  local app_list
-  app_list="$(dflow app list -o json)" || die "dflow app list failed before the sample push"
-  if app_exists "$app_list"; then
-    log "removing leftover app ${SAMPLE_APP} from an earlier run"
-    dflow app delete "$SAMPLE_APP" </dev/null \
-      || die "could not delete leftover app ${SAMPLE_APP}"
-  fi
 
   log "push ${SAMPLE_IMAGE} as ${SAMPLE_APP} (${SAMPLE_ENV})"
   if ! printf '\n' | dflow push -n "$SAMPLE_APP" --container-image-url "$SAMPLE_IMAGE" -e "$SAMPLE_ENV"; then
@@ -1569,24 +1598,26 @@ self_test() {
     sleep 2
   done
 
-  dflow namespace delete "$SAMPLE_NAMESPACE" -f </dev/null \
-    || die "could not delete namespace ${SAMPLE_NAMESPACE}"
-  if command -v kubectl >/dev/null 2>&1 && [[ -r "${KUBECONFIG_PATH:-}" ]]; then
-    for attempt in $(seq 1 30); do
-      if ! kubectl get ns "$SAMPLE_NAMESPACE" >/dev/null 2>&1; then
-        break
-      fi
-      if [[ "$attempt" -eq 30 ]]; then
-        kubectl get ns "$SAMPLE_NAMESPACE" -o yaml >&2 || true
-        die "namespace ${SAMPLE_NAMESPACE} is still present after delete"
-      fi
-      sleep 2
-    done
-  fi
-  local ns_list
-  ns_list="$(dflow namespace list -o json)" || die "dflow namespace list failed after delete"
-  if list_has_name "$ns_list" "$SAMPLE_NAMESPACE"; then
-    die "namespace ${SAMPLE_NAMESPACE} is still listed after delete"
+  if [[ "$created_ns" -eq 1 ]]; then
+    dflow namespace delete "$SAMPLE_NAMESPACE" -f </dev/null \
+      || die "could not delete namespace ${SAMPLE_NAMESPACE}"
+    if command -v kubectl >/dev/null 2>&1 && [[ -r "${KUBECONFIG_PATH:-}" ]]; then
+      for attempt in $(seq 1 30); do
+        if ! kubectl get ns "$SAMPLE_NAMESPACE" >/dev/null 2>&1; then
+          break
+        fi
+        if [[ "$attempt" -eq 30 ]]; then
+          kubectl get ns "$SAMPLE_NAMESPACE" -o yaml >&2 || true
+          die "namespace ${SAMPLE_NAMESPACE} is still present after delete"
+        fi
+        sleep 2
+      done
+    fi
+    local ns_list
+    ns_list="$(dflow namespace list -o json)" || die "dflow namespace list failed after delete"
+    if list_has_name "$ns_list" "$SAMPLE_NAMESPACE"; then
+      die "namespace ${SAMPLE_NAMESPACE} is still listed after delete"
+    fi
   fi
   log "self-test passed: login, push, HTTP 200, delete, and a clean namespace"
 }
@@ -1609,8 +1640,8 @@ dFlow is installed.
   Apps:      https://<app>.${APPS_BASE}
   TLS:       ${TLS_ISSUER}
 
-The installer already logged in, pushed ${SAMPLE_IMAGE}, checked HTTP 200,
-deleted that app, and removed the ${SAMPLE_NAMESPACE} namespace.
+The installer already logged in. The smoke app is ${SAMPLE_APP} in namespace ${SAMPLE_NAMESPACE}.
+When that name or https://${SAMPLE_APP}.${APPS_BASE} is already in use, the smoke push is skipped and the existing app is left in place.
 
 On this server, repeat the check with docs/TESTING.md:
 

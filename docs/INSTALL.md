@@ -66,7 +66,7 @@ When a GitHub Release exists, the script downloads the `dflow` CLI and the Helm 
 
 The chart sets `server.defaultBuildMode` to `railpack`. A `dflow push` that omits `--build-mode` builds with Railpack (BuildKit in the staging job, image pushed to the in-cluster registry). `--build-mode buildpack` and `--build-mode dockerfile` stay explicit. `dflow app logs --staging` prints the staging pod name once, then left-aligned log lines. `--verbose` restores the pod and container prefix on every line.
 
-When the script finishes it prints the API URL, the `admin` password, and the login command. It has already logged in, pushed `traefik/whoami`, required HTTP 200 from the app URL, deleted the app, and deleted the `sample` namespace. If any of those steps fail, the script exits non-zero and prints the step that failed.
+When the script finishes it prints the API URL, the `admin` password, and the login command. It has already logged in, pushed `traefik/whoami` as `dflow-install-check`, required HTTP 200 from that app URL, deleted that app, and deleted the `dflow-install-check` namespace. If an app already uses that name, or an ingress already serves `dflow-install-check.<domain>`, the push is skipped and the existing app is left in place. If any other step fails, the script exits non-zero and prints the step that failed.
 
 Manual checks and uninstall: [docs/TESTING.md](TESTING.md).
 
@@ -298,7 +298,7 @@ sudo dflow upgrade --dry-run
 
 `dflow upgrade` does not install k3s, cert-manager, or Traefik, does not change the saved domain or admin password, and does not run the login and sample-push self-test. A machine that cannot read `/etc/rancher/k3s/k3s.yaml` (or `KUBECONFIG`) stops after the CLI step and tells you to run `sudo ./scripts/update.sh <tag>` on the server.
 
-`scripts/update.sh` replaces `/usr/local/bin/dflow` from the same release, then runs the helm upgrade, waits until `dflow-server` is ready, and repeats the API health check and the CLI self-test (login, push `traefik/whoami`, curl expecting HTTP 200, delete, confirm the sample namespace is gone).
+`scripts/update.sh` replaces `/usr/local/bin/dflow` from the same release, then runs the helm upgrade, waits until `dflow-server` is ready, and repeats the API health check and the CLI self-test (login, push `traefik/whoami` as `dflow-install-check`, curl expecting HTTP 200, delete, confirm that namespace is gone). An existing app on another name, including `hello.<domain>`, is left in place. If `dflow-install-check` or its route is already in use, the smoke push is skipped and that app is left in place.
 
 ```bash
 sudo ./scripts/update.sh v0.0.4
