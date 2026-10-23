@@ -587,6 +587,14 @@
         "fullnameOverride"
       ]
     },
+    "seaweedfsIngressPolicy": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    },
     "seaweedfs": {
       "type": "object",
       "properties": {
