@@ -30,6 +30,8 @@ checksum:
   algorithm: sha256
   extra_files:
     - glob: chart-package/dflow-*.tgz
+    - glob: scripts/cli/install.sh
+      name_template: install.sh
 
 # SPDX JSON for each published CLI binary. Flags match `syft --help`:
 # `--output spdx-json=<file>` writes SPDX 2.3 JSON.
@@ -59,6 +61,19 @@ signs:
       - "--bundle"
       - "$signature"
       - "$artifact"
+
+# Keyless image signing. This pipe runs only when the release publishes
+# images. `cosign sign --help` has --yes and --oidc-provider=github-actions.
+# The argument is the image digest, which `cosign sign` requires.
+docker_signs:
+  - id: server-image
+    cmd: cosign
+    artifacts: all
+    args:
+      - sign
+      - "--yes"
+      - "--oidc-provider=github-actions"
+      - "${artifact}@${digest}"
 
 changelog:
   disable: true

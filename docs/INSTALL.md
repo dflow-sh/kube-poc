@@ -322,7 +322,20 @@ cosign verify-blob \
   checksums.txt
 ```
 
-Use the same flags for `dflow-linux-amd64` or `dflow-0.1.0.tgz`. `checksums.txt` lists the chart tarball. The release workflow signs with keyless cosign (`sign-blob --bundle`, no `--key`) and publishes each bundle. That signature exists only after the `v*` workflow runs, so the check is proven when `v0.1.0` is tagged.
+That checks the signature on `checksums.txt`. The chart tarball and `install.sh` are lines in that file. They do not have their own `.sigstore.json`. After the signature check:
+
+```bash
+sha256sum -c checksums.txt --ignore-missing
+```
+
+Verify the server image with `cosign verify` (not `verify-blob`) and the same identity. `cosign sign` in the release workflow uses `--yes` and `--oidc-provider=github-actions` and signs `${artifact}@${digest}`. That signature exists only after the `v*` workflow runs, so the image check is proven when `v0.1.0` is tagged.
+
+```bash
+cosign verify \
+  --certificate-identity "https://github.com/dflow-sh/kube-poc/.github/workflows/release.yml@refs/tags/${tag}" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  "ghcr.io/dflow-sh/dflow-server:${tag}"
+```
 
 Without `--api` the binary is still installed and the script prints the login and push commands instead of running them.
 
