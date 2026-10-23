@@ -12,12 +12,13 @@
 package middleware
 
 import (
+	"errors"
 	"net/http"
 
-	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/authtoken"
 	"github.com/dflow-sh/kube-poc/packages/dflow/api/v1/response"
 	"github.com/dflow-sh/kube-poc/packages/dflow/auth"
 	"github.com/dflow-sh/kube-poc/packages/dflow/cli/server/requestctx"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/authtoken"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v4"
 
@@ -64,7 +65,7 @@ func TokenAuth(ctx *gin.Context) {
 	// find the user and add it to the context
 	user, err := authService.GetUserByUsername(ctx, claims.Username)
 	if err != nil {
-		response.Error(ctx, apierrors.InternalError(err))
+		response.Error(ctx, lookupUserError(err))
 		ctx.Abort()
 		return
 	}
@@ -85,4 +86,11 @@ func TokenAuth(ctx *gin.Context) {
 	newCtx := ctx.Request.Context()
 	newCtx = requestctx.WithUser(newCtx, user)
 	ctx.Request = ctx.Request.Clone(newCtx)
+}
+
+func lookupUserError(err error) apierrors.APIErrors {
+	if errors.Is(err, auth.ErrUserNotFound) {
+		return apierrors.NewAPIError("user not found", http.StatusUnauthorized)
+	}
+	return apierrors.InternalError(err)
 }

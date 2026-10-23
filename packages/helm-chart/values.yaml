@@ -97,6 +97,14 @@ server:
   # Reported by /info as default_builder_image. Also the fallback when no
   # BuilderImage resource is marked default. railpack is not a container image.
   defaultBuilderImage: railpack
+  # Comma-separated browser origins allowed to call the API and open websockets.
+  # Empty derives https://<install host> and, when different, the UI origin
+  # (dflowUI.allowedOrigins or dflowUI.uiURL). Set "same-origin" to leave
+  # ACCESS_CONTROL_ALLOW_ORIGIN empty. The server then allows a browser
+  # websocket only when its Origin host matches the request host. Requests
+  # with no Origin header, including the CLI, stay allowed.
+  # The dflow server flag is --access-control-allow-origin.
+  accessControlAllowOrigin: ""
 
   # Configure staging jobs performing builds and deployment.
   #
@@ -796,6 +804,7 @@ global:
 rancher:
   # dFlow's UI extension needs to reach both dflow and dex services.
   # Configuration for those services to enable this requires the uri of the Rancher instance.
-  # The uri comes from global.cattle.url (provided by rancher), or if that's missing this value (rancher.url)
-  # This supersedes server.accessControlAllowOrigin
+  # The uri comes from global.cattle.url (provided by rancher), or if that's missing this value (rancher.url).
+  # When set, that URL is added to the API access-control allow-list
+  # (server.accessControlAllowOrigin).
   url: ""

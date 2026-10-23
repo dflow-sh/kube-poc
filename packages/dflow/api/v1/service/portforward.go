@@ -15,16 +15,14 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
-	"github.com/dflow-sh/kube-poc/packages/dflow/cli/server/requestctx"
+	apiapp "github.com/dflow-sh/kube-poc/packages/dflow/api/v1/application"
 	"github.com/dflow-sh/kube-poc/packages/dflow/api/v1/proxy"
+	"github.com/dflow-sh/kube-poc/packages/dflow/cli/server/requestctx"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
 	"github.com/gin-gonic/gin"
-	"github.com/gorilla/websocket"
 
 	apierror "github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/errors"
 )
-
-var upgrader = websocket.Upgrader{} // use default option
 
 func PortForward(c *gin.Context) apierror.APIErrors {
 	ctx := c.Request.Context()
@@ -46,6 +44,7 @@ func PortForward(c *gin.Context) apierror.APIErrors {
 		return apierror.ServiceIsNotKnown(serviceName)
 	}
 
+	upgrader := apiapp.NewUpgrader()
 	wconn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		logger.Errorw("failed to upgrade", "error", err)

@@ -19,14 +19,18 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
 	v1 "github.com/dflow-sh/kube-poc/packages/dflow/api/v1"
 	"github.com/dflow-sh/kube-poc/packages/dflow/auth"
 	"github.com/dflow-sh/kube-poc/packages/dflow/auth/authfakes"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 var r *rand.Rand
@@ -120,10 +124,10 @@ var _ = Describe("Auth users", func() {
 
 				users, counts, err := authService.GetUsers(context.Background())
 				Expect(err).ToNot(HaveOccurred())
-				Expect(users).To(HaveLen(2))                  // 2 users without conflicting definitions
-				Expect(counts).To(HaveLen(3))                 // 3 unique users
-				Expect(counts["auser"]).To(Equal(2))          // `auser` has 2 conflicting definitions
-				Expect(users[0].Username).To(Equal("admin"))  // ok user
+				Expect(users).To(HaveLen(2))                 // 2 users without conflicting definitions
+				Expect(counts).To(HaveLen(3))                // 3 unique users
+				Expect(counts["auser"]).To(Equal(2))         // `auser` has 2 conflicting definitions
+				Expect(users[0].Username).To(Equal("admin")) // ok user
 				Expect(users[1].Username).To(Equal("dflow")) // ok user
 			})
 		})
@@ -164,6 +168,48 @@ var _ = Describe("Auth users", func() {
 
 				Expect(fakeSecret.GetCallCount()).To(Equal(2))
 			})
+		})
+	})
+
+	Describe("GetUserByUsername", func() {
+		BeforeEach(func() {
+			if helpers.Logger == nil {
+				helpers.Logger = zap.NewNop().Sugar()
+			}
+		})
+
+		It("reads the user secret instead of trusting a stale list", func() {
+			stale := newUserSecret("ada", "password", "user", "old")
+			current := newUserSecret("ada", "password", "user", "old\nnewspace")
+			fakeSecret.ListReturns(&corev1.SecretList{Items: []corev1.Secret{stale}}, nil)
+			fakeSecret.GetReturns(&current, nil)
+
+			user, err := authService.GetUserByUsername(context.Background(), "ada")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(user.Namespaces).To(ConsistOf("old", "newspace"))
+
+			_, secretName, _ := fakeSecret.GetArgsForCall(0)
+			Expect(secretName).To(Equal("ada"))
+			Expect(fakeSecret.GetCallCount()).To(Equal(1))
+		})
+
+		It("returns an error when the secret read fails", func() {
+			listed := newUserSecret("ada", "password", "user", "old")
+			fakeSecret.ListReturns(&corev1.SecretList{Items: []corev1.Secret{listed}}, nil)
+			fakeSecret.GetReturns(nil, errors.New("secret unavailable"))
+
+			_, err := authService.GetUserByUsername(context.Background(), "ada")
+			Expect(err).To(HaveOccurred())
+			Expect(errors.Is(err, auth.ErrUserNotFound)).To(BeFalse())
+		})
+
+		It("returns user not found when the secret is missing", func() {
+			listed := newUserSecret("ada", "password", "user", "old")
+			fakeSecret.ListReturns(&corev1.SecretList{Items: []corev1.Secret{listed}}, nil)
+			fakeSecret.GetReturns(nil, k8serrors.NewNotFound(schema.GroupResource{Resource: "secrets"}, "ada"))
+
+			_, err := authService.GetUserByUsername(context.Background(), "ada")
+			Expect(errors.Is(err, auth.ErrUserNotFound)).To(BeTrue())
 		})
 	})
 

@@ -17,11 +17,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
 	"github.com/dflow-sh/kube-poc/packages/dflow/api/v1/response"
 	"github.com/dflow-sh/kube-poc/packages/dflow/application"
 	"github.com/dflow-sh/kube-poc/packages/dflow/auth"
 	"github.com/dflow-sh/kube-poc/packages/dflow/configurations"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
 	"github.com/dflow-sh/kube-poc/packages/dflow/namespaces"
 	"github.com/dflow-sh/kube-poc/packages/dflow/services"
 	"github.com/gin-gonic/gin"
@@ -38,12 +38,12 @@ import (
 // This includes all the applications and configurations in it.
 func Delete(c *gin.Context) apierror.APIErrors {
 	ctx := c.Request.Context()
-	namespaceName := c.Param("namespace")
 
-	var namespaceNames []string
-	namespaceNames, found := c.GetQueryArray("namespaces[]")
-	if !found {
-		namespaceNames = append(namespaceNames, namespaceName)
+	// The batch route has no :namespace parameter and uses namespaces[].
+	// A route that has the path parameter deletes that namespace only.
+	namespaceNames := namespacesFromRequest(c)
+	if err := requireNamespaceNames(namespaceNames); err != nil {
+		return err
 	}
 
 	cluster, err := kubernetes.GetCluster(ctx)
@@ -91,6 +91,32 @@ func Delete(c *gin.Context) apierror.APIErrors {
 	}
 
 	response.OK(c)
+	return nil
+}
+
+// namespacesFromRequest selects the namespaces a delete applies to.
+// Query values are ignored when the matched route has a path namespace.
+func namespacesFromRequest(c *gin.Context) []string {
+	if namespaceName, ok := c.Params.Get("namespace"); ok {
+		return []string{namespaceName}
+	}
+
+	if namespaceNames, found := c.GetQueryArray("namespaces[]"); found {
+		return namespaceNames
+	}
+
+	return nil
+}
+
+func requireNamespaceNames(namespaceNames []string) apierror.APIErrors {
+	if len(namespaceNames) == 0 {
+		return apierror.NewBadRequestError("namespace is required")
+	}
+	for _, namespaceName := range namespaceNames {
+		if namespaceName == "" {
+			return apierror.NewBadRequestError("namespace is required")
+		}
+	}
 	return nil
 }
 

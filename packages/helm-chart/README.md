@@ -67,6 +67,15 @@ These settings can be adjusted in the `ingress` section of your `values.yaml` fi
     defaultTokenExpiry: "60s"  # Example: increase to 1 minute for clock drift
   ```
 
+- **`server.accessControlAllowOrigin`**: Comma-separated browser origins allowed to call the API and open websockets. The chart sets `ACCESS_CONTROL_ALLOW_ORIGIN` from this value. Leave it empty to use `https://<api host>` (the install domain host, `dflow.<global.domain>` unless `ingress.hostnameOverride` or `gateway.hostnameOverride` is set) and, when it differs, the UI origin from `dflowUI.allowedOrigins` or `dflowUI.uiURL`. A `rancher.url` or `global.cattle.url` value is added as well.
+
+  Set `same-origin` to leave the variable empty. The server flag `--access-control-allow-origin` (`ACCESS_CONTROL_ALLOW_ORIGIN`) then allows a browser request only when the `Origin` host matches the request host. Requests that send no `Origin` header, including `dflow app logs` and `dflow app exec`, stay allowed.
+
+  ```yaml
+  server:
+    accessControlAllowOrigin: "https://dflow.example.com,https://ui.example.com"
+  ```
+
 #### Default Builder Image
 
 The chart creates a `standard` `BuilderImage` custom resource and marks it as
