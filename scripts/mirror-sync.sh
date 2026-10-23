@@ -149,11 +149,19 @@ if login.returncode != 0:
     sys.exit(login.returncode)
 for _source, target in ghcr_pairs:
     name = target.rsplit("/", 1)[-1].split(":", 1)[0]
-    print(f"push {target}", flush=True)
-    subprocess.run(
-        ["regctl", "image", "copy", f"ocidir://{layout}:{name}", target],
-        check=True,
-    )
+    pushed = False
+    for attempt in range(1, 4):
+        print(f"push {target} attempt {attempt}", flush=True)
+        result = subprocess.run(
+            ["regctl", "image", "copy", f"ocidir://{layout}:{name}", target],
+        )
+        if result.returncode == 0:
+            pushed = True
+            break
+        print(f"push {target} exited {result.returncode}", file=sys.stderr, flush=True)
+        time.sleep(10)
+    if not pushed:
+        sys.exit(1)
 if regsync_failed:
     sys.exit(1)
 PY
