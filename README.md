@@ -16,10 +16,10 @@ curl -fsSL https://github.com/dflow-sh/kube-poc/releases/latest/download/install
 
 The script is `scripts/cli/install.sh`. Every GitHub release publishes it as `install.sh`. It does not need a clone or a token. It selects `linux` or `darwin` and `amd64` or `arm64`, downloads `dflow-<os>-<arch>`, and checks the SHA256 in `checksums.txt`. A missing asset or a checksum mismatch exits non-zero.
 
-The default version is `latest`. The default directory is `/usr/local/bin` when that directory is writable or passwordless sudo works (`sudo -n`). Otherwise it installs to `~/.local/bin` and prints a PATH hint. The script does not prompt for a sudo password. Running it again replaces the same binary.
+The default version is `latest`. The default directory is `/usr/local/bin` when that directory is writable or passwordless sudo works (`sudo -n`). If it is not writable, passwordless sudo is unavailable, and `/dev/tty` can be read, the script asks before running sudo. The question and the sudo password are read from `/dev/tty`, so `curl | sh` can still prompt. Declining, or running with no terminal, installs to `~/.local/bin` and prints a PATH hint. Running it again replaces the same binary. If `dflow` on `PATH` is a different file from the one just installed, the script prints both paths.
 
 ```bash
-curl -fsSL https://github.com/dflow-sh/kube-poc/releases/latest/download/install.sh | sh -s -- --version v0.0.4
+curl -fsSL https://github.com/dflow-sh/kube-poc/releases/latest/download/install.sh | sh -s -- --version vX.Y.Z
 curl -fsSL https://github.com/dflow-sh/kube-poc/releases/latest/download/install.sh | sh -s -- --install-dir "$HOME/.local/bin"
 ```
 

@@ -80,6 +80,23 @@ jobs:
           version: "~> v2"
           args: check
 
+  cli-installer:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install v0.0.4 into RUNNER_TEMP
+        run: |
+          sh scripts/cli/install.sh --version v0.0.4 --install-dir "$RUNNER_TEMP/bin"
+          "$RUNNER_TEMP/bin/dflow" version
+      - name: Default install directory on macOS
+        if: matrix.os == 'macos-latest'
+        run: |
+          sh scripts/cli/install.sh
+          dflow version
+
   server-image:
     runs-on: ubuntu-latest
     steps:
