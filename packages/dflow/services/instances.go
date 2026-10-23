@@ -18,9 +18,9 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/dflow-sh/kube-poc/packages/dflow/helm"
 	"github.com/dflow-sh/kube-poc/packages/dflow/helpers"
 	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
-	"github.com/dflow-sh/kube-poc/packages/dflow/helm"
 	"github.com/dflow-sh/kube-poc/packages/dflow/names"
 	"github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/models"
 	"github.com/pkg/errors"
@@ -699,9 +699,13 @@ func getdFlowValues(serviceName, catalogServiceName string) (string, error) {
 		CatalogServiceName: catalogServiceName,
 	}
 
-	yamlData, err := yaml.Marshal(&struct {
-		dFlow dflowValues `yaml:"dflow,omitempty"`
-	}{extraValues})
+	// The wrapper field has to be exported. gopkg.in/yaml.v2 skips unexported
+	// fields, so `dFlow` marshaled as `{}`. DeployOrUpdate appends that
+	// document to the catalog values, and chartutil.ReadValues then fails
+	// with "did not find expected key" on the last line of the values.
+	yamlData, err := yaml.Marshal(struct {
+		Dflow dflowValues `yaml:"dflow"`
+	}{Dflow: extraValues})
 	if err != nil {
 		return "", err
 	}
