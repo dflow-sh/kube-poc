@@ -1,0 +1,20 @@
+name: image-scan
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  image-inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aquasecurity/setup-trivy@v0.3.1
+        with:
+          version: v0.76.1
+      - run: bash scripts/image-inventory.sh --check --scan
