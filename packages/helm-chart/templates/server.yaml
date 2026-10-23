@@ -255,10 +255,11 @@ spec:
   {{- end }}
   template:
     metadata:
-      {{- with .Values.podAnnotations }}
       annotations:
+        checksum/dflow-user-role: {{ include "dflow.defaultUserRoleActions" . | sha256sum }}
+        {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- end }}
       labels:
         app.kubernetes.io/component: dflow-server
         app.kubernetes.io/instance: default

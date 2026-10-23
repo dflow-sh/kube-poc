@@ -38,15 +38,7 @@ data:
   name: "dFlow User Role"
   default: "true"
   actions: |
-    namespace_write
-    app_read
-    configuration_read
-    service_read
-    gitconfig_read
-    export_registries_read
-    builderimage_read
-    builderimage_write
-    
+{{- include "dflow.defaultUserRoleActions" . | nindent 4 }}
 ---
 apiVersion: v1
 kind: ConfigMap

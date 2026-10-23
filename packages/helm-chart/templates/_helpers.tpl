@@ -319,3 +319,18 @@ Return the configured Issuer URL for Dex
  {{- printf "https://%s" (include "dflow-dex-hostname" .) -}}
 {{- end -}}
 {{- end }}
+
+{{/*
+Actions on the default "user" role. The server loads this ConfigMap once at
+startup, so the server pod template checksums this string and rolls on change.
+Admin is not in this list: the admin role allows every route.
+*/}}
+{{- define "dflow.defaultUserRoleActions" -}}
+namespace_write
+app_read
+configuration_read
+service_read
+gitconfig_read
+export_registries_read
+builderimage_read
+{{- end }}
