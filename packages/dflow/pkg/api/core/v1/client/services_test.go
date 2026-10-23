@@ -12,10 +12,13 @@
 package client_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 
 	"github.com/dflow-sh/kube-poc/packages/dflow/cli/settings"
 	"github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/client"
@@ -123,18 +126,18 @@ func DescribeServicesErrors() {
 			Entry("service catalog match", func() (any, error) {
 				return dflowClient.ServiceCatalogMatch("servicenameprefix")
 			}),
-		Entry("service bind", func() (any, error) {
-			return dflowClient.ServiceBind(models.ServiceBindRequest{}, "namespace", "servicename")
-		}),
-		Entry("service batch bind", func() (any, error) {
-			return dflowClient.ServiceBatchBind(models.ServiceBatchBindRequest{
-				AppName:      "testapp",
-				ServiceNames: []string{"service1", "service2"},
-			}, "namespace", "testapp")
-		}),
-		Entry("service unbind", func() (any, error) {
-			return dflowClient.ServiceUnbind(models.ServiceUnbindRequest{}, "namespace", "servicename")
-		}),
+			Entry("service bind", func() (any, error) {
+				return dflowClient.ServiceBind(models.ServiceBindRequest{}, "namespace", "servicename")
+			}),
+			Entry("service batch bind", func() (any, error) {
+				return dflowClient.ServiceBatchBind(models.ServiceBatchBindRequest{
+					AppName:      "testapp",
+					ServiceNames: []string{"service1", "service2"},
+				}, "namespace", "testapp")
+			}),
+			Entry("service unbind", func() (any, error) {
+				return dflowClient.ServiceUnbind(models.ServiceUnbindRequest{}, "namespace", "servicename")
+			}),
 			Entry("service list", func() (any, error) {
 				return dflowClient.ServiceList("namespace")
 			}),
@@ -151,5 +154,32 @@ func DescribeServicesErrors() {
 				return dflowClient.ServiceApps("namespace")
 			}),
 		)
+	})
+
+	When("the server returns a non-JSON error", func() {
+		BeforeEach(func() {
+			statusCode = http.StatusBadGateway
+			responseBody = "Bad Gateway"
+		})
+
+		It("reports the status without a JSON parse error", func() {
+			old := os.Stderr
+			r, w, err := os.Pipe()
+			Expect(err).NotTo(HaveOccurred())
+			os.Stderr = w
+
+			_, callErr := dflowClient.ServiceCreate(models.ServiceCreateRequest{}, "namespace")
+
+			Expect(w.Close()).To(Succeed())
+			os.Stderr = old
+			captured, err := io.ReadAll(r)
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(callErr).To(HaveOccurred())
+			Expect(callErr.Error()).To(Equal("server unavailable (HTTP 502)"))
+			Expect(string(captured)).NotTo(ContainSubstring("JSON PARSE ERROR"))
+			Expect(string(captured)).NotTo(ContainSubstring("invalid character"))
+			Expect(bytes.Contains(captured, []byte("Bad Gateway"))).To(BeFalse())
+		})
 	})
 }

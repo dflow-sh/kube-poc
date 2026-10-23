@@ -113,7 +113,7 @@ var _ = Describe("Client HTTP", func() {
 
 				_, err := client.Do(dflowClient, "any", http.MethodGet, nil, &models.Response{})
 				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(Equal("empty"))
+				Expect(err.Error()).To(Equal("server unavailable (HTTP 500)"))
 			})
 		})
 
