@@ -102,6 +102,13 @@ var _ = Describe("Authorization Middleware", func() {
 				middleware.NamespaceAuthorization(c)
 				Expect(w.Code).To(Equal(http.StatusOK))
 			})
+
+			It("returns status code 403 for an empty namespace", func() {
+				c.Params = []gin.Param{{Key: "namespace", Value: ""}}
+
+				middleware.NamespaceAuthorization(c)
+				Expect(w.Code).To(Equal(http.StatusForbidden))
+			})
 		})
 	})
 
@@ -115,6 +122,9 @@ var _ = Describe("Authorization Middleware", func() {
 			"/wapi/v1/namespaces/:namespace/applications/:app/logs",
 			"/wapi/v1/namespaces/:namespace/applications/:app/exec",
 			"/wapi/v1/namespaces/:namespace/applications/:app/portforward",
+			"/wapi/v1/namespaces/:namespace/services/:service/portforward",
+			"/wapi/v1/namespaces/:namespace/staging/:stage_id/logs",
+			"/wapi/v1/namespaces/:namespace/staging/:stage_id/complete",
 		}
 
 		BeforeEach(func() {
@@ -136,6 +146,9 @@ var _ = Describe("Authorization Middleware", func() {
 			Entry("logs", routes[0]),
 			Entry("exec", routes[1]),
 			Entry("port-forward", routes[2]),
+			Entry("service port-forward", routes[3]),
+			Entry("staging logs", routes[4]),
+			Entry("staging complete", routes[5]),
 		)
 
 		DescribeTable("allows the owner and an admin",
@@ -146,6 +159,9 @@ var _ = Describe("Authorization Middleware", func() {
 			Entry("logs", routes[0]),
 			Entry("exec", routes[1]),
 			Entry("port-forward", routes[2]),
+			Entry("service port-forward", routes[3]),
+			Entry("staging logs", routes[4]),
+			Entry("staging complete", routes[5]),
 		)
 
 		It("does not intermittently refuse exec or port-forward for the owner", func() {
@@ -155,23 +171,82 @@ var _ = Describe("Authorization Middleware", func() {
 			}
 		})
 	})
+
+	Describe("namespace query does not replace the path", func() {
+		var owner auth.User
+
+		BeforeEach(func() {
+			owner = auth.User{
+				Username:   "ada",
+				Namespaces: []string{"mine"},
+				Roles:      auth.Roles{{ID: "user"}},
+			}
+		})
+
+		DescribeTable("refuses a foreign path when the query names an owned namespace",
+			func(route, url string) {
+				Expect(namespaceStatus(http.MethodGet, route, url, owner)).To(Equal(http.StatusForbidden))
+			},
+			Entry("websocket logs",
+				"/wapi/v1/namespaces/:namespace/applications/:app/logs",
+				"/wapi/v1/namespaces/other/applications/demo/logs?namespaces[]=mine",
+			),
+			Entry("rest applications",
+				"/api/v1/namespaces/:namespace/applications",
+				"/api/v1/namespaces/other/applications?namespaces[]=mine",
+			),
+		)
+
+		DescribeTable("refuses a foreign path when the query namespace is empty",
+			func(route, url string) {
+				Expect(namespaceStatus(http.MethodGet, route, url, owner)).To(Equal(http.StatusForbidden))
+			},
+			Entry("websocket logs",
+				"/wapi/v1/namespaces/:namespace/applications/:app/logs",
+				"/wapi/v1/namespaces/other/applications/demo/logs?namespaces[]=",
+			),
+			Entry("rest applications",
+				"/api/v1/namespaces/:namespace/applications",
+				"/api/v1/namespaces/other/applications?namespaces[]=",
+			),
+		)
+
+		It("still allows the owned path when the query names another namespace", func() {
+			route := "/wapi/v1/namespaces/:namespace/applications/:app/logs"
+			url := "/wapi/v1/namespaces/mine/applications/demo/logs?namespaces[]=other"
+			Expect(namespaceStatus(http.MethodGet, route, url, owner)).To(Equal(http.StatusOK))
+		})
+
+		It("uses the query list only when the route has no path namespace", func() {
+			route := "/api/v1/namespaces"
+			Expect(namespaceStatus(http.MethodDelete, route, "/api/v1/namespaces?namespaces[]=mine", owner)).To(Equal(http.StatusOK))
+			Expect(namespaceStatus(http.MethodDelete, route, "/api/v1/namespaces?namespaces[]=other", owner)).To(Equal(http.StatusForbidden))
+			Expect(namespaceStatus(http.MethodDelete, route, "/api/v1/namespaces?namespaces[]=", owner)).To(Equal(http.StatusForbidden))
+			Expect(namespaceStatus(http.MethodDelete, route, "/api/v1/namespaces?namespaces[]=mine&namespaces[]=", owner)).To(Equal(http.StatusForbidden))
+		})
+	})
 })
 
 func websocketStatus(route, namespace string, user auth.User) int {
+	url := route
+	url = strings.ReplaceAll(url, ":namespace", namespace)
+	url = strings.ReplaceAll(url, ":app", "demo")
+	url = strings.ReplaceAll(url, ":service", "demo")
+	url = strings.ReplaceAll(url, ":stage_id", "stage-1")
+	return namespaceStatus(http.MethodGet, route, url, user)
+}
+
+func namespaceStatus(method, route, url string, user auth.User) int {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.Use(func(c *gin.Context) {
 		c.Request = c.Request.WithContext(requestctx.WithUser(c.Request.Context(), user))
 	})
-	router.GET(route, middleware.NamespaceAuthorization, func(c *gin.Context) {
+	router.Handle(method, route, middleware.NamespaceAuthorization, func(c *gin.Context) {
 		c.Status(http.StatusOK)
 	})
 
-	url := route
-	url = strings.ReplaceAll(url, ":namespace", namespace)
-	url = strings.ReplaceAll(url, ":app", "demo")
-
 	response := httptest.NewRecorder()
-	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, url, nil))
+	router.ServeHTTP(response, httptest.NewRequest(method, url, nil))
 	return response.Code
 }
