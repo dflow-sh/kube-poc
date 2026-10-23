@@ -88,6 +88,34 @@ func corsAllowOrigin(r *http.Request, allowed []string) string {
 	return ""
 }
 
+// setCORSHeaders writes the CORS response headers for one request.
+// Access-Control-Allow-Credentials is omitted when the allow-list echoes
+// for "*", because credentials cannot be combined with a wildcard origin.
+func setCORSHeaders(ctx *gin.Context, allowed []string) {
+	header := corsAllowOrigin(ctx.Request, allowed)
+	if header == "" {
+		return
+	}
+
+	ctx.Header("Access-Control-Allow-Origin", header)
+	if corsAllowsCredentials(allowed) {
+		ctx.Header("Access-Control-Allow-Credentials", "true")
+	}
+	// These cannot be wildcards when Access-Control-Allow-Credentials is true.
+	ctx.Header("Access-Control-Allow-Methods", "POST, PUT, PATCH, GET, OPTIONS, DELETE")
+	ctx.Header("Access-Control-Allow-Headers", "Authorization,x-api-csrf,content-type,file-size")
+	ctx.Header("Vary", "Origin")
+}
+
+func corsAllowsCredentials(allowed []string) bool {
+	for _, origin := range allowed {
+		if origin == "*" {
+			return false
+		}
+	}
+	return true
+}
+
 // tracedPath reports whether a request should be traced by the otelgin
 // middleware. Websocket connections are long-running, so a span covering
 // their whole lifetime doesn't represent a meaningful unit of work and
@@ -127,13 +155,7 @@ func NewHandler() (*gin.Engine, error) {
 	allowedOrigins := application.SplitAllowOrigins(viper.GetString("access-control-allow-origin"))
 	if len(allowedOrigins) > 0 {
 		router.Use(func(ctx *gin.Context) {
-			if header := corsAllowOrigin(ctx.Request, allowedOrigins); header != "" {
-				ctx.Header("Access-Control-Allow-Origin", header)
-				ctx.Header("Access-Control-Allow-Credentials", "true")
-				ctx.Header("Access-Control-Allow-Methods", "POST, PUT, PATCH, GET, OPTIONS, DELETE")          // This cannot be a wildcard when `Access-Control-Allow-Credentials` is true
-				ctx.Header("Access-Control-Allow-Headers", "Authorization,x-api-csrf,content-type,file-size") // This cannot be a wildcard when `Access-Control-Allow-Credentials` is true
-				ctx.Header("Vary", "Origin")                                                                  // Required when `Access-Control-Allow-Origin` is not a wildcard value
-			}
+			setCORSHeaders(ctx, allowedOrigins)
 
 			if ctx.Request.Method == "OPTIONS" {
 				// OPTIONS requests don't support `Authorization` headers, so return before we hit any checks

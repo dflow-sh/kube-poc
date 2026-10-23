@@ -640,6 +640,11 @@ func newUpgrader() websocket.Upgrader {
 	}
 }
 
+// NewUpgrader returns the websocket upgrader that applies the origin check.
+func NewUpgrader() websocket.Upgrader {
+	return newUpgrader()
+}
+
 // SplitAllowOrigins parses the comma-separated access-control-allow-origin value.
 // An empty value is an empty list. CheckOriginFunc treats that as same-origin.
 func SplitAllowOrigins(raw string) []string {
@@ -686,7 +691,7 @@ func CheckOriginFunc(allowedOrigins []string) func(r *http.Request) bool {
 
 func sameOrigin(r *http.Request, originHeader string) bool {
 	parsed, err := url.Parse(originHeader)
-	if err != nil || parsed.Host == "" {
+	if err != nil || parsed.Host == "" || parsed.Scheme == "" {
 		return false
 	}
 
@@ -694,5 +699,25 @@ func sameOrigin(r *http.Request, originHeader string) bool {
 	if host == "" && r.URL != nil {
 		host = r.URL.Host
 	}
-	return strings.EqualFold(parsed.Host, host)
+	if !strings.EqualFold(parsed.Host, host) {
+		return false
+	}
+	return strings.EqualFold(parsed.Scheme, requestScheme(r))
+}
+
+func requestScheme(r *http.Request) string {
+	if r.TLS != nil {
+		return "https"
+	}
+	if r.URL != nil && r.URL.Scheme != "" {
+		return r.URL.Scheme
+	}
+	forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))
+	if forwarded != "" {
+		scheme := strings.TrimSpace(strings.Split(forwarded, ",")[0])
+		if scheme != "" {
+			return scheme
+		}
+	}
+	return "http"
 }

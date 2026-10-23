@@ -74,6 +74,34 @@ var _ = Describe("corsAllowOrigin", func() {
 		unlisted.Header.Set("Origin", "https://evil.example")
 		Expect(corsAllowOrigin(unlisted, allowed)).To(BeEmpty())
 	})
+
+	It("omits credentials when the allow-list is a wildcard", func() {
+		gin.SetMode(gin.TestMode)
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		request := httptest.NewRequest(http.MethodGet, "https://dflow.example.com/api/v1/info", nil)
+		request.Header.Set("Origin", "https://browser.example")
+		ctx.Request = request
+
+		setCORSHeaders(ctx, []string{"*"})
+
+		Expect(recorder.Header().Get("Access-Control-Allow-Origin")).To(Equal("https://browser.example"))
+		Expect(recorder.Header().Get("Access-Control-Allow-Credentials")).To(BeEmpty())
+	})
+
+	It("sends credentials when echoing a listed origin", func() {
+		gin.SetMode(gin.TestMode)
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		request := httptest.NewRequest(http.MethodGet, "https://dflow.example.com/api/v1/info", nil)
+		request.Header.Set("Origin", "https://ui.example.com")
+		ctx.Request = request
+
+		setCORSHeaders(ctx, []string{"https://dflow.example.com", "https://ui.example.com"})
+
+		Expect(recorder.Header().Get("Access-Control-Allow-Origin")).To(Equal("https://ui.example.com"))
+		Expect(recorder.Header().Get("Access-Control-Allow-Credentials")).To(Equal("true"))
+	})
 })
 
 var _ = Describe("websocket middleware", func() {

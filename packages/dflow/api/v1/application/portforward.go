@@ -15,16 +15,13 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
 	"github.com/dflow-sh/kube-poc/packages/dflow/api/v1/proxy"
 	"github.com/dflow-sh/kube-poc/packages/dflow/application"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
 	apierror "github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/errors"
 	"github.com/gin-gonic/gin"
-	"github.com/gorilla/websocket"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
-
-var appPortForwardUpgrader = websocket.Upgrader{} // use default options
 
 func PortForward(c *gin.Context) apierror.APIErrors {
 	ctx := c.Request.Context()
@@ -93,7 +90,8 @@ func PortForward(c *gin.Context) apierror.APIErrors {
 		}
 	}
 
-	wconn, err := appPortForwardUpgrader.Upgrade(c.Writer, c.Request, nil)
+	upgrader := newUpgrader()
+	wconn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		return apierror.InternalError(err)
 	}
