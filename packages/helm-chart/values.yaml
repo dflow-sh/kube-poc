@@ -647,8 +647,10 @@ reflector:
     requests:
       cpu: 10m
       memory: 32Mi
+    # 10.0.69 stays at the 100m ceiling through startup and the startup
+    # probe times out. 500m lets the process listen and answer /health/ready.
     limits:
-      cpu: 100m
+      cpu: 500m
       memory: 128Mi
 
 # One registry pod. Its disk is not replicated. emptyDir (the default below)
