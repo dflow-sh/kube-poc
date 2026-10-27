@@ -156,7 +156,7 @@ To add an entry, put the CVE id on its own line in a file under `scripts/trivy-a
 
 ## Pinned components
 
-- cert-manager chart v1.21.2 (`packages/helm-chart/Chart.yaml`)
+- cert-manager chart v1.21.3 (`packages/helm-chart/Chart.yaml`)
 - k3s v1.36.5+k3s1 (`INSTALL_K3S_VERSION` in `scripts/install.sh`)
 - Helm v3.22.1 (`HELM_VERSION` in `scripts/install.sh` and `VERSION` in `scripts/tools/helm.sh`)
 - Go directive `go 1.26.0` and toolchain `go1.26.10` (`go.mod`). CI installs Go 1.26.10.
