@@ -100,9 +100,6 @@ scan_pinned_images() {
     out="$(mktemp)"
     ignore_file=""
     case "$ref" in
-      docker.io/emberstack/kubernetes-reflector@sha256:51dbd5880929dc26678f6e190c70abfbcccd3846679ff464e5815823fd782f1a|docker.io/emberstack/kubernetes-reflector:10.0.65@sha256:51dbd5880929dc26678f6e190c70abfbcccd3846679ff464e5815823fd782f1a)
-        ignore_file="${ROOT}/scripts/trivy-allow/kubernetes-reflector-10.0.65.trivyignore"
-        ;;
       gcr.io/kaniko-project/executor@sha256:2562c4fe551399514277ffff7dcca9a3b1628c4ea38cb017d7286dc6ea52f4cd|gcr.io/kaniko-project/executor:v1.24.0-debug@sha256:2562c4fe551399514277ffff7dcca9a3b1628c4ea38cb017d7286dc6ea52f4cd)
         ignore_file="${ROOT}/scripts/trivy-allow/kaniko-executor-v1.24.0-debug.trivyignore"
         ;;

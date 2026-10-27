@@ -498,15 +498,15 @@ seaweedfs:
   global:
     # Set to true to enable SeaweedFS internal TLS. When enabled, also set `seaweedfs.tls.enabled=true`.
     enableSecurity: false
-    # Chart 4.48 joins imageRegistry, global.seaweedfs.image.name, and image.tag.
+    # Chart 4.51 joins imageRegistry, global.seaweedfs.image.name, and image.tag.
     imageRegistry: docker.io
     seaweedfs:
       image:
         name: chrislusf/seaweedfs
   image:
-    # Tag 4.48, digest sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d.
+    # Tag 4.51, digest sha256:f7a49e3f3972ebed5be2ed4befa4a0c68eb7bdddba6e692d42729ceb545134b8.
     # The chart has no digest field, so the tag carries both.
-    tag: 4.48@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d
+    tag: 4.51@sha256:f7a49e3f3972ebed5be2ed4befa4a0c68eb7bdddba6e692d42729ceb545134b8
   master:
     resources:
       requests:
@@ -616,11 +616,12 @@ dflowUI:
 reflector:
   enabled: true
   fullnameOverride: reflector
+  # Tag 10.0.69, digest sha256:b689b19ed36a5843648ad07446fc3468bd1f33327ef57eb3883519eadca4a58d.
   # The reflector chart joins repository and tag with a colon, so the
   # repository ends in @sha256 and the tag is the digest hex.
   image:
     repository: docker.io/emberstack/kubernetes-reflector@sha256
-    tag: 51dbd5880929dc26678f6e190c70abfbcccd3846679ff464e5815823fd782f1a
+    tag: b689b19ed36a5843648ad07446fc3468bd1f33327ef57eb3883519eadca4a58d
     pullPolicy: IfNotPresent
   rbac:
     enabled: true
