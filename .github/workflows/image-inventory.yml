@@ -1,12 +1,9 @@
 name: image-inventory
 
 on:
-  push:
-    branches: [main]
-    tags:
-      - "v*"
   schedule:
-    - cron: "17 6 * * *"
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read
