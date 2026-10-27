@@ -42,7 +42,7 @@ image:
   skopeo:
     repository: quay.io/skopeo/stable
     tag: v1.22.3
-    digest: sha256:24940638e4abb0edfedc78a680554f316069d0212a00159276759421a059e611
+    digest: sha256:f7010199a5d7d0dcb5e4f5312701b683e8c96976dab621cc2254a177b382039e
   kubectl:
     repository: docker.io/rancher/kubectl
     tag: v1.36.2
