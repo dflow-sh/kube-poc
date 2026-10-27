@@ -114,7 +114,8 @@ All work branches from `dev`, and pull requests target `dev`. `main` is the publ
 
 ## Continuous integration
 
-GitHub Actions run only on pull requests and pushes to `main`, and on `v*` tags. `ci.yml` is the pull-request and `main` push workflow. `release.yml` runs on `v*` tags. Pull requests into `dev` are verified locally.
+GitHub Actions run on pull requests and pushes to `main`, and on `v*` tags. `ci.yml` is the pull-request and `main` push workflow. `release.yml` runs on `v*` tags. `image-inventory.yml` runs every Monday at 06:17 UTC and on workflow_dispatch.
+Pull requests into `dev` are verified locally.
 
 ## Dependabot
 
@@ -122,7 +123,7 @@ GitHub Actions run only on pull requests and pushes to `main`, and on `v*` tags.
 
 ## Image scan
 
-`scripts/image-inventory.sh --scan` scans every digest-pinned image from the rendered charts and the install, update, and join scripts. `--check` fails a floating tag, `latest`, or a missing digest. CI runs:
+`scripts/image-inventory.sh --scan` scans every digest-pinned image from the rendered charts and the install, update, and join scripts. `--check` fails a floating tag, `latest`, or a missing digest. `image-inventory.yml` runs:
 
 ```bash
 bash scripts/image-inventory.sh --check --scan
