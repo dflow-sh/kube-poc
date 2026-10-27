@@ -613,11 +613,12 @@ dflowUI:
 reflector:
   enabled: true
   fullnameOverride: reflector
+  # Tag 10.0.69, digest sha256:b689b19ed36a5843648ad07446fc3468bd1f33327ef57eb3883519eadca4a58d.
   # The reflector chart joins repository and tag with a colon, so the
   # repository ends in @sha256 and the tag is the digest hex.
   image:
     repository: docker.io/emberstack/kubernetes-reflector@sha256
-    tag: 51dbd5880929dc26678f6e190c70abfbcccd3846679ff464e5815823fd782f1a
+    tag: b689b19ed36a5843648ad07446fc3468bd1f33327ef57eb3883519eadca4a58d
     pullPolicy: IfNotPresent
   rbac:
     enabled: true

@@ -148,7 +148,6 @@ trivy image \
 
 The script sets `ignore_file` only for an exact ref match:
 
-- `docker.io/emberstack/kubernetes-reflector` digest `sha256:51dbd5880929dc26678f6e190c70abfbcccd3846679ff464e5815823fd782f1a` (with or without tag `10.0.65`) uses `scripts/trivy-allow/kubernetes-reflector-10.0.65.trivyignore` for CVE-2026-70188 and CVE-2026-88092.
 - `gcr.io/kaniko-project/executor` digest `sha256:2562c4fe551399514277ffff7dcca9a3b1628c4ea38cb017d7286dc6ea52f4cd` (with or without tag `v1.24.0-debug`) uses `scripts/trivy-allow/kaniko-executor-v1.24.0-debug.trivyignore` for CVE-2025-68121 and CVE-2026-33186.
 
 Every other ref is scanned with an empty ignore file, so CVE-2025-68121 still fails on any image other than that kaniko pin.
