@@ -215,35 +215,45 @@ var _ = Describe("ValidateBuildMode", func() {
 		Expect(mode).To(Equal(models.BuildModeRailpack))
 	})
 
-	It("honors DEFAULT_BUILD_MODE when the request is empty", func() {
+	It("rejects a non-railpack DEFAULT_BUILD_MODE", func() {
 		t := GinkgoT()
 		t.Setenv("DEFAULT_BUILD_MODE", "buildpack")
 		mode, err := models.ValidateBuildMode("")
-		Expect(err).ToNot(HaveOccurred())
-		Expect(mode).To(Equal(models.BuildModeBuildpack))
+		Expect(err).To(HaveOccurred())
+		Expect(mode).To(Equal(""))
+		Expect(err.Error()).To(ContainSubstring("DEFAULT_BUILD_MODE"))
+		Expect(err.Error()).To(ContainSubstring("railpack"))
 	})
 
-	It("accepts railpack, buildpack, and dockerfile case-insensitively", func() {
+	It("accepts railpack case-insensitively", func() {
 		mode, err := models.ValidateBuildMode("RailPack")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(mode).To(Equal(models.BuildModeRailpack))
-
-		mode, err = models.ValidateBuildMode("BuildPack")
-		Expect(err).ToNot(HaveOccurred())
-		Expect(mode).To(Equal(models.BuildModeBuildpack))
-
-		mode, err = models.ValidateBuildMode("DockerFile")
-		Expect(err).ToNot(HaveOccurred())
-		Expect(mode).To(Equal(models.BuildModeDockerfile))
 	})
 
-	It("rejects typos instead of mapping them to a default", func() {
-		mode, err := models.ValidateBuildMode("dockerfle")
+	It("rejects any builder other than railpack", func() {
+		for _, mode := range []string{"buildpack", "BuildPack", "dockerfile", "DockerFile", "kaniko", "dockerfle"} {
+			got, err := models.ValidateBuildMode(mode)
+			Expect(err).To(HaveOccurred(), mode)
+			Expect(got).To(Equal(""))
+			Expect(err.Error()).To(ContainSubstring("only"))
+			Expect(err.Error()).To(ContainSubstring("railpack"))
+			Expect(models.NormalizeBuildMode(mode)).ToNot(Equal(models.BuildModeRailpack))
+		}
+	})
+})
+
+var _ = Describe("ValidateBuilderImage", func() {
+	It("allows an empty builder and railpack", func() {
+		Expect(models.ValidateBuilderImage("")).ToNot(HaveOccurred())
+		Expect(models.ValidateBuilderImage("  railpack  ")).ToNot(HaveOccurred())
+	})
+
+	It("rejects any other builder", func() {
+		err := models.ValidateBuilderImage("paketobuildpacks/builder-jammy-full:0.3.495")
 		Expect(err).To(HaveOccurred())
-		Expect(mode).To(Equal(""))
-		Expect(err.Error()).To(ContainSubstring("invalid build mode"))
-		Expect(models.NormalizeBuildMode("dockerfle")).ToNot(Equal(models.BuildModeRailpack))
-		Expect(models.NormalizeBuildMode("dockerfle")).ToNot(Equal(models.BuildModeBuildpack))
+		Expect(err.Error()).To(ContainSubstring("only"))
+		Expect(err.Error()).To(ContainSubstring("railpack"))
 	})
 })
 

@@ -23,5 +23,5 @@ metadata:
 spec:
   default: true
   shortDescription: Railpack
-  description: Default builder. Source builds use railpack unless a push selects buildpack or dockerfile.
+  description: Default builder. Source builds use railpack.
   image: {{ .Values.server.defaultBuilderImage | default "railpack" | quote }}

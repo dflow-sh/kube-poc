@@ -92,7 +92,7 @@ d: e`), 0600)
 			BeforeEach(func() {
 				err := os.WriteFile("goodyaml.yml", []byte(`name: foo
 staging:
-  builder: snafu
+  builder: railpack
 origin:
   git:
     revision: off
@@ -111,6 +111,22 @@ configuration:
 			AfterEach(func() {
 				err := os.Remove("goodyaml.yml")
 				Expect(err).ToNot(HaveOccurred())
+			})
+
+			It("rejects a builder other than railpack", func() {
+				err := os.WriteFile("otherbuilder.yml", []byte(`name: foo
+staging:
+  builder: snafu
+`), 0600)
+				Expect(err).ToNot(HaveOccurred())
+				DeferCleanup(func() {
+					Expect(os.Remove("otherbuilder.yml")).To(Succeed())
+				})
+
+				_, err = manifest.Get("otherbuilder.yml")
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("invalid builder \"snafu\""))
+				Expect(err.Error()).To(ContainSubstring("only \"railpack\" is supported"))
 			})
 
 			It("works", func() {
@@ -140,7 +156,7 @@ configuration:
 						},
 					},
 					Staging: models.ApplicationStage{
-						Builder: "snafu",
+						Builder: "railpack",
 					},
 				}))
 

@@ -132,6 +132,9 @@ func DeploymentsStart(c *gin.Context) apierror.APIErrors {
 			return apierror.NewBadRequestError(err.Error())
 		}
 	}
+	if err := models.ValidateBuilderImage(req.BuilderImage); err != nil {
+		return apierror.NewBadRequestError(err.Error())
+	}
 
 	if req.DockerfilePath != "" {
 		if _, err := models.ValidateDockerfilePath(req.DockerfilePath); err != nil {
@@ -440,7 +443,6 @@ func stageForAsyncDeploy(
 		BuilderImage:        builder,
 		BuildMode:           resolvedBuildMode,
 		DockerfilePath:      resolvedDockerfilePath,
-		DockerBuildImage:    config.DockerfileBuildImage,
 		RailpackBuildImage:  config.RailpackBuildImage,
 		DownloadImage:       config.DownloadImage,
 		UnpackImage:         config.UnpackImage,

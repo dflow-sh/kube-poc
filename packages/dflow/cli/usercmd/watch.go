@@ -50,7 +50,7 @@ type syncConfig struct {
 type fileHashes map[string]string
 
 // AppWatch watches the source directory at path for changes and syncs them
-// into the running pod. On startup it always does a full buildpack push to
+// into the running pod. On startup it always does a full railpack push to
 // warm the cache and (re)install the supervisor wrapper, then does incremental
 // file or binary syncs via the /sync endpoint, which requires no kubectl. The
 // startup push is unconditional because a prior `dflow push` (or any normal
@@ -119,7 +119,7 @@ func (c *DFlowClient) AppWatch(
 
 		state, stateErr := loadHashes(stateFile)
 		if stateErr != nil || len(state) == 0 {
-			c.ui.Normal().Msg("Startup: running full buildpack push...")
+			c.ui.Normal().Msg("Startup: running full railpack push...")
 
 			watchStartError := c.watchStartup(
 				ctx,

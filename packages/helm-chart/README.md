@@ -84,9 +84,9 @@ the cluster default. Its image is `server.defaultBuilderImage` (`railpack`).
 the server `DEFAULT_BUILDER_IMAGE` fallback when no `BuilderImage` resource
 has `spec.default: true`.
 
-`railpack` is not a container image. A `--build-mode buildpack` push has to
-name a builder image. `image.builder` only sets `userid` and `groupid`, which
-the stage scripts read. The chart does not install a builder image.
+`railpack` is not a container image. Source builds use railpack. Any other
+builder is rejected. `image.builder` only sets `userid` and `groupid`, which
+the stage scripts read.
 
 ### Cert Manager
 

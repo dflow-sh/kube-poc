@@ -494,10 +494,10 @@ func NewAppPushCmd(client ApplicationsService) *cobra.Command {
 	cmd.Flags().String("container-image-url", "", "Container image url for the app workload image")
 	cmd.Flags().StringP("name", "n", "", "Application name. (mandatory if no manifest is provided)")
 	cmd.Flags().StringP("path", "p", "", "Path to application sources.")
-	cmd.Flags().String("builder-image", "", "Paketo builder image to use for staging")
-	cmd.Flags().String("build-mode", "", "Staging build mode: railpack (default), buildpack, or dockerfile")
+	cmd.Flags().String("builder-image", "", "Builder name. Only railpack is supported.")
+	cmd.Flags().String("build-mode", "", "Staging build mode. Only railpack is supported.")
 	cmd.Flags().Bool("verbose", false, "prefix each staging log line with the pod and container name")
-	cmd.Flags().String("dockerfile-path", "", "Path to Dockerfile within the application sources (default: Dockerfile)")
+	cmd.Flags().String("dockerfile-path", "", "Unused. Source builds use railpack.")
 
 	gitConfigOption(cmd, client)
 	routeOption(cmd)
@@ -665,7 +665,7 @@ func NewAppWatchCmd(client ApplicationsService) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:               "watch NAME",
 		Short:             "[EXPERIMENTAL] Watch a local directory and sync changes to the running application",
-		Long:              "[EXPERIMENTAL] Watch a local directory and sync changes to the running application.\n\nThis command is experimental: it has been validated on a limited set of frameworks and builder images, and behavior on other app types and binary layouts may change.\n\nWatches the source directory for changes and syncs them into the running pod.\nOn startup, performs a full buildpack push and installs the supervisor (on every run). While watching, syncs only changed files or binaries.\nReads .dflow-sync.yaml for build_cmd/binary (compiled languages).",
+		Long:              "[EXPERIMENTAL] Watch a local directory and sync changes to the running application.\n\nThis command is experimental: it has been validated on a limited set of frameworks and builder images, and behavior on other app types and binary layouts may change.\n\nWatches the source directory for changes and syncs them into the running pod.\nOn startup, performs a full railpack push and installs the supervisor (on every run). While watching, syncs only changed files or binaries.\nReads .dflow-sync.yaml for build_cmd/binary (compiled languages).",
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: NewAppMatcherFirstFunc(client),
 		RunE: func(cmd *cobra.Command, args []string) error {
