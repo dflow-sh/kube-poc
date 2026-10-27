@@ -269,7 +269,7 @@ func buildAndPatch(
 		return models.StageResponse{}, stageParam{}, pathErr
 	}
 
-	builderImage, config, configErr := stagingImagesAndConfig(ctx, cluster, buildMode, req, app)
+	builderImage, config, configErr := stagingImagesAndConfig(ctx, cluster, buildMode, req)
 	if configErr != nil {
 		return models.StageResponse{}, stageParam{}, configErr
 	}
@@ -339,7 +339,6 @@ func buildAndPatch(
 		BuilderImage:        builderImage,
 		BuildMode:           buildMode,
 		DockerfilePath:      dockerfilePath,
-		DockerBuildImage:    config.DockerfileBuildImage,
 		RailpackBuildImage:  config.RailpackBuildImage,
 		BlobUID:             newBlobUID,
 		DownloadImage:       config.DownloadImage,

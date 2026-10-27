@@ -138,9 +138,7 @@ type ApplicationManifest struct {
 
 // Build mode constants for staging.
 const (
-	BuildModeRailpack   = "railpack"
-	BuildModeBuildpack  = "buildpack"
-	BuildModeDockerfile = "dockerfile"
+	BuildModeRailpack = "railpack"
 	// DefaultBuilderImage is the /info default_builder_image value when no
 	// BuilderImage resource is the cluster default and DEFAULT_BUILDER_IMAGE
 	// is unset. It names the railpack builder, not a container image.
@@ -161,48 +159,49 @@ func ResolveDefaultBuilderImage(fromCustomResource, configured string) string {
 }
 
 // DefaultBuildMode is the staging mode used when a request does not name one.
-// DEFAULT_BUILD_MODE selects buildpack or dockerfile. An empty value is railpack.
+// Only railpack is supported. An empty DEFAULT_BUILD_MODE is railpack.
 func DefaultBuildMode() (string, error) {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("DEFAULT_BUILD_MODE"))) {
 	case "", BuildModeRailpack:
 		return BuildModeRailpack, nil
-	case BuildModeBuildpack:
-		return BuildModeBuildpack, nil
-	case BuildModeDockerfile:
-		return BuildModeDockerfile, nil
 	default:
 		return "", fmt.Errorf(
-			"invalid DEFAULT_BUILD_MODE %q: must be %q, %q, or %q",
+			"invalid DEFAULT_BUILD_MODE %q: only %q is supported",
 			os.Getenv("DEFAULT_BUILD_MODE"),
-			BuildModeRailpack, BuildModeBuildpack, BuildModeDockerfile,
+			BuildModeRailpack,
 		)
 	}
 }
 
-// ValidateBuildMode returns a canonical build mode.
-// Empty uses DefaultBuildMode (railpack, unless DEFAULT_BUILD_MODE is set).
-// Unknown values return an error and are not coerced to a known mode.
+// ValidateBuildMode returns railpack.
+// Empty uses DefaultBuildMode. Any other value is an error.
 func ValidateBuildMode(mode string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "":
 		return DefaultBuildMode()
 	case BuildModeRailpack:
 		return BuildModeRailpack, nil
-	case BuildModeBuildpack:
-		return BuildModeBuildpack, nil
-	case BuildModeDockerfile:
-		return BuildModeDockerfile, nil
 	default:
 		return "", fmt.Errorf(
-			"invalid build mode %q: must be %q, %q, or %q",
-			mode, BuildModeRailpack, BuildModeBuildpack, BuildModeDockerfile,
+			"invalid build mode %q: only %q is supported",
+			mode, BuildModeRailpack,
 		)
 	}
 }
 
-// NormalizeBuildMode returns a known build mode for empty, railpack, buildpack, or dockerfile.
-// Prefer ValidateBuildMode at CLI/API boundaries so typos are rejected instead of
-// being returned unchanged.
+// ValidateBuilderImage rejects a builder other than railpack.
+// Empty means the default, which is railpack.
+func ValidateBuilderImage(image string) error {
+	trimmed := strings.TrimSpace(image)
+	if trimmed == "" || strings.EqualFold(trimmed, BuildModeRailpack) {
+		return nil
+	}
+	return fmt.Errorf("invalid builder %q: only %q is supported", image, BuildModeRailpack)
+}
+
+// NormalizeBuildMode returns railpack for empty or railpack.
+// Prefer ValidateBuildMode at CLI/API boundaries so other values are rejected
+// instead of being returned unchanged.
 func NormalizeBuildMode(mode string) string {
 	normalized, err := ValidateBuildMode(mode)
 	if err != nil {
@@ -240,7 +239,7 @@ func ValidateDockerfilePath(dockerfilePath string) (string, error) {
 		return "", fmt.Errorf("invalid dockerfile path %q: path must stay within application sources", dockerfilePath)
 	}
 
-	// Keep paths simple for shell/Kaniko usage (no spaces, globs, etc.).
+	// Keep paths simple so the value is safe to pass through a shell.
 	for _, r := range cleaned {
 		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') ||
 			r == '.' || r == '_' || r == '-' || r == '/' {

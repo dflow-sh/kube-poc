@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,9 +25,9 @@ import (
 	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/util/validation"
 
-	"github.com/dflow-sh/kube-poc/packages/dflow/helpers"
 	"github.com/dflow-sh/kube-poc/packages/dflow/cli/termui"
 	"github.com/dflow-sh/kube-poc/packages/dflow/duration"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers"
 	"github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/client"
 	"github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/models"
 )
@@ -374,45 +373,13 @@ func (c *DFlowClient) reportOK(appRef models.AppRef, builder string, routes []st
 	msg.Msg("App is online.")
 }
 
-// validateLocalDockerfile checks that a Dockerfile path exists under a local
-// path origin before upload/staging. Git/archive origins are skipped.
+// validateLocalDockerfile rejects a build mode or builder other than railpack
+// before upload. Empty values use railpack.
 func validateLocalDockerfile(manifest models.ApplicationManifest) error {
-	mode := manifest.Staging.BuildMode
-	if mode == "" {
-		return nil
-	}
-	validatedMode, err := models.ValidateBuildMode(mode)
-	if err != nil {
-		return err
-	}
-	if validatedMode != models.BuildModeDockerfile {
-		return nil
-	}
-	if manifest.Origin.Kind != models.OriginPath || manifest.Origin.Path == "" {
-		return nil
-	}
-
-	// Ready archives (tar/zip) are valid push sources; only directories have a
-	// local Dockerfile tree to validate before upload.
-	if originInfo, err := os.Stat(manifest.Origin.Path); err != nil || !originInfo.IsDir() {
-		return nil
-	}
-
-	dockerfilePath, err := models.ValidateDockerfilePath(manifest.Staging.DockerfilePath)
-	if err != nil {
-		return err
-	}
-
-	fullPath := filepath.Join(manifest.Origin.Path, filepath.FromSlash(dockerfilePath))
-	info, err := os.Stat(fullPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("dockerfile not found at %q (relative to application sources)", fullPath)
+	if manifest.Staging.BuildMode != "" {
+		if _, err := models.ValidateBuildMode(manifest.Staging.BuildMode); err != nil {
+			return err
 		}
-		return errors.Wrap(err, "failed to access dockerfile path")
 	}
-	if info.IsDir() {
-		return fmt.Errorf("dockerfile path %q is a directory, not a file", fullPath)
-	}
-	return nil
+	return models.ValidateBuilderImage(manifest.Staging.Builder)
 }

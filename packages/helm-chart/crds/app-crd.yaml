@@ -53,10 +53,10 @@ spec:
                   if one is not set, it will try to use the previously set image.
                 type: string
               buildmode:
-                description: Staging build mode used for the last build (buildpack or dockerfile).
+                description: Staging build mode used for the last build. Only railpack is supported.
                 type: string
               dockerfilepath:
-                description: Path to the Dockerfile used when buildmode is dockerfile.
+                description: Stored path from the push request. Source builds use railpack.
                 type: string
               chartname:
                 description: ChartName stores the name of the application support

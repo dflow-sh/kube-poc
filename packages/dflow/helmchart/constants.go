@@ -19,7 +19,6 @@ const (
 	DFlowStageDownload            = "download"
 	DFlowStageUnpack              = "unpack"
 	DFlowStageBuild               = "build"
-	DFlowStageDockerfileBuild     = "dockerfile-build"
 	DFlowStageRailpackBuild       = "railpack-build"
 )
 
