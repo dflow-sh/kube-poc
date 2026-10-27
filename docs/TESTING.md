@@ -157,7 +157,7 @@ dflow namespace list
 
 ## Source push and build mode
 
-Railpack is the default. A push that does not pass `--build-mode` stores `railpack` on the app and the staging job runs the railpack script. Buildpack and Dockerfile stay available as explicit flags.
+Railpack is the only builder. A source push stores `railpack` on the app and the staging job runs the railpack script. `--build-mode` or `--builder-image` set to anything else is rejected.
 
 ```bash
 dflow push -n node-app -p /path/to/node-app
@@ -166,16 +166,6 @@ dflow app logs --staging node-app
 ```
 
 `app show` includes `buildmode: railpack` (or the JSON field `buildmode`). The staging log names railpack and BuildKit, and the app route returns HTTP 200 after the image is pushed to the in-cluster registry.
-
-The same tree with the Paketo builder:
-
-```bash
-dflow app delete node-app
-dflow push -n node-app -p /path/to/node-app --build-mode buildpack
-dflow app show node-app
-```
-
-That app's `buildmode` is `buildpack`. An existing app keeps the build mode stored on its spec when a later push omits `--build-mode`. Delete it, or pass the flag, to change the mode. `--build-mode dockerfile` uses the Dockerfile in the source tree.
 
 ## Worker node
 

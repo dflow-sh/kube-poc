@@ -227,7 +227,7 @@ func (c *Client) AppUpload(namespace string, name string, file FormFile) (models
 	return DoWithHandlers(c, endpoint, http.MethodPost, requestHandler, responseHandler)
 }
 
-// AppSourcePatch uploads a source patch tar and triggers a buildpack stage +
+// AppSourcePatch uploads a source patch tar and triggers a railpack stage +
 // swapPodImage. processCmd overrides the supervisor fallback binary
 // (default: /cnb/process/web). Used by the watch feature startup mode.
 // Returns the stage response for polling.

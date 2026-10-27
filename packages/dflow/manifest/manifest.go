@@ -96,6 +96,9 @@ func UpdateBuilder(manifest models.ApplicationManifest, cmd *cobra.Command) (mod
 	// B:uilder - Replace
 
 	if builderImage != "" {
+		if err := models.ValidateBuilderImage(builderImage); err != nil {
+			return manifest, errors.Wrap(err, "invalid --builder-image")
+		}
 		manifest.Staging.Builder = builderImage
 	}
 
@@ -429,6 +432,9 @@ func Get(manifestPath string) (models.ApplicationManifest, error) {
 			return empty, errors.Wrap(err, "invalid staging.buildMode")
 		}
 		manifest.Staging.BuildMode = validated
+	}
+	if err := models.ValidateBuilderImage(manifest.Staging.Builder); err != nil {
+		return empty, errors.Wrap(err, "invalid staging.builder")
 	}
 
 	if manifest.Staging.DockerfilePath != "" {

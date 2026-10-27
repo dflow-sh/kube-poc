@@ -93,13 +93,13 @@ func init() {
 	err = viper.BindEnv("app-image-exporter", "APP_IMAGE_EXPORTER")
 	checkErr(err)
 
-	flags.String("default-builder-image", models.DefaultBuilderImage, "(DEFAULT_BUILDER_IMAGE) Builder reported by /info. The default, railpack, is not a container image. Buildpack mode needs a builder image.")
+	flags.String("default-builder-image", models.DefaultBuilderImage, "(DEFAULT_BUILDER_IMAGE) Builder reported by /info. The default, railpack, is not a container image.")
 	err = viper.BindPFlag("default-builder-image", flags.Lookup("default-builder-image"))
 	checkErr(err)
 	err = viper.BindEnv("default-builder-image", "DEFAULT_BUILDER_IMAGE")
 	checkErr(err)
 
-	flags.String("default-build-mode", "", "(DEFAULT_BUILD_MODE) Staging build mode when a push omits one: railpack, buildpack, or dockerfile. Empty means railpack.")
+	flags.String("default-build-mode", "", "(DEFAULT_BUILD_MODE) Staging build mode when a push omits one. Only railpack is supported. Empty means railpack.")
 	err = viper.BindPFlag("default-build-mode", flags.Lookup("default-build-mode"))
 	checkErr(err)
 	err = viper.BindEnv("default-build-mode", "DEFAULT_BUILD_MODE")
@@ -149,6 +149,9 @@ var CmdServer = &cobra.Command{
 			if err := os.Setenv("DEFAULT_BUILD_MODE", mode); err != nil {
 				return errors.Wrap(err, "setting DEFAULT_BUILD_MODE")
 			}
+		}
+		if _, err := models.DefaultBuildMode(); err != nil {
+			return err
 		}
 		if appsDomain := strings.TrimSpace(viper.GetString("apps-domain")); appsDomain != "" {
 			if err := os.Setenv("APPS_DOMAIN", appsDomain); err != nil {
