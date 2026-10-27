@@ -157,7 +157,7 @@ dflow namespace list
 
 ## Source push and build mode
 
-Railpack is the only builder. A source push stores `railpack` on the app and the staging job runs the railpack script. `--build-mode` or `--builder-image` set to anything else is rejected.
+Railpack is the builder engine. A source push that omits `--build-mode` stores `railpack` on the app and the staging job runs `railpack prepare`, then BuildKit with the railpack frontend. `--build-mode dockerfile` stores `dockerfile` and builds with BuildKit's dockerfile frontend in the same image. `--build-mode config-file` stores `config-file` and runs `railpack prepare --config-file`. `--builder-image` set to anything other than railpack is rejected.
 
 ```bash
 dflow push -n node-app -p /path/to/node-app
@@ -165,7 +165,7 @@ dflow app show node-app
 dflow app logs --staging node-app
 ```
 
-`app show` includes `buildmode: railpack` (or the JSON field `buildmode`). The staging log names railpack and BuildKit, and the app route returns HTTP 200 after the image is pushed to the in-cluster registry.
+`app show` includes `buildmode: railpack` (or the JSON field `buildmode`). The staging log names railpack and BuildKit, and the app route returns HTTP 200 after the image is pushed to the in-cluster registry. A dockerfile build logs `dockerfile`. A config-file build logs `railpack-config`.
 
 ## Worker node
 

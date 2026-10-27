@@ -99,7 +99,7 @@ func init() {
 	err = viper.BindEnv("default-builder-image", "DEFAULT_BUILDER_IMAGE")
 	checkErr(err)
 
-	flags.String("default-build-mode", "", "(DEFAULT_BUILD_MODE) Staging build mode when a push omits one. Only railpack is supported. Empty means railpack.")
+	flags.String("default-build-mode", "", "(DEFAULT_BUILD_MODE) Build source when a push omits one: railpack, dockerfile, or config-file. Empty means railpack. Any other builder engine is rejected.")
 	err = viper.BindPFlag("default-build-mode", flags.Lookup("default-build-mode"))
 	checkErr(err)
 	err = viper.BindEnv("default-build-mode", "DEFAULT_BUILD_MODE")

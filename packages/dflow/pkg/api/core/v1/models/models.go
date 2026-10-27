@@ -136,9 +136,12 @@ type ApplicationManifest struct {
 	Namespace     string                   `yaml:"namespace,omitempty"`
 }
 
-// Build mode constants for staging.
+// Build source constants for staging. Railpack is the only builder engine.
+// These values select the source that engine builds.
 const (
-	BuildModeRailpack = "railpack"
+	BuildModeRailpack   = "railpack"
+	BuildModeDockerfile = "dockerfile"
+	BuildModeConfigFile = "config-file"
 	// DefaultBuilderImage is the /info default_builder_image value when no
 	// BuilderImage resource is the cluster default and DEFAULT_BUILDER_IMAGE
 	// is unset. It names the railpack builder, not a container image.
@@ -158,49 +161,61 @@ func ResolveDefaultBuilderImage(fromCustomResource, configured string) string {
 	return DefaultBuilderImage
 }
 
-// DefaultBuildMode is the staging mode used when a request does not name one.
-// Only railpack is supported. An empty DEFAULT_BUILD_MODE is railpack.
+// DefaultBuildMode is the staging source used when a request does not name one.
+// An empty DEFAULT_BUILD_MODE is railpack auto-detect. dockerfile and
+// config-file are sources built by the railpack engine. Any other value is
+// a builder engine name and is rejected.
 func DefaultBuildMode() (string, error) {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("DEFAULT_BUILD_MODE"))) {
 	case "", BuildModeRailpack:
 		return BuildModeRailpack, nil
+	case BuildModeDockerfile:
+		return BuildModeDockerfile, nil
+	case BuildModeConfigFile:
+		return BuildModeConfigFile, nil
 	default:
 		return "", fmt.Errorf(
-			"invalid DEFAULT_BUILD_MODE %q: only %q is supported",
+			"invalid DEFAULT_BUILD_MODE %q: sources are %q, %q, and %q; the builder engine is %q",
 			os.Getenv("DEFAULT_BUILD_MODE"),
-			BuildModeRailpack,
+			BuildModeRailpack, BuildModeDockerfile, BuildModeConfigFile, BuildModeRailpack,
 		)
 	}
 }
 
-// ValidateBuildMode returns railpack.
-// Empty uses DefaultBuildMode. Any other value is an error.
+// ValidateBuildMode returns a canonical build source.
+// Empty uses DefaultBuildMode. railpack auto-detects, dockerfile builds a
+// Dockerfile, and config-file builds a railpack config file. Any other name
+// is rejected as a builder engine.
 func ValidateBuildMode(mode string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "":
 		return DefaultBuildMode()
 	case BuildModeRailpack:
 		return BuildModeRailpack, nil
+	case BuildModeDockerfile:
+		return BuildModeDockerfile, nil
+	case BuildModeConfigFile:
+		return BuildModeConfigFile, nil
 	default:
 		return "", fmt.Errorf(
-			"invalid build mode %q: only %q is supported",
-			mode, BuildModeRailpack,
+			"invalid builder engine %q: sources are %q, %q, and %q; the builder engine is %q",
+			mode, BuildModeRailpack, BuildModeDockerfile, BuildModeConfigFile, BuildModeRailpack,
 		)
 	}
 }
 
-// ValidateBuilderImage rejects a builder other than railpack.
+// ValidateBuilderImage rejects a builder engine other than railpack.
 // Empty means the default, which is railpack.
 func ValidateBuilderImage(image string) error {
 	trimmed := strings.TrimSpace(image)
 	if trimmed == "" || strings.EqualFold(trimmed, BuildModeRailpack) {
 		return nil
 	}
-	return fmt.Errorf("invalid builder %q: only %q is supported", image, BuildModeRailpack)
+	return fmt.Errorf("invalid builder engine %q: only %q is supported", image, BuildModeRailpack)
 }
 
-// NormalizeBuildMode returns railpack for empty or railpack.
-// Prefer ValidateBuildMode at CLI/API boundaries so other values are rejected
+// NormalizeBuildMode returns a known source for empty, railpack, dockerfile, or config-file.
+// Prefer ValidateBuildMode at CLI/API boundaries so other engines are rejected
 // instead of being returned unchanged.
 func NormalizeBuildMode(mode string) string {
 	normalized, err := ValidateBuildMode(mode)
@@ -215,28 +230,38 @@ func NormalizeBuildMode(mode string) string {
 // characters are rejected so the value cannot escape /workspace/source/app or
 // break the staging scripts.
 func ValidateDockerfilePath(dockerfilePath string) (string, error) {
-	trimmed := strings.TrimSpace(dockerfilePath)
+	return validateRelativeSourcePath(dockerfilePath, "Dockerfile", "dockerfile path")
+}
+
+// ValidateConfigFilePath returns a safe railpack config path relative to app sources.
+// Empty defaults to "railpack.json". The same path rules as ValidateDockerfilePath apply.
+func ValidateConfigFilePath(configFile string) (string, error) {
+	return validateRelativeSourcePath(configFile, "railpack.json", "config file")
+}
+
+func validateRelativeSourcePath(raw, emptyDefault, label string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
-		return "Dockerfile", nil
+		return emptyDefault, nil
 	}
 
 	// Staging runs on Linux; keep the check host-agnostic for CLI callers.
 	if path.IsAbs(trimmed) || filepath.IsAbs(trimmed) ||
 		(len(trimmed) >= 2 && trimmed[1] == ':') ||
 		strings.HasPrefix(trimmed, `\\`) {
-		return "", fmt.Errorf("invalid dockerfile path %q: absolute paths are not allowed", dockerfilePath)
+		return "", fmt.Errorf("invalid %s %q: absolute paths are not allowed", label, raw)
 	}
 
 	normalized := filepath.ToSlash(trimmed)
 	for _, part := range strings.Split(normalized, "/") {
 		if part == ".." {
-			return "", fmt.Errorf("invalid dockerfile path %q: paths must not contain '..'", dockerfilePath)
+			return "", fmt.Errorf("invalid %s %q: paths must not contain '..'", label, raw)
 		}
 	}
 
 	cleaned := path.Clean(normalized)
 	if cleaned == ".." || strings.HasPrefix(cleaned, "../") || path.IsAbs(cleaned) {
-		return "", fmt.Errorf("invalid dockerfile path %q: path must stay within application sources", dockerfilePath)
+		return "", fmt.Errorf("invalid %s %q: path must stay within application sources", label, raw)
 	}
 
 	// Keep paths simple so the value is safe to pass through a shell.
@@ -245,7 +270,7 @@ func ValidateDockerfilePath(dockerfilePath string) (string, error) {
 			r == '.' || r == '_' || r == '-' || r == '/' {
 			continue
 		}
-		return "", fmt.Errorf("invalid dockerfile path %q: only letters, digits, '.', '_', '-', and '/' are allowed", dockerfilePath)
+		return "", fmt.Errorf("invalid %s %q: only letters, digits, '.', '_', '-', and '/' are allowed", label, raw)
 	}
 
 	return cleaned, nil
@@ -257,6 +282,7 @@ type ApplicationStage struct {
 	Builder        string `yaml:"builder,omitempty" json:"builder,omitempty"`
 	BuildMode      string `yaml:"buildMode,omitempty" json:"buildMode,omitempty"`
 	DockerfilePath string `yaml:"dockerfilePath,omitempty" json:"dockerfilePath,omitempty"`
+	ConfigFile     string `yaml:"configFile,omitempty" json:"configFile,omitempty"`
 }
 
 // ApplicationConfiguration is the part of the manifest describing the configuration of the application
@@ -394,6 +420,7 @@ type StageRequest struct {
 	BuilderImage   string `json:"builderimage,omitempty"`
 	BuildMode      string `json:"buildmode,omitempty"`
 	DockerfilePath string `json:"dockerfilepath,omitempty"`
+	ConfigFile     string `json:"configfile,omitempty"`
 }
 
 // StageResponse represents the server's response to a successful app staging
@@ -450,6 +477,7 @@ type AsyncDeployRequest struct {
 	BuilderImage   string            `json:"builderimage,omitempty"`
 	BuildMode      string            `json:"buildmode,omitempty"`
 	DockerfilePath string            `json:"dockerfilepath,omitempty"`
+	ConfigFile     string            `json:"configfile,omitempty"`
 	ImageURL       string            `json:"image,omitempty"`
 	Origin         ApplicationOrigin `json:"origin,omitempty"`
 }

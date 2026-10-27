@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -201,6 +202,7 @@ func (c *DFlowClient) AppPush(ctx context.Context, manifest models.ApplicationMa
 		asyncReq.BuilderImage = manifest.Staging.Builder
 		asyncReq.BuildMode = manifest.Staging.BuildMode
 		asyncReq.DockerfilePath = manifest.Staging.DockerfilePath
+		asyncReq.ConfigFile = manifest.Staging.ConfigFile
 	}
 
 	c.ui.Normal().Msg("Building and deploying application on the server ...")
@@ -373,13 +375,63 @@ func (c *DFlowClient) reportOK(appRef models.AppRef, builder string, routes []st
 	msg.Msg("App is online.")
 }
 
-// validateLocalDockerfile rejects a build mode or builder other than railpack
-// before upload. Empty values use railpack.
+// validateLocalDockerfile rejects a builder engine other than railpack before
+// upload. A dockerfile source must have its Dockerfile in a local directory.
+// A config-file source must have its railpack config file there. Git and
+// archive origins are checked on the server.
 func validateLocalDockerfile(manifest models.ApplicationManifest) error {
-	if manifest.Staging.BuildMode != "" {
-		if _, err := models.ValidateBuildMode(manifest.Staging.BuildMode); err != nil {
+	mode := manifest.Staging.BuildMode
+	if mode != "" {
+		validated, err := models.ValidateBuildMode(mode)
+		if err != nil {
 			return err
 		}
+		mode = validated
 	}
-	return models.ValidateBuilderImage(manifest.Staging.Builder)
+	if err := models.ValidateBuilderImage(manifest.Staging.Builder); err != nil {
+		return err
+	}
+
+	switch mode {
+	case models.BuildModeDockerfile:
+		dockerfilePath, err := models.ValidateDockerfilePath(manifest.Staging.DockerfilePath)
+		if err != nil {
+			return err
+		}
+		return requireLocalSourceFile(manifest, dockerfilePath, "dockerfile")
+	case models.BuildModeConfigFile:
+		configFile, err := models.ValidateConfigFilePath(manifest.Staging.ConfigFile)
+		if err != nil {
+			return err
+		}
+		return requireLocalSourceFile(manifest, configFile, "config file")
+	default:
+		return nil
+	}
+}
+
+func requireLocalSourceFile(manifest models.ApplicationManifest, relativePath, label string) error {
+	if manifest.Origin.Kind != models.OriginPath || manifest.Origin.Path == "" {
+		return nil
+	}
+
+	// Ready archives (tar/zip) are valid push sources; only directories have a
+	// local tree to validate before upload.
+	originInfo, err := os.Stat(manifest.Origin.Path)
+	if err != nil || !originInfo.IsDir() {
+		return nil
+	}
+
+	fullPath := filepath.Join(manifest.Origin.Path, filepath.FromSlash(relativePath))
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("%s not found at %q (relative to application sources)", label, fullPath)
+		}
+		return errors.Wrapf(err, "failed to access %s path", label)
+	}
+	if info.IsDir() {
+		return fmt.Errorf("%s path %q is a directory, not a file", label, fullPath)
+	}
+	return nil
 }

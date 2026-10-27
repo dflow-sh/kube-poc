@@ -126,46 +126,23 @@ data:
       echo _ _ __ ___ _____ Done
   railpack-build: |-
     # Parameters
-    # - APPIMAGE  # url of the application image to push
+    # - APPIMAGE
+    # - BUILD_MODE            railpack | dockerfile | config-file
+    # - DOCKERFILE_PATH       dockerfile source, relative to /workspace/source/app
+    # - RAILPACK_CONFIG_FILE  config-file source, relative to /workspace/source/app
     #
-    # Runs `railpack prepare`, then BuildKit with the Railpack frontend, and
-    # pushes the image to the in-cluster registry. POSIX sh only: the BuildKit
-    # image does not ship bash. Do not enable `set -x`; env values must stay
-    # out of the staging log.
+    # Railpack is the builder engine. This BuildKit image builds every source:
+    # railpack auto-detect, a Dockerfile (dockerfile frontend), or a railpack
+    # config file (`railpack prepare --config-file`, then the railpack frontend).
+    # POSIX sh only. Do not enable `set -x`; env values must stay out of the log.
     set -e
     trap "wget -q -O - --post-data='' http://localhost:4191/shutdown 2> /dev/null || true" EXIT
-    echo "railpack"
     if test ! -d "/workspace/source/app" || [ -z "$(ls -A /workspace/source/app)" ]; then
       echo Nothing to build
       sleep 60
       exit 1
     fi
-    RAILPACK_VERSION="{{ .Values.image.railpack.cliVersion }}"
-    RAILPACK_FRONTEND={{ include "dflow.imageRef" .Values.image.railpack.frontend | quote }}
-    case "$(uname -m)" in
-      x86_64) RAILPACK_ARCH=x86_64 ;;
-      aarch64|arm64) RAILPACK_ARCH=aarch64 ;;
-      *) echo "unsupported architecture $(uname -m)"; exit 1 ;;
-    esac
     mkdir -p /tmp/railpack /workspace/cache/bin /workspace/cache/buildkit /etc/buildkit /root/.docker
-    BIN="/workspace/cache/bin/railpack-${RAILPACK_VERSION}-${RAILPACK_ARCH}"
-    if ! test -x "$BIN"; then
-      URL="https://github.com/railwayapp/railpack/releases/download/${RAILPACK_VERSION}/railpack-${RAILPACK_VERSION}-${RAILPACK_ARCH}-unknown-linux-musl.tar.gz"
-      TMP="/tmp/railpack-download.tgz"
-      if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$URL" -o "$TMP"
-      elif command -v wget >/dev/null 2>&1; then
-        wget -O "$TMP" "$URL"
-      else
-        echo "curl or wget is required to download railpack ${RAILPACK_VERSION}"
-        exit 1
-      fi
-      rm -rf /tmp/railpack-extract
-      mkdir -p /tmp/railpack-extract
-      tar -xzf "$TMP" -C /tmp/railpack-extract railpack
-      cp /tmp/railpack-extract/railpack "$BIN"
-      chmod 0755 "$BIN"
-    fi
     if test -f /home/cnb/.docker/config.json; then
       cp /home/cnb/.docker/config.json /root/.docker/config.json
     fi
@@ -194,29 +171,98 @@ data:
       cat /tmp/buildkitd.log
       exit 1
     fi
-    set --
-    for path in /workspace/source/env/*; do
-      test -f "$path" || continue
-      key="$(basename "$path")"
-      val="$(cat "$path")"
-      export "${key}=${val}"
-      set -- "$@" --env "${key}=${val}"
-    done
-    "$BIN" prepare /workspace/source/app \
-      --plan-out /tmp/railpack/railpack-plan.json \
-      --info-out /tmp/railpack/railpack-info.json \
-      "$@"
-    set -- buildctl build \
-      --progress=plain \
-      --frontend=gateway.v0 \
-      --opt "source=${RAILPACK_FRONTEND}" \
-      --local context=/workspace/source/app \
-      --local dockerfile=/tmp/railpack
-    for path in /workspace/source/env/*; do
-      test -f "$path" || continue
-      key="$(basename "$path")"
-      set -- "$@" --secret "id=${key},env=${key}"
-    done
-    set -- "$@" --output "type=image,name=${APPIMAGE},push=true"
-    "$@"
+    case "${BUILD_MODE:-railpack}" in
+      dockerfile)
+        # Dockerfile source: BuildKit dockerfile frontend in this image.
+        echo "dockerfile"
+        DOCKERFILE="${DOCKERFILE_PATH:-Dockerfile}"
+        if test ! -f "/workspace/source/app/${DOCKERFILE}"; then
+          echo "Dockerfile not found: ${DOCKERFILE}"
+          exit 1
+        fi
+        set -- buildctl build \
+          --progress=plain \
+          --frontend dockerfile.v0 \
+          --local context=/workspace/source/app \
+          --local dockerfile=/workspace/source/app \
+          --opt "filename=${DOCKERFILE}"
+        for path in /workspace/source/env/*; do
+          test -f "$path" || continue
+          key="$(basename "$path")"
+          val="$(cat "$path")"
+          set -- "$@" --opt "build-arg:${key}=${val}"
+        done
+        set -- "$@" --output "type=image,name=${APPIMAGE},push=true"
+        "$@"
+        ;;
+      railpack|config-file)
+        RAILPACK_VERSION="{{ .Values.image.railpack.cliVersion }}"
+        RAILPACK_FRONTEND={{ include "dflow.imageRef" .Values.image.railpack.frontend | quote }}
+        case "$(uname -m)" in
+          x86_64) RAILPACK_ARCH=x86_64 ;;
+          aarch64|arm64) RAILPACK_ARCH=aarch64 ;;
+          *) echo "unsupported architecture $(uname -m)"; exit 1 ;;
+        esac
+        BIN="/workspace/cache/bin/railpack-${RAILPACK_VERSION}-${RAILPACK_ARCH}"
+        if ! test -x "$BIN"; then
+          URL="https://github.com/railwayapp/railpack/releases/download/${RAILPACK_VERSION}/railpack-${RAILPACK_VERSION}-${RAILPACK_ARCH}-unknown-linux-musl.tar.gz"
+          TMP="/tmp/railpack-download.tgz"
+          if command -v curl >/dev/null 2>&1; then
+            curl -fsSL "$URL" -o "$TMP"
+          elif command -v wget >/dev/null 2>&1; then
+            wget -O "$TMP" "$URL"
+          else
+            echo "curl or wget is required to download railpack ${RAILPACK_VERSION}"
+            exit 1
+          fi
+          rm -rf /tmp/railpack-extract
+          mkdir -p /tmp/railpack-extract
+          tar -xzf "$TMP" -C /tmp/railpack-extract railpack
+          cp /tmp/railpack-extract/railpack "$BIN"
+          chmod 0755 "$BIN"
+        fi
+        set --
+        for path in /workspace/source/env/*; do
+          test -f "$path" || continue
+          key="$(basename "$path")"
+          val="$(cat "$path")"
+          export "${key}=${val}"
+          set -- "$@" --env "${key}=${val}"
+        done
+        if [ "${BUILD_MODE:-railpack}" = "config-file" ] || [ -n "${RAILPACK_CONFIG_FILE}" ]; then
+          # Config-file source: railpack prepare --config-file, then the railpack frontend.
+          cfg="${RAILPACK_CONFIG_FILE:-railpack.json}"
+          if test ! -f "/workspace/source/app/${cfg}"; then
+            echo "railpack config file not found: ${cfg}"
+            exit 1
+          fi
+          echo "railpack-config"
+          set -- "$@" --config-file "/workspace/source/app/${cfg}"
+        else
+          # Auto-detect. railpack prepare reads railpack.json at the app root when present.
+          echo "railpack"
+        fi
+        "$BIN" prepare /workspace/source/app \
+          --plan-out /tmp/railpack/railpack-plan.json \
+          --info-out /tmp/railpack/railpack-info.json \
+          "$@"
+        set -- buildctl build \
+          --progress=plain \
+          --frontend=gateway.v0 \
+          --opt "source=${RAILPACK_FRONTEND}" \
+          --local context=/workspace/source/app \
+          --local dockerfile=/tmp/railpack
+        for path in /workspace/source/env/*; do
+          test -f "$path" || continue
+          key="$(basename "$path")"
+          set -- "$@" --secret "id=${key},env=${key}"
+        done
+        set -- "$@" --output "type=image,name=${APPIMAGE},push=true"
+        "$@"
+        ;;
+      *)
+        echo "invalid builder engine: sources are railpack, dockerfile, and config-file"
+        exit 1
+        ;;
+    esac
     echo "_ _ __ ___ _____ Done"

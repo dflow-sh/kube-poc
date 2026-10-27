@@ -225,18 +225,40 @@ var _ = Describe("ValidateBuildMode", func() {
 		Expect(err.Error()).To(ContainSubstring("railpack"))
 	})
 
-	It("accepts railpack case-insensitively", func() {
+	It("accepts dockerfile and config-file as DEFAULT_BUILD_MODE", func() {
+		t := GinkgoT()
+		t.Setenv("DEFAULT_BUILD_MODE", "dockerfile")
+		mode, err := models.ValidateBuildMode("")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(mode).To(Equal(models.BuildModeDockerfile))
+
+		t.Setenv("DEFAULT_BUILD_MODE", "config-file")
+		mode, err = models.ValidateBuildMode("")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(mode).To(Equal(models.BuildModeConfigFile))
+	})
+
+	It("accepts railpack, dockerfile, and config-file sources", func() {
 		mode, err := models.ValidateBuildMode("RailPack")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(mode).To(Equal(models.BuildModeRailpack))
+
+		mode, err = models.ValidateBuildMode("DockerFile")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(mode).To(Equal(models.BuildModeDockerfile))
+
+		mode, err = models.ValidateBuildMode("Config-File")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(mode).To(Equal(models.BuildModeConfigFile))
+		Expect(models.NormalizeBuildMode("Config-File")).To(Equal(models.BuildModeConfigFile))
 	})
 
-	It("rejects any builder other than railpack", func() {
-		for _, mode := range []string{"buildpack", "BuildPack", "dockerfile", "DockerFile", "kaniko", "dockerfle"} {
+	It("rejects any builder engine other than railpack", func() {
+		for _, mode := range []string{"buildpack", "BuildPack", "dockerfle"} {
 			got, err := models.ValidateBuildMode(mode)
 			Expect(err).To(HaveOccurred(), mode)
 			Expect(got).To(Equal(""))
-			Expect(err.Error()).To(ContainSubstring("only"))
+			Expect(err.Error()).To(ContainSubstring("builder engine"))
 			Expect(err.Error()).To(ContainSubstring("railpack"))
 			Expect(models.NormalizeBuildMode(mode)).ToNot(Equal(models.BuildModeRailpack))
 		}
@@ -249,11 +271,15 @@ var _ = Describe("ValidateBuilderImage", func() {
 		Expect(models.ValidateBuilderImage("  railpack  ")).ToNot(HaveOccurred())
 	})
 
-	It("rejects any other builder", func() {
+	It("rejects any other builder engine", func() {
 		err := models.ValidateBuilderImage("paketobuildpacks/builder-jammy-full:0.3.495")
 		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("only"))
+		Expect(err.Error()).To(ContainSubstring("builder engine"))
 		Expect(err.Error()).To(ContainSubstring("railpack"))
+
+		err = models.ValidateBuilderImage("kaniko")
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("invalid builder engine \"kaniko\""))
 	})
 })
 
@@ -294,5 +320,29 @@ var _ = Describe("ValidateDockerfilePath", func() {
 
 		_, err = models.ValidateDockerfilePath("foo*.Dockerfile")
 		Expect(err).To(HaveOccurred())
+	})
+})
+
+var _ = Describe("ValidateConfigFilePath", func() {
+	It("defaults empty to railpack.json", func() {
+		path, err := models.ValidateConfigFilePath("")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(path).To(Equal("railpack.json"))
+	})
+
+	It("accepts a relative config path", func() {
+		path, err := models.ValidateConfigFilePath("railpack/build.json")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(path).To(Equal("railpack/build.json"))
+	})
+
+	It("rejects absolute paths and parent directory traversal", func() {
+		_, err := models.ValidateConfigFilePath("/etc/passwd")
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("absolute"))
+
+		_, err = models.ValidateConfigFilePath("../railpack.json")
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring(".."))
 	})
 })

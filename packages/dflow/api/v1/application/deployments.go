@@ -141,6 +141,14 @@ func DeploymentsStart(c *gin.Context) apierror.APIErrors {
 			return apierror.NewBadRequestError(err.Error())
 		}
 	}
+	if req.ConfigFile != "" {
+		if _, err := models.ValidateConfigFilePath(req.ConfigFile); err != nil {
+			return apierror.NewBadRequestError(err.Error())
+		}
+	}
+	if req.DockerfilePath != "" && req.ConfigFile != "" {
+		return apierror.NewBadRequestError("invalid build source: dockerfile and config-file cannot be combined")
+	}
 
 	id, err := asyncDeployJobID()
 	if err != nil {
@@ -243,7 +251,7 @@ func runAsyncDeployment(ctx context.Context, deploymentID string, req models.Asy
 	if req.BlobUID != "" || req.ImageURL == "" {
 		update(func(s *models.AsyncDeployStatus) { s.Status = "staging" })
 
-		stageResp, apiErr := stageForAsyncDeploy(ctx, cluster, req.App, req.BlobUID, req.BuilderImage, req.BuildMode, req.DockerfilePath, username)
+		stageResp, apiErr := stageForAsyncDeploy(ctx, cluster, req.App, req.BlobUID, req.BuilderImage, req.BuildMode, req.DockerfilePath, req.ConfigFile, username)
 		if apiErr != nil {
 			failAPI(apiErr)
 			return
@@ -340,6 +348,7 @@ func stageForAsyncDeploy(
 	builderImage string,
 	buildMode string,
 	dockerfilePath string,
+	configFile string,
 	username string,
 ) (*models.StageResponse, apierror.APIErrors) {
 	log := requestctx.Logger(ctx).With("component", "async-stage")
@@ -368,9 +377,10 @@ func stageForAsyncDeploy(
 		BuilderImage:   builderImage,
 		BuildMode:      buildMode,
 		DockerfilePath: dockerfilePath,
+		ConfigFile:     configFile,
 	}
 
-	resolvedBuildMode, resolvedDockerfilePath, builder, config, setupErr := resolveStagingImagesAndScripts(ctx, cluster, stageReq, app)
+	resolvedBuildMode, resolvedDockerfilePath, resolvedConfigFile, builder, config, setupErr := resolveStagingImagesAndScripts(ctx, cluster, stageReq, app)
 	if setupErr != nil {
 		return nil, setupErr
 	}
@@ -443,6 +453,7 @@ func stageForAsyncDeploy(
 		BuilderImage:        builder,
 		BuildMode:           resolvedBuildMode,
 		DockerfilePath:      resolvedDockerfilePath,
+		ConfigFile:          resolvedConfigFile,
 		RailpackBuildImage:  config.RailpackBuildImage,
 		DownloadImage:       config.DownloadImage,
 		UnpackImage:         config.UnpackImage,

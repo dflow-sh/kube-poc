@@ -268,6 +268,10 @@ func buildAndPatch(
 	if pathErr != nil {
 		return models.StageResponse{}, stageParam{}, pathErr
 	}
+	configFile, configPathErr := resolveConfigFilePath(req, app, buildMode)
+	if configPathErr != nil {
+		return models.StageResponse{}, stageParam{}, configPathErr
+	}
 
 	builderImage, config, configErr := stagingImagesAndConfig(ctx, cluster, buildMode, req)
 	if configErr != nil {
@@ -339,6 +343,7 @@ func buildAndPatch(
 		BuilderImage:        builderImage,
 		BuildMode:           buildMode,
 		DockerfilePath:      dockerfilePath,
+		ConfigFile:          configFile,
 		RailpackBuildImage:  config.RailpackBuildImage,
 		BlobUID:             newBlobUID,
 		DownloadImage:       config.DownloadImage,

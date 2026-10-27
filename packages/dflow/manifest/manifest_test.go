@@ -125,8 +125,38 @@ staging:
 
 				_, err = manifest.Get("otherbuilder.yml")
 				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("invalid builder \"snafu\""))
+				Expect(err.Error()).To(ContainSubstring("invalid builder engine \"snafu\""))
 				Expect(err.Error()).To(ContainSubstring("only \"railpack\" is supported"))
+			})
+
+			It("accepts dockerfile and config-file sources", func() {
+				err := os.WriteFile("dockerfile.yml", []byte(`name: foo
+staging:
+  buildMode: dockerfile
+  dockerfilePath: docker/Dockerfile
+`), 0600)
+				Expect(err).ToNot(HaveOccurred())
+				DeferCleanup(func() {
+					Expect(os.Remove("dockerfile.yml")).To(Succeed())
+				})
+				m, err := manifest.Get("dockerfile.yml")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(m.Staging.BuildMode).To(Equal(models.BuildModeDockerfile))
+				Expect(m.Staging.DockerfilePath).To(Equal("docker/Dockerfile"))
+
+				err = os.WriteFile("configfile.yml", []byte(`name: foo
+staging:
+  buildMode: config-file
+  configFile: railpack/build.json
+`), 0600)
+				Expect(err).ToNot(HaveOccurred())
+				DeferCleanup(func() {
+					Expect(os.Remove("configfile.yml")).To(Succeed())
+				})
+				m, err = manifest.Get("configfile.yml")
+				Expect(err).ToNot(HaveOccurred())
+				Expect(m.Staging.BuildMode).To(Equal(models.BuildModeConfigFile))
+				Expect(m.Staging.ConfigFile).To(Equal("railpack/build.json"))
 			})
 
 			It("works", func() {

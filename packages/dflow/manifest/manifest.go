@@ -126,7 +126,37 @@ func UpdateBuilder(manifest models.ApplicationManifest, cmd *cobra.Command) (mod
 		manifest.Staging.DockerfilePath = validated
 	}
 
+	configFile, err := cmd.Flags().GetString("config-file")
+	if err != nil {
+		return manifest, errors.Wrap(err, "could not read option --config-file")
+	}
+	if configFile != "" {
+		validated, err := models.ValidateConfigFilePath(configFile)
+		if err != nil {
+			return manifest, errors.Wrap(err, "invalid --config-file")
+		}
+		manifest.Staging.ConfigFile = validated
+		if manifest.Staging.BuildMode == "" {
+			manifest.Staging.BuildMode = models.BuildModeConfigFile
+		}
+	}
+	if err := rejectCombinedBuildSources(manifest.Staging.BuildMode, manifest.Staging.DockerfilePath, manifest.Staging.ConfigFile); err != nil {
+		return manifest, err
+	}
+
 	return manifest, nil
+}
+
+// rejectCombinedBuildSources reports an explicit dockerfile source combined
+// with an explicit config file. Each flag on its own is a valid source.
+func rejectCombinedBuildSources(mode, dockerfilePath, configFile string) error {
+	if strings.TrimSpace(dockerfilePath) == "" || strings.TrimSpace(configFile) == "" {
+		return nil
+	}
+	if mode == models.BuildModeDockerfile || mode == models.BuildModeConfigFile || mode == "" {
+		return errors.New("invalid build source: dockerfile and config-file cannot be combined")
+	}
+	return nil
 }
 
 // UpdateAppChart updates the incoming manifest with information pulled from the --app-chart option
@@ -443,6 +473,19 @@ func Get(manifestPath string) (models.ApplicationManifest, error) {
 			return empty, errors.Wrap(err, "invalid staging.dockerfilePath")
 		}
 		manifest.Staging.DockerfilePath = validated
+	}
+	if manifest.Staging.ConfigFile != "" {
+		validated, err := models.ValidateConfigFilePath(manifest.Staging.ConfigFile)
+		if err != nil {
+			return empty, errors.Wrap(err, "invalid staging.configFile")
+		}
+		manifest.Staging.ConfigFile = validated
+		if manifest.Staging.BuildMode == "" {
+			manifest.Staging.BuildMode = models.BuildModeConfigFile
+		}
+	}
+	if err := rejectCombinedBuildSources(manifest.Staging.BuildMode, manifest.Staging.DockerfilePath, manifest.Staging.ConfigFile); err != nil {
+		return empty, err
 	}
 
 	// Verify that origin information is one-of only.

@@ -51,8 +51,9 @@ image:
   builder:
     userid: 1001
     groupid: 1000
-  # Railpack is the staging builder. The staging job runs this BuildKit
-  # image, downloads the railpack CLI, and pushes the image with buildctl.
+  # Railpack is the staging builder engine. The staging job runs this
+  # BuildKit image for every source: railpack auto-detect, a Dockerfile
+  # (dockerfile frontend), and a railpack config file.
   # Railpack v0.43.0 builds against BuildKit v0.34.0. v0.34.1 is the latest
   # release on that line.
   railpack:
@@ -82,8 +83,9 @@ server:
   # The ingressClassName is used to select the ingress controller for apps.
   # If empty ingress.ingressClassName (see below) is used
   ingressClassName: ""
-  # Build mode used when a push does not pass --build-mode.
-  # Only railpack is supported.
+  # Build source used when a push does not pass --build-mode.
+  # railpack auto-detects. dockerfile and config-file are explicit sources.
+  # Any other builder engine is rejected.
   defaultBuildMode: railpack
   # Reported by /info as default_builder_image. Also the fallback when no
   # BuilderImage resource is marked default. railpack is not a container image.

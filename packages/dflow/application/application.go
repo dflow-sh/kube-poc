@@ -25,17 +25,17 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dflow-sh/kube-poc/packages/dflow/helpers"
-	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
-	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes/tailer"
 	"github.com/dflow-sh/kube-poc/packages/dflow/cli/server/requestctx"
 	"github.com/dflow-sh/kube-poc/packages/dflow/duration"
 	"github.com/dflow-sh/kube-poc/packages/dflow/helm"
 	"github.com/dflow-sh/kube-poc/packages/dflow/helmchart"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes"
+	"github.com/dflow-sh/kube-poc/packages/dflow/helpers/kubernetes/tailer"
 	"github.com/dflow-sh/kube-poc/packages/dflow/namespaces"
+	"github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/models"
 	"github.com/dflow-sh/kube-poc/packages/dflow/registry"
 	"github.com/dflow-sh/kube-poc/packages/dflow/s3manager"
-	"github.com/dflow-sh/kube-poc/packages/dflow/pkg/api/core/v1/models"
 	"github.com/go-logr/logr"
 	"github.com/pkg/errors"
 
@@ -1340,6 +1340,20 @@ func DockerfilePath(app *unstructured.Unstructured) (string, error) {
 	return path, nil
 }
 
+// ConfigFile returns the railpack config file stored on the app resource.
+func ConfigFile(app *unstructured.Unstructured) (string, error) {
+	path, _, err := unstructured.NestedString(
+		app.UnstructuredContent(),
+		"spec",
+		"configfile",
+	)
+	if err != nil {
+		return "", errors.New("configfile should be string")
+	}
+
+	return path, nil
+}
+
 // ErrBlobCleanupIncomplete is returned when blob cleanup could not complete
 // due to storage quota issues. The unstaging operation succeeded for jobs and
 // secrets, but some blobs remain in S3 storage. This is a non-fatal warning
@@ -1877,6 +1891,11 @@ func aggregate(ctx context.Context,
 		return nil, errors.Wrap(err, "finding the dockerfile path")
 	}
 
+	configFile, err := ConfigFile(&appCR)
+	if err != nil {
+		return nil, errors.Wrap(err, "finding the config file")
+	}
+
 	settings, err := Settings(&appCR)
 	if err != nil {
 		return nil, errors.Wrap(err, "finding settings")
@@ -1910,6 +1929,7 @@ func aggregate(ctx context.Context,
 	app.Staging.Builder = builderURL
 	app.Staging.BuildMode = buildMode
 	app.Staging.DockerfilePath = dockerfilePath
+	app.Staging.ConfigFile = configFile
 
 	// IV. Assemble the deployment structure for active applications.
 
@@ -1955,23 +1975,28 @@ func loadEnvironmentData(
 	return environment, groupedEnv, nil
 }
 
-func loadStagingFields(applicationCR *unstructured.Unstructured) (string, string, string, error) {
+func loadStagingFields(applicationCR *unstructured.Unstructured) (string, string, string, string, error) {
 	builderURL, err := BuilderURL(applicationCR)
 	if err != nil {
-		return "", "", "", errors.Wrap(err, "finding the builder url")
+		return "", "", "", "", errors.Wrap(err, "finding the builder url")
 	}
 
 	buildMode, err := BuildMode(applicationCR)
 	if err != nil {
-		return "", "", "", errors.Wrap(err, "finding the build mode")
+		return "", "", "", "", errors.Wrap(err, "finding the build mode")
 	}
 
 	dockerfilePath, err := DockerfilePath(applicationCR)
 	if err != nil {
-		return "", "", "", errors.Wrap(err, "finding the dockerfile path")
+		return "", "", "", "", errors.Wrap(err, "finding the dockerfile path")
 	}
 
-	return builderURL, buildMode, dockerfilePath, nil
+	configFile, err := ConfigFile(applicationCR)
+	if err != nil {
+		return "", "", "", "", errors.Wrap(err, "finding the config file")
+	}
+
+	return builderURL, buildMode, dockerfilePath, configFile, nil
 }
 
 // fetch is a helper for Lookup. It fetches all information about an application from the cluster.
@@ -2074,7 +2099,7 @@ func fetch(ctx context.Context, cluster *kubernetes.Cluster, app *models.App) er
 		return err
 	}
 
-	builderURL, buildMode, dockerfilePath, err := loadStagingFields(applicationCR)
+	builderURL, buildMode, dockerfilePath, configFile, err := loadStagingFields(applicationCR)
 	if err != nil {
 		app.StatusMessage = err.Error()
 		app.Status = models.ApplicationError
@@ -2107,6 +2132,7 @@ func fetch(ctx context.Context, cluster *kubernetes.Cluster, app *models.App) er
 	app.Staging.Builder = builderURL
 	app.Staging.BuildMode = buildMode
 	app.Staging.DockerfilePath = dockerfilePath
+	app.Staging.ConfigFile = configFile
 
 	// Check if app is active, and if yes, fill the associated parts.  May have to
 	// straighten the workload structure a bit further.

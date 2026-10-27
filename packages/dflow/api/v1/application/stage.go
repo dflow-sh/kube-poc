@@ -60,6 +60,7 @@ type stageParam struct {
 	BuilderImage        string
 	BuildMode           string
 	DockerfilePath      string
+	ConfigFile          string
 	RailpackBuildImage  string
 	DownloadImage       string
 	UnpackImage         string
@@ -209,7 +210,7 @@ func Stage(c *gin.Context) apierror.APIErrors {
 		return apierror.NewBadRequestError("staging job for image ID still running")
 	}
 
-	buildMode, dockerfilePath, builderImage, config, setupErr := resolveStagingImagesAndScripts(ctx, cluster, req, app)
+	buildMode, dockerfilePath, configFile, builderImage, config, setupErr := resolveStagingImagesAndScripts(ctx, cluster, req, app)
 	if setupErr != nil {
 		return setupErr
 	}
@@ -218,6 +219,7 @@ func Stage(c *gin.Context) apierror.APIErrors {
 	log.Infow("staging app", "build mode", buildMode)
 	log.Infow("staging app", "builder", builderImage)
 	log.Infow("staging app", "dockerfile", dockerfilePath)
+	log.Infow("staging app", "config file", configFile)
 	log.Infow("staging app", "download", config.DownloadImage)
 	log.Infow("staging app", "unpack", config.UnpackImage)
 	log.Infow("staging app", "userid", config.UserID)
@@ -293,6 +295,7 @@ func Stage(c *gin.Context) apierror.APIErrors {
 		BuilderImage:        builderImage,
 		BuildMode:           buildMode,
 		DockerfilePath:      dockerfilePath,
+		ConfigFile:          configFile,
 		RailpackBuildImage:  config.RailpackBuildImage,
 		BlobUID:             blobUID,
 		DownloadImage:       config.DownloadImage,
@@ -913,21 +916,21 @@ func newJobRun(app stageParam) (*batchv1.Job, *corev1.Secret) {
 }
 
 // stagingBuildContainer returns the railpack staging container.
-// Any other build mode exits before BuildKit runs.
+// Dockerfile and config-file sources use the same BuildKit image.
+// Any other builder engine exits before BuildKit runs.
 func stagingBuildContainer(
 	app stageParam,
 	volumeMounts []corev1.VolumeMount,
 	stageEnv []corev1.EnvVar,
 	railpackScript string,
 ) corev1.Container {
-	mode, err := models.ValidateBuildMode(app.BuildMode)
-	if err != nil || mode != models.BuildModeRailpack {
+	if _, err := models.ValidateBuildMode(app.BuildMode); err != nil {
 		return corev1.Container{
 			Name:         "railpack",
 			Image:        app.RailpackBuildImage,
 			VolumeMounts: volumeMounts,
 			Command:      []string{"/bin/sh", "-c"},
-			Args:         []string{"echo 'invalid build mode: only railpack is supported'; exit 1"},
+			Args:         []string{"echo 'invalid builder engine: sources are railpack, dockerfile, and config-file'; exit 1"},
 			Env:          stageEnv,
 			Resources:    app.HelmValues.Resources,
 		}
@@ -965,6 +968,17 @@ func assembleStageEnv(app, previous stageParam) []corev1.EnvVar {
 	stageEnv = appendEnvVar(stageEnv, "APPIMAGE", app.ImageURL(app.RegistryURL))
 	stageEnv = appendEnvVar(stageEnv, "USERID", strconv.FormatInt(app.UserID, 10))
 	stageEnv = appendEnvVar(stageEnv, "GROUPID", strconv.FormatInt(app.GroupID, 10))
+	stageEnv = appendEnvVar(stageEnv, "BUILD_MODE", app.BuildMode)
+	if app.BuildMode == models.BuildModeDockerfile {
+		dockerfilePath := app.DockerfilePath
+		if dockerfilePath == "" {
+			dockerfilePath = "Dockerfile"
+		}
+		stageEnv = appendEnvVar(stageEnv, "DOCKERFILE_PATH", dockerfilePath)
+	}
+	if app.ConfigFile != "" {
+		stageEnv = appendEnvVar(stageEnv, "RAILPACK_CONFIG_FILE", app.ConfigFile)
+	}
 
 	return stageEnv
 }
@@ -1246,6 +1260,7 @@ func updateApp(ctx context.Context, cluster *kubernetes.Cluster, app *unstructur
 		"blobuid":        params.BlobUID,
 		"buildmode":      params.BuildMode,
 		"dockerfilepath": params.DockerfilePath,
+		"configfile":     params.ConfigFile,
 		"builderimage":   models.BuildModeRailpack,
 	}
 
@@ -1509,6 +1524,14 @@ func validateStageRequestBuildSettings(req models.StageRequest) apierror.APIErro
 			return apierror.NewBadRequestError(err.Error())
 		}
 	}
+	if req.ConfigFile != "" {
+		if _, err := models.ValidateConfigFilePath(req.ConfigFile); err != nil {
+			return apierror.NewBadRequestError(err.Error())
+		}
+	}
+	if req.DockerfilePath != "" && req.ConfigFile != "" {
+		return apierror.NewBadRequestError("invalid build source: dockerfile and config-file cannot be combined")
+	}
 	return nil
 }
 
@@ -1519,22 +1542,26 @@ func resolveStagingImagesAndScripts(
 	cluster *kubernetes.Cluster,
 	req models.StageRequest,
 	app *unstructured.Unstructured,
-) (string, string, string, *StagingScriptConfig, apierror.APIErrors) {
+) (string, string, string, string, *StagingScriptConfig, apierror.APIErrors) {
 	buildMode, resolveErr := resolveBuildMode(req, app)
 	if resolveErr != nil {
-		return "", "", "", nil, resolveErr
+		return "", "", "", "", nil, resolveErr
 	}
 	dockerfilePath, pathErr := resolveDockerfilePath(req, app)
 	if pathErr != nil {
-		return "", "", "", nil, pathErr
+		return "", "", "", "", nil, pathErr
+	}
+	configFile, configPathErr := resolveConfigFilePath(req, app, buildMode)
+	if configPathErr != nil {
+		return "", "", "", "", nil, configPathErr
 	}
 
 	builderImage, config, configErr := stagingImagesAndConfig(ctx, cluster, buildMode, req)
 	if configErr != nil {
-		return "", "", "", nil, configErr
+		return "", "", "", "", nil, configErr
 	}
 
-	return buildMode, dockerfilePath, builderImage, config, nil
+	return buildMode, dockerfilePath, configFile, builderImage, config, nil
 }
 
 func resolveBuildMode(req models.StageRequest, app *unstructured.Unstructured) (string, apierror.APIErrors) {
@@ -1583,23 +1610,49 @@ func resolveDockerfilePath(req models.StageRequest, app *unstructured.Unstructur
 	return validated, nil
 }
 
+func resolveConfigFilePath(req models.StageRequest, app *unstructured.Unstructured, mode string) (string, apierror.APIErrors) {
+	if req.ConfigFile != "" {
+		path, err := models.ValidateConfigFilePath(req.ConfigFile)
+		if err != nil {
+			return "", apierror.NewBadRequestError(err.Error())
+		}
+		return path, nil
+	}
+
+	// An explicit railpack or dockerfile source does not keep a previously
+	// stored config file. Omitting the mode keeps the stored source.
+	if req.BuildMode != "" && mode != models.BuildModeConfigFile {
+		return "", nil
+	}
+
+	path, _, err := unstructured.NestedString(app.UnstructuredContent(), "spec", "configfile")
+	if err != nil {
+		return "", apierror.NewBadRequestError(err.Error())
+	}
+	if path != "" {
+		validated, pathErr := models.ValidateConfigFilePath(path)
+		if pathErr != nil {
+			return "", apierror.NewBadRequestError(pathErr.Error())
+		}
+		return validated, nil
+	}
+	if mode == models.BuildModeConfigFile {
+		return "railpack.json", nil
+	}
+	return "", nil
+}
+
 // stagingImagesAndConfig loads the railpack staging scripts.
-// Any other build mode or builder is rejected.
+// Dockerfile and config-file sources use that same image.
+// Any other builder engine is rejected.
 func stagingImagesAndConfig(
 	ctx context.Context,
 	cluster *kubernetes.Cluster,
 	buildMode string,
 	req models.StageRequest,
 ) (string, *StagingScriptConfig, apierror.APIErrors) {
-	mode, err := models.ValidateBuildMode(buildMode)
-	if err != nil {
+	if _, err := models.ValidateBuildMode(buildMode); err != nil {
 		return "", nil, apierror.NewBadRequestError(err.Error())
-	}
-	if mode != models.BuildModeRailpack {
-		return "", nil, apierror.NewBadRequestError(fmt.Sprintf(
-			"invalid build mode %q: only %q is supported",
-			buildMode, models.BuildModeRailpack,
-		))
 	}
 	if builderErr := models.ValidateBuilderImage(req.BuilderImage); builderErr != nil {
 		return "", nil, apierror.NewBadRequestError(builderErr.Error())

@@ -113,7 +113,7 @@ k3s is started with `cluster-init: true` (embedded etcd). A server that was inst
 
 When a GitHub Release exists, the script downloads the `dflow` CLI and the Helm chart package (`dflow-<version>.tgz`) from that release, and pulls the server image `ghcr.io/dflow-sh/dflow-server:<tag>`. The CLI download is checked against `checksums.txt`. A missing checksum, a checksum mismatch, a binary that does not run, or a server image that cannot be pulled exits non-zero. The script does not build this checkout in those cases. `--version vX.Y.Z` selects that release instead of the latest one. `--from-checkout` builds the CLI and tags the server image `dev-<git sha>`. That build reports `v0.0.0-dev`. CI also uploads CLI binaries and a server image archive as workflow artifacts. That is not a production deploy.
 
-The chart sets `server.defaultBuildMode` to `railpack`. A `dflow push` builds with Railpack (BuildKit in the staging job, image pushed to the in-cluster registry). Any other `--build-mode` or `--builder-image` is rejected. `dflow app logs --staging` prints the staging pod name once, then left-aligned log lines. `--verbose` restores the pod and container prefix on every line.
+The chart sets `server.defaultBuildMode` to `railpack`. A `dflow push` with no `--build-mode` auto-detects with Railpack (BuildKit in the staging job, image pushed to the in-cluster registry). `--build-mode dockerfile` builds the Dockerfile with BuildKit in that same image. `--build-mode config-file` runs `railpack prepare --config-file` and then the railpack frontend. Any other `--builder-image` or builder engine name is rejected. `dflow app logs --staging` prints the staging pod name once, then left-aligned log lines. `--verbose` restores the pod and container prefix on every line.
 
 When the script finishes it prints the API URL, the `admin` password, and the login command. It has already logged in, pushed `traefik/whoami` as `dflow-install-check`, required HTTP 200 from that app URL, deleted that app, and deleted the `dflow-install-check` namespace. If an app already uses that name, or an ingress already serves `dflow-install-check.<domain>`, the push is skipped and the existing app is left in place. If any other step fails, the script exits non-zero and prints the step that failed.
 
@@ -288,7 +288,7 @@ dflow app delete hello
 dflow namespace delete sample -f
 ```
 
-Drop `-k` when the certificate is Let's Encrypt production. Expected: login prints `Login successful`, push prints `App is online.` and `https://hello.<domain>`, curl prints `HTTP/2 200` or `HTTP/1.1 200 OK`, delete prints `Applications Removed.` A source push uses railpack. Any other builder is rejected.
+Drop `-k` when the certificate is Let's Encrypt production. Expected: login prints `Login successful`, push prints `App is online.` and `https://hello.<domain>`, curl prints `HTTP/2 200` or `HTTP/1.1 200 OK`, delete prints `Applications Removed.` A source push uses the railpack engine. Dockerfile and config-file sources use that same BuildKit image. Any other builder engine is rejected.
 
 `make dflow-darwin` writes both `dist/dflow-darwin-arm64` and `dist/dflow-darwin-amd64`. Use the one that matches the Mac:
 
@@ -525,7 +525,7 @@ The chart installs, when you turn the switches on:
 - the container registry (`containerregistry.enabled`, default true)
 - S3-compatible storage via SeaweedFS (`seaweedfs.enabled`, default true)
 - railpack as the builder (`server.defaultBuilderImage`, reported by `/info` as `default_builder_image`)
-- the Railpack BuildKit image (`image.railpack`), used for source builds (`server.defaultBuildMode: railpack`)
+- the Railpack BuildKit image (`image.railpack`), used for railpack auto-detect, Dockerfile, and config-file sources (`server.defaultBuildMode: railpack`)
 
 MinIO is not installed. To use another S3 store, set `seaweedfs.enabled=false` and set `s3.endpoint`, `s3.accessKeyID`, `s3.secretAccessKey`, and `s3.bucket`.
 
@@ -585,10 +585,12 @@ dflow app delete hello
 
 `dflow app logs` without `--follow` prints the current logs and returns. Add `--follow` to stream.
 
-A source push uses railpack. The server default is `server.defaultBuildMode` (`railpack` in the chart). Any other build mode is rejected.
+A source push uses the railpack engine. The server default is `server.defaultBuildMode` (`railpack` in the chart). That default auto-detects, and `railpack prepare` reads `railpack.json` at the application root when the file is present. `--build-mode dockerfile` builds with BuildKit's dockerfile frontend in the same image (`--dockerfile-path`, default `Dockerfile`). `--build-mode config-file` passes `--config-file` to `railpack prepare` (`--config-file`, default `railpack.json`). Any other builder engine is rejected.
 
 ```bash
 dflow push -n hello -p assets/sample-app
+dflow push -n hello -p assets/sample-app --build-mode dockerfile
+dflow push -n hello -p assets/sample-app --build-mode config-file
 ```
 
 `dflow app logs --staging hello` prints the staging pod once, then the log text. Add `--verbose` on `push` or `app logs` to put the pod and container name on every line.
