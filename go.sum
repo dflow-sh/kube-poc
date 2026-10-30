@@ -475,8 +475,8 @@ github.com/paketo-buildpacks/ca-certificates/v3 v3.12.5 h1:qPHrAuLm+3tFaKHaqxOeX
 github.com/paketo-buildpacks/ca-certificates/v3 v3.12.5/go.mod h1:U9Bn3qAic9LgXLm6kxdyoT8+9mKg1TLKdIpL4WZ84a8=
 github.com/paketo-buildpacks/libpak v1.73.0 h1:OgdkOn4VLIzRo0WcSx1iRmqeLrcMAZbIk7pOOJSyl5Q=
 github.com/paketo-buildpacks/libpak v1.73.0/go.mod h1:EY01BAEtNPT1kI+/OTGTAkitNzKiFzCTGAmxapBUPJ4=
-github.com/panjf2000/ants/v2 v2.11.3 h1:AfI0ngBoXJmYOpDh9m516vjqoUu2sLrIVgppI9TZVpg=
-github.com/panjf2000/ants/v2 v2.11.3/go.mod h1:8u92CYMUc6gyvTIw8Ru7Mt7+/ESnJahz5EVtqfrilek=
+github.com/panjf2000/ants/v2 v2.12.1 h1:BWvU2wHpyXWxhhNXsGB6JXLCNbshyLd1QxvoAmZnu10=
+github.com/panjf2000/ants/v2 v2.12.1/go.mod h1:tSQuaNQ6r6NRhPt+IZVUevvDyFMTs+eS4ztZc52uJTY=
 github.com/pelletier/go-toml/v2 v2.4.3 h1:GTRvJQutkOSftxIFD5xw9aepkYNuPWmVJpffdDPYVpY=
 github.com/pelletier/go-toml/v2 v2.4.3/go.mod h1:2gIqNv+qfxSVS7cM2xJQKtLSTLUE9V8t9Stt+h56mCY=
 github.com/peterbourgon/diskv v2.0.1+incompatible h1:UBdAOUP5p4RWqPBg048CAvpKN+vxiaj6gdUUzhl4XmI=
