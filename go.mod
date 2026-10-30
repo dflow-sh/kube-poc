@@ -24,7 +24,7 @@ require (
 	github.com/briandowns/spinner v1.23.2
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/dchest/uniuri v1.2.0
-	github.com/fatih/color v1.18.0
+	github.com/fatih/color v1.19.0
 	github.com/gin-gonic/gin v1.12.0
 	github.com/go-git/go-git/v5 v5.19.3
 	github.com/go-logr/logr v1.4.4
